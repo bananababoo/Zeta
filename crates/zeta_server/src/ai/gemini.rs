@@ -1,7 +1,9 @@
 //! The Gemini API provider (Google AI Studio), used by the prototype on the free tier.
 //!
-//! Rules: `docs/architecture/ai_orchestration.md` Section 6. Mapping between Zeta requests
-//! and the Gemini wire format is kept in pure functions, so it is tested without a network.
+//! Rules: `docs/architecture/ai_orchestration.md` Section 6. Uses the Interactions API in
+//! stateless mode: the server keeps the conversation, sends it whole each time, and asks
+//! Google not to store it. Mapping between Zeta requests and the wire format is kept in pure
+//! functions, so it is tested without a network.
 
 use std::time::Duration;
 
@@ -12,12 +14,17 @@ use zeta_core::ai::{AiMessage, AiProvider, AiRequest, AiResponse, ProviderError}
 use crate::config::{ApiKey, GeminiConfig};
 use crate::settings::AI_REQUEST_TIMEOUT_SECONDS;
 
-/// Base of every Gemini model path. The key is sent in a header, never in the path, so it
-/// cannot appear in error messages that include the address.
-const MODELS_BASE: &str = "https://generativelanguage.googleapis.com/v1beta/models";
+/// Interactions API endpoint. The model is named in the body, and the key is sent in a
+/// header, so neither appears in the address or in errors that include it.
+const INTERACTIONS_ENDPOINT: &str = "https://generativelanguage.googleapis.com/v1beta/interactions";
 
 /// Header that carries the API key.
 const API_KEY_HEADER: &str = "x-goog-api-key";
+
+/// Pins the wire format this module was written against, so a later Google revision cannot
+/// change response shapes without a deliberate update here.
+const API_REVISION_HEADER: &str = "Api-Revision";
+const API_REVISION: &str = "2026-05-20";
 
 /// Why a [`GeminiProvider`] could not be created.
 #[derive(Debug, Error)]
@@ -31,8 +38,7 @@ pub enum GeminiSetupError {
 #[derive(Debug)]
 pub struct GeminiProvider {
     client: reqwest::Client,
-    endpoint: String,
-    api_key: ApiKey,
+    config: GeminiConfig,
 }
 
 impl GeminiProvider {
@@ -44,11 +50,11 @@ impl GeminiProvider {
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(AI_REQUEST_TIMEOUT_SECONDS))
             .build()?;
-        Ok(Self {
-            client,
-            endpoint: format!("{MODELS_BASE}/{}:generateContent", config.model.as_str()),
-            api_key: config.api_key,
-        })
+        Ok(Self { client, config })
+    }
+
+    fn api_key(&self) -> &ApiKey {
+        &self.config.api_key
     }
 }
 
@@ -56,9 +62,10 @@ impl AiProvider for GeminiProvider {
     async fn complete(&self, request: &AiRequest) -> Result<AiResponse, ProviderError> {
         let response = self
             .client
-            .post(&self.endpoint)
-            .header(API_KEY_HEADER, self.api_key.expose())
-            .json(&request_body(request))
+            .post(INTERACTIONS_ENDPOINT)
+            .header(API_KEY_HEADER, self.api_key().expose())
+            .header(API_REVISION_HEADER, API_REVISION)
+            .json(&request_body(self.config.model.as_str(), request))
             .send()
             .await
             .map_err(|error| transport_failure(&error))?;
@@ -75,68 +82,68 @@ impl AiProvider for GeminiProvider {
     }
 }
 
-// Wire format: https://ai.google.dev/api/generate-content. Only the fields Zeta uses are
-// modeled. Responses do not deny unknown fields, because Google adds fields over time.
+// Wire format: https://aistudio.google.com/api-reference/interactions-api.md. Only the
+// fields Zeta uses are modeled. Responses do not deny unknown fields or step types, because
+// Google adds them over time.
 
 #[derive(Debug, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct GenerateContentRequest<'a> {
-    system_instruction: Content<'a>,
-    contents: Vec<Content<'a>>,
-    generation_config: GenerationConfig,
+struct InteractionRequest<'a> {
+    model: &'a str,
+    system_instruction: &'a str,
+    input: Vec<Step<'a>>,
+    response_format: ResponseFormat,
+    /// The server keeps the conversation itself, so Google does not need to store it.
+    store: bool,
 }
 
 #[derive(Debug, PartialEq, Serialize)]
-struct Content<'a> {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    role: Option<&'static str>,
-    parts: Vec<Part<'a>>,
+#[serde(tag = "type", rename_all = "snake_case")]
+enum Step<'a> {
+    UserInput { content: Vec<TextContent<'a>> },
+    ModelOutput { content: Vec<TextContent<'a>> },
 }
 
 #[derive(Debug, PartialEq, Serialize)]
-struct Part<'a> {
+struct TextContent<'a> {
+    #[serde(rename = "type")]
+    kind: &'static str,
     text: &'a str,
 }
 
 #[derive(Debug, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct GenerationConfig {
-    response_mime_type: &'static str,
+struct ResponseFormat {
+    #[serde(rename = "type")]
+    kind: &'static str,
+    mime_type: &'static str,
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct GenerateContentResponse {
+struct Interaction {
+    status: String,
     #[serde(default)]
-    candidates: Vec<Candidate>,
-    prompt_feedback: Option<PromptFeedback>,
+    steps: Vec<ResponseStep>,
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct Candidate {
-    content: Option<CandidateContent>,
-    finish_reason: Option<String>,
+#[serde(tag = "type", rename_all = "snake_case")]
+enum ResponseStep {
+    ModelOutput {
+        #[serde(default)]
+        content: Vec<ResponseContent>,
+    },
+    /// Thoughts, tool calls, echoed input, and any step type added later.
+    #[serde(other)]
+    Other,
 }
 
 #[derive(Debug, Deserialize)]
-struct CandidateContent {
-    #[serde(default)]
-    parts: Vec<CandidatePart>,
-}
-
-#[derive(Debug, Deserialize)]
-struct CandidatePart {
-    text: Option<String>,
-    /// True for a model's reasoning summary, which is not part of the answer.
-    #[serde(default)]
-    thought: bool,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct PromptFeedback {
-    block_reason: Option<String>,
+#[serde(tag = "type", rename_all = "snake_case")]
+enum ResponseContent {
+    Text {
+        text: String,
+    },
+    #[serde(other)]
+    Other,
 }
 
 #[derive(Debug, Deserialize)]
@@ -149,68 +156,73 @@ struct ErrorBody {
     message: String,
 }
 
-/// Maps a Zeta request to the Gemini request body.
+/// Maps a Zeta request to the Interactions request body.
 ///
 /// Every AI DM request expects a JSON resolution, so JSON output is always requested. When a
 /// request kind needs plain text, `AiRequest` gains a response format field.
-fn request_body(request: &AiRequest) -> GenerateContentRequest<'_> {
-    GenerateContentRequest {
-        system_instruction: Content {
-            role: None,
-            parts: vec![Part {
-                text: &request.system_prompt,
-            }],
+fn request_body<'a>(model: &'a str, request: &'a AiRequest) -> InteractionRequest<'a> {
+    InteractionRequest {
+        model,
+        system_instruction: &request.system_prompt,
+        input: request.messages.iter().map(message_step).collect(),
+        response_format: ResponseFormat {
+            kind: "text",
+            mime_type: "application/json",
         },
-        contents: request.messages.iter().map(message_content).collect(),
-        generation_config: GenerationConfig {
-            response_mime_type: "application/json",
+        store: false,
+    }
+}
+
+fn message_step(message: &AiMessage) -> Step<'_> {
+    match message {
+        AiMessage::User { text } => Step::UserInput {
+            content: vec![text_content(text)],
+        },
+        AiMessage::Assistant { text } => Step::ModelOutput {
+            content: vec![text_content(text)],
         },
     }
 }
 
-fn message_content(message: &AiMessage) -> Content<'_> {
-    let (role, text) = match message {
-        AiMessage::User { text } => ("user", text),
-        AiMessage::Assistant { text } => ("model", text),
-    };
-    Content {
-        role: Some(role),
-        parts: vec![Part { text }],
-    }
+fn text_content(text: &str) -> TextContent<'_> {
+    TextContent { kind: "text", text }
 }
 
-/// Extracts the answer text from a successful response body.
+/// Extracts the answer from a successful response body: the text of the trailing run of
+/// model output steps, which is the model's final answer.
 fn parse_success(body: &str) -> Result<AiResponse, ProviderError> {
-    let response: GenerateContentResponse =
+    let interaction: Interaction =
         serde_json::from_str(body).map_err(|error| ProviderError::Failed {
             message: format!("unreadable Gemini response: {error}"),
         })?;
-    if let Some(reason) = response
-        .prompt_feedback
-        .and_then(|feedback| feedback.block_reason)
-    {
+    if interaction.status != "completed" {
         return Err(ProviderError::Failed {
-            message: format!("Gemini blocked the prompt: {reason}"),
+            message: format!(
+                "Gemini interaction ended with status {}",
+                interaction.status
+            ),
         });
     }
-    let Some(candidate) = response.candidates.into_iter().next() else {
-        return Err(ProviderError::Failed {
-            message: "Gemini returned no candidates".to_owned(),
-        });
-    };
-    let text: String = candidate
-        .content
-        .into_iter()
-        .flat_map(|content| content.parts)
-        .filter(|part| !part.thought)
-        .filter_map(|part| part.text)
+    let trailing_outputs = interaction
+        .steps
+        .iter()
+        .rev()
+        .take_while(|step| matches!(step, ResponseStep::ModelOutput { .. }))
+        .count();
+    let text: String = interaction.steps[interaction.steps.len() - trailing_outputs..]
+        .iter()
+        .flat_map(|step| match step {
+            ResponseStep::ModelOutput { content } => content.as_slice(),
+            ResponseStep::Other => &[],
+        })
+        .filter_map(|content| match content {
+            ResponseContent::Text { text } => Some(text.as_str()),
+            ResponseContent::Other => None,
+        })
         .collect();
     if text.is_empty() {
-        let reason = candidate
-            .finish_reason
-            .unwrap_or_else(|| "unknown".to_owned());
         return Err(ProviderError::Failed {
-            message: format!("Gemini returned no text, finish reason {reason}"),
+            message: "Gemini returned no text".to_owned(),
         });
     }
     Ok(AiResponse { text })
@@ -238,7 +250,7 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn request_body_maps_roles_and_asks_for_json() {
+    fn request_body_maps_roles_and_asks_for_unstored_json() {
         let request = AiRequest {
             system_prompt: "You are the DM.".into(),
             messages: vec![
@@ -250,32 +262,39 @@ mod tests {
                 },
             ],
         };
-        let body = serde_json::to_value(request_body(&request)).expect("serializes");
+        let body = serde_json::to_value(request_body("gemini-3.5-flash-lite", &request))
+            .expect("serializes");
         assert_eq!(
             body,
             json!({
-                "systemInstruction": {"parts": [{"text": "You are the DM."}]},
-                "contents": [
-                    {"role": "user", "parts": [{"text": "I push the cart."}]},
-                    {"role": "model", "parts": [{"text": "{\"ok\":true}"}]}
+                "model": "gemini-3.5-flash-lite",
+                "system_instruction": "You are the DM.",
+                "input": [
+                    {"type": "user_input", "content": [{"type": "text", "text": "I push the cart."}]},
+                    {"type": "model_output", "content": [{"type": "text", "text": "{\"ok\":true}"}]}
                 ],
-                "generationConfig": {"responseMimeType": "application/json"}
+                "response_format": {"type": "text", "mime_type": "application/json"},
+                "store": false
             })
         );
     }
 
     #[test]
-    fn success_joins_answer_parts_and_skips_thoughts() {
+    fn success_joins_the_final_output_and_skips_thoughts_and_unknown_steps() {
         let body = json!({
-            "candidates": [{
-                "content": {"role": "model", "parts": [
-                    {"text": "thinking...", "thought": true},
-                    {"text": "{\"ok\":"},
-                    {"text": "true}"}
-                ]},
-                "finishReason": "STOP"
-            }],
-            "usageMetadata": {"totalTokenCount": 10}
+            "id": "abc",
+            "status": "completed",
+            "steps": [
+                {"type": "user_input", "content": [{"type": "text", "text": "echo"}]},
+                {"type": "model_output", "content": [{"type": "text", "text": "draft"}]},
+                {"type": "thought", "signature": "s", "summary": []},
+                {"type": "model_output", "content": [{"type": "text", "text": "{\"ok\":"}]},
+                {"type": "model_output", "content": [
+                    {"type": "text", "text": "true}"},
+                    {"type": "image", "data": "..."}
+                ]}
+            ],
+            "usage": {"total_tokens": 10}
         })
         .to_string();
         let response = parse_success(&body).expect("has text");
@@ -283,26 +302,24 @@ mod tests {
     }
 
     #[test]
-    fn blocked_prompts_are_failures() {
-        let body = json!({"promptFeedback": {"blockReason": "SAFETY"}}).to_string();
-        let error = parse_success(&body).expect_err("blocked");
-        assert!(error.to_string().contains("SAFETY"));
+    fn unfinished_interactions_report_their_status() {
+        let body = json!({"status": "incomplete", "steps": []}).to_string();
+        let error = parse_success(&body).expect_err("incomplete");
+        assert!(error.to_string().contains("incomplete"));
     }
 
     #[test]
-    fn candidates_without_text_report_the_finish_reason() {
-        let body = json!({"candidates": [{"finishReason": "MAX_TOKENS"}]}).to_string();
-        let error = parse_success(&body).expect_err("no text");
-        assert!(error.to_string().contains("MAX_TOKENS"));
+    fn completed_interactions_without_text_are_failures() {
+        let body = json!({"status": "completed", "steps": [{"type": "thought"}]}).to_string();
+        assert!(parse_success(&body).is_err());
     }
 
     #[test]
     fn failures_use_the_provider_error_message() {
         let body = json!({"error": {"code": 429, "message": "Quota exceeded", "status": "RESOURCE_EXHAUSTED"}})
             .to_string();
-        let error = parse_failure(429, &body);
         assert_eq!(
-            error,
+            parse_failure(429, &body),
             ProviderError::Failed {
                 message: "Gemini status 429: Quota exceeded".into()
             }
@@ -310,16 +327,12 @@ mod tests {
     }
 
     #[test]
-    fn endpoint_names_the_model_and_never_contains_the_key() {
+    fn debug_output_never_contains_the_key() {
         let provider = GeminiProvider::new(GeminiConfig {
             api_key: ApiKey::new("secret-value"),
-            model: ModelName::new("gemini-4-hydrogen").expect("valid name"),
+            model: ModelName::new("gemini-3.5-flash-lite").expect("valid name"),
         })
         .expect("client builds");
-        assert_eq!(
-            provider.endpoint,
-            "https://generativelanguage.googleapis.com/v1beta/models/gemini-4-hydrogen:generateContent"
-        );
         assert!(!format!("{provider:?}").contains("secret-value"));
     }
 }
