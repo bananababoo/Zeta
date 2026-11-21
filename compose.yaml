@@ -1,0 +1,29 @@
+# Local development services. Start with `docker compose up -d`, stop with `docker compose down`.
+# Credentials come from `.env` (copy `.env.example`). Data lives in a named Docker volume,
+# so `docker compose down` keeps it and `docker compose down --volumes` deletes it.
+
+name: zeta
+
+services:
+  postgres:
+    # PostgreSQL 17 with PostGIS 3.5, for location queries on world state and the Event Log.
+    # Pinned to a major version so a rebuild never upgrades the database format by surprise.
+    image: postgis/postgis:17-3.5
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?set POSTGRES_USER in .env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DB:?set POSTGRES_DB in .env}
+    ports:
+      # Bound to localhost only, so the database is never reachable from the network.
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  postgres_data:
