@@ -313,12 +313,12 @@ mod tests {
     fn endpoint_names_the_model_and_never_contains_the_key() {
         let provider = GeminiProvider::new(GeminiConfig {
             api_key: ApiKey::new("secret-value"),
-            model: ModelName::new("gemini-2.5-flash").expect("valid name"),
+            model: ModelName::new("gemini-4-hydrogen").expect("valid name"),
         })
         .expect("client builds");
         assert_eq!(
             provider.endpoint,
-            "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent"
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini-4-hydrogen:generateContent"
         );
         assert!(!format!("{provider:?}").contains("secret-value"));
     }

@@ -67,7 +67,7 @@ impl fmt::Debug for ApiKey {
 pub struct ModelName(String);
 
 impl ModelName {
-    /// Checks and wraps a model name, such as `gemini-2.5-flash`.
+    /// Checks and wraps a model name, such as `gemini-4-hydrogen`.
     ///
     /// # Errors
     /// [`ConfigError::InvalidModelName`] if the name is empty or contains anything other
@@ -138,8 +138,8 @@ mod tests {
 
     #[test]
     fn model_names_accept_provider_style_names() {
-        let model = ModelName::new("gemini-2.5-flash").expect("valid name");
-        assert_eq!(model.as_str(), "gemini-2.5-flash");
+        let model = ModelName::new("gemini-4-hydrogen").expect("valid name");
+        assert_eq!(model.as_str(), "gemini-4-hydrogen");
     }
 
     #[test]
