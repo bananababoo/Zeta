@@ -1,0 +1,6 @@
+# Every contributor and build machine uses this exact compiler.
+# Upgrade deliberately in its own commit, after `cargo clippy` and `cargo test` pass on the new version.
+[toolchain]
+channel = "1.100.0"
+components = ["rustfmt", "clippy"]
+profile = "minimal"

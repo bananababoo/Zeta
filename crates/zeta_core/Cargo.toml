@@ -1,0 +1,15 @@
+[package]
+name = "zeta_core"
+description = "Game rules and data shared by the Zeta server and client. Performs no input or output."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true

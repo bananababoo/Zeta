@@ -1,0 +1,15 @@
+# Enforces the zeta_core boundary: no system clock, threads, files, or network.
+# Callers pass the current UTC time and dice results in, so the same inputs always give the same result.
+disallowed-methods = [
+    { path = "std::time::SystemTime::now", reason = "zeta_core takes the UTC time as a parameter" },
+    { path = "std::time::Instant::now", reason = "zeta_core takes the UTC time as a parameter" },
+    { path = "std::thread::spawn", reason = "zeta_core is single-threaded pure logic" },
+    { path = "std::env::var", reason = "settings are passed in by the caller" },
+]
+disallowed-types = [
+    { path = "std::fs::File", reason = "zeta_core performs no file input or output" },
+    { path = "std::net::TcpStream", reason = "zeta_core performs no network input or output" },
+    { path = "std::net::UdpSocket", reason = "zeta_core performs no network input or output" },
+    { path = "std::collections::HashMap", reason = "iteration order must be deterministic; use BTreeMap" },
+    { path = "std::collections::HashSet", reason = "iteration order must be deterministic; use BTreeSet" },
+]
