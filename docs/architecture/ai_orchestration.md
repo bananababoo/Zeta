@@ -86,7 +86,7 @@ Does not define content moderation, which is defined in [`technical_architecture
 ## 6. Provider Interface
 
 ### What
-All AI calls go through a provider-agnostic Rust trait. A recording layer saves every request and response so tests can replay them without calling or paying a provider. The prototype uses the Gemini free tier. The model name and the key come from server configuration, never from code.
+All AI calls go through a provider-agnostic Rust trait. A recording layer saves every request and response so tests can replay them without calling or paying a provider. The prototype uses the Gemini free tier. The provider name, the model name, and the key come from server configuration, never from code, so switching provider or model needs no code change.
 
 ### Why
 Developers can switch providers or models without changing game code. Recorded scenarios replay with the same results every time and cost nothing. When a provider updates a model, developers rerun the recorded scenarios to see what changed. The free tier costs nothing during development, and model names change often, so configuration holds the model name.

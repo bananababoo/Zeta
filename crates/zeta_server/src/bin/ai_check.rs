@@ -6,19 +6,19 @@
 use std::process::ExitCode;
 
 use zeta_core::ai::{AiMessage, AiProvider, AiRequest};
-use zeta_server::ai::GeminiProvider;
-use zeta_server::config::GeminiConfig;
+use zeta_server::ai::ConfiguredProvider;
+use zeta_server::config::AiConfig;
 
 fn main() -> ExitCode {
-    let config = match GeminiConfig::from_environment() {
+    let config = match AiConfig::from_environment() {
         Ok(config) => config,
         Err(error) => {
             eprintln!("configuration error: {error}");
             return ExitCode::FAILURE;
         }
     };
-    let model = config.model.as_str().to_owned();
-    let provider = match GeminiProvider::new(config) {
+    let model = config.model().as_str().to_owned();
+    let provider = match ConfiguredProvider::new(config) {
         Ok(provider) => provider,
         Err(error) => {
             eprintln!("{error}");
