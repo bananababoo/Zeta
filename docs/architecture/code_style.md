@@ -19,7 +19,7 @@ This document defines how code in `crates/` is written. It adopts the standard R
 ### What
 Formatting follows the Rust Style Guide through `rustfmt` defaults, configured only in [`rustfmt.toml`](../../rustfmt.toml). Naming follows the official Rust naming conventions and the Rust library guidelines. Lints follow Clippy with the pedantic group on, configured in [`Cargo.toml`](../../Cargo.toml).
 
-Before every commit, `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, and `cargo test` pass with no exceptions. A lint is silenced only with `#[allow(lint, reason = "...")]` on the smallest item possible, and the reason explains why the lint is wrong in that place.
+Before every commit, `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, and `cargo test` pass with no exceptions. [`tools/check.ps1`](../../tools/check.ps1) runs all 3 plus the documentation rules, and CI runs the same script. A lint is silenced only with `#[allow(lint, reason = "...")]` on the smallest item possible, and the reason explains why the lint is wrong in that place.
 
 ### Why
 A standard style needs no debate and no maintenance, and every Rust tool and library already uses it. Running the checks before each commit keeps warnings from piling up until nobody reads them.

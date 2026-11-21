@@ -24,12 +24,10 @@ jobs:
       - name: Install pinned toolchain
         run: rustup toolchain install
       - uses: Swatinem/rust-cache@v2
-      - name: Format
-        run: cargo fmt --all --check
-      - name: Lint
-        run: cargo clippy --all-targets --locked -- -D warnings
-      - name: Test
-        run: cargo test --locked
+      # The same script developers run locally, so local and CI checks never drift apart.
+      - name: Format, lint, and test
+        shell: pwsh
+        run: ./tools/check.ps1 -NoDocs
 
   docs:
     runs-on: windows-latest
