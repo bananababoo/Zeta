@@ -1,0 +1,11 @@
+{
+  "docs-compliance": {
+    "Stop": [
+      {
+        "type": "command",
+        "command": "powershell -NoProfile -ExecutionPolicy Bypass -File ..\\tools\\check_docs.ps1 -Hook",
+        "timeout": 30
+      }
+    ]
+  }
+}
