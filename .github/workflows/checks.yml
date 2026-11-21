@@ -1,0 +1,40 @@
+# Runs the checks from docs/architecture/code_style.md Section 1 on every push and pull request.
+name: checks
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# A newer push to the same branch cancels the older run, so only the latest result matters.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  rust:
+    # Windows matches the development machine, where the server and client are built today.
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      # rustup reads rust-toolchain.toml, so the pinned compiler, rustfmt, and clippy install here.
+      - name: Install pinned toolchain
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+      - name: Format
+        run: cargo fmt --all --check
+      - name: Lint
+        run: cargo clippy --all-targets --locked -- -D warnings
+      - name: Test
+        run: cargo test --locked
+
+  docs:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Documentation rules
+        shell: pwsh
+        run: ./tools/check_docs.ps1
