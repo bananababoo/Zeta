@@ -22,8 +22,9 @@ if ($Offline) { $network = @('--offline') }
 $steps = @()
 if ($Fix) { $steps += , @('Format (fix)', @('fmt', '--all')) }
 $steps += , @('Format', @('fmt', '--all', '--check'))
-$steps += , @('Lint', (@('clippy', '--workspace', '--all-targets', '--locked') + $network + @('--', '-D', 'warnings')))
-$steps += , @('Test', (@('test', '--workspace', '--locked', '--quiet') + $network))
+$steps += , @('Check (core)', (@('check', '-p', 'zeta_core', '--no-default-features', '--locked') + $network))
+$steps += , @('Lint', (@('clippy', '--workspace', '--all-targets', '--all-features', '--locked') + $network + @('--', '-D', 'warnings')))
+$steps += , @('Test', (@('test', '--workspace', '--all-features', '--locked', '--quiet') + $network))
 
 $results = @()
 foreach ($step in $steps) {

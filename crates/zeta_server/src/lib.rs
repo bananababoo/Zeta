@@ -5,5 +5,7 @@
 //! this crate stay thin and call into these modules.
 
 pub mod ai;
+pub mod bridge;
 pub mod config;
+pub mod db;
 pub mod settings;

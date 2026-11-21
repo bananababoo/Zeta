@@ -17,10 +17,10 @@ This document defines how world state and its changes are stored. Every change i
 ## 1. Database
 
 ### What
-World state is stored in PostgreSQL from day one, run locally in Docker on the developer laptop for the prototype. The file `compose.yaml` at the repository root starts PostgreSQL with the PostGIS extension for location queries, pinned to a major version, with credentials read from the local `.env` file and data kept in a named Docker volume.
+World state is stored in PostgreSQL from day one, run locally in Docker on the developer laptop for the prototype. The file `compose.yaml` at the repository root starts PostgreSQL with the PostGIS extension for location queries, pinned to a major version, with credentials read from the local `.env` file and data kept in a named Docker volume. The server connects to PostgreSQL with `sqlx` and applies versioned migration files on startup.
 
 ### Why
-PostgreSQL is the database the full game uses, and it stores both strict tables and flexible JSON data such as free-form tags. Starting on a simpler database would mean rewriting queries and migrating data later, which the Longevity Principle rules out.
+PostgreSQL is the database the full game uses, and it stores both strict tables and flexible JSON data such as free-form tags. Starting on a simpler database would mean rewriting queries and migrating data later, which the Longevity Principle rules out. The `sqlx` library runs asynchronously on `tokio`, applies migration files from the repository, and sends PostGIS spatial queries directly to PostgreSQL.
 
 ### Boundaries
 Does not define table schemas or hosting beyond the laptop prototype.

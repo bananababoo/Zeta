@@ -169,13 +169,13 @@ Does not define the AI DM scenario test suite or its pass thresholds.
 ## 11. Dependencies
 
 ### What
-A dependency is added only when it saves significant work and is widely used and actively maintained. Each one is declared in the workspace [`Cargo.toml`](../../Cargo.toml) with a comment saying why it is needed. `zeta_core` depends only on `serde`, `serde_json`, and `thiserror`.
+A dependency is added only when it saves significant work and is widely used and actively maintained. Each one is declared in the workspace [`Cargo.toml`](../../Cargo.toml) with a comment saying why it is needed. `zeta_core` depends only on `serde`, `serde_json`, `thiserror`, and optional `bevy_ecs` behind the `bevy` feature.
 
 ### Why
 Every dependency is code the project must keep updating for as long as the game runs. Abandoned dependencies block compiler and engine upgrades.
 
 ### Boundaries
-Does not choose libraries for a role; the networking library is chosen in [`technical_architecture.md`](technical_architecture.md) Section 1, and the database driver is not yet chosen.
+Does not choose libraries for a role; the networking library is chosen in [`technical_architecture.md`](technical_architecture.md) Section 1, and the database library is chosen in [`persistence.md`](persistence.md) Section 1.
 
 ---
 
