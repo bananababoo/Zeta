@@ -4,7 +4,7 @@
 |---|---|
 | **Status** | `Draft` |
 | **Scope** | Rust style base, toolchain, workspace layout, crate boundaries, naming, types, tunable values, errors, serialized data, code documentation, tests, dependencies, and commits |
-| **Last Updated** | `2026-11-21` |
+| **Last Updated** | `2026-11-22` |
 | **Decision Authority** | Game Director (Project Owner) |
 
 ---
@@ -124,7 +124,7 @@ Does not define logging or error reporting to players.
 ## 8. Serialized Data
 
 ### What
-Every type that is stored in the Event Log or database, sent over the network, or exchanged with the AI DM derives `serde` with explicit field and tag names. Enums use internal tags (`op`, `kind`, or `role`), lowercase or `snake_case`.
+Every type that is stored in the Event Log or database, sent over the network, or exchanged with the AI DM derives `serde` with explicit field and tag names. Enums use internal tags (`op`, `kind`, or `role`), lowercase or `snake_case`. The internal tag rule covers JSON data; network types sent in the binary format follow the rules in the `zeta_core` protocol module docs instead, because that format cannot read internally tagged enums.
 
 Once a format has been stored or sent, its field names and tags never change and are never removed. A change adds an optional field or a new variant instead. Every JSON example in the docs is copied into a test that parses it.
 
