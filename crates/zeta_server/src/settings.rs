@@ -17,3 +17,24 @@ pub const DATABASE_MAX_CONNECTIONS: u32 = 5;
 ///
 /// Placeholder. `docs/architecture/persistence.md` Section 1 does not define a connect timeout.
 pub const DATABASE_CONNECT_TIMEOUT_SECONDS: u64 = 10;
+
+/// Game loop updates per second on the headless server.
+///
+/// Placeholder. `docs/architecture/technical_architecture.md` does not define a tick rate.
+pub const SERVER_TICKS_PER_SECOND: u32 = 60;
+
+/// Most squares 1 movement request may cover, inside and outside Turn Bubbles.
+///
+/// Placeholder: 6 squares is 30 feet, a common 5e walking speed. `docs/prototypes/realism_prototype.md`
+/// Section 2 gives each turn 1 movement but no distance.
+pub const MOVEMENT_SQUARES_PER_REQUEST: u32 = 6;
+
+/// Most characters 1 Freeform Action Prompt may hold, counted after trimming.
+///
+/// Placeholder. `docs/architecture/ai_orchestration.md` Section 5 does not define a length limit.
+pub const MAX_PROMPT_CHARACTERS: usize = 500;
+
+/// Map Partition of the prototype test scene, used when storing Event Log records.
+///
+/// Placeholder until maps are partitioned (`docs/architecture/persistence.md` Section 3).
+pub const TEST_SCENE_MAP_PARTITION_ID: u64 = 0;

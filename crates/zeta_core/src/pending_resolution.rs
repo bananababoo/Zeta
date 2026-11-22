@@ -120,6 +120,33 @@ impl ResolutionLocks {
         Ok(self.lock_or_queue(ticket, PendingAiResolution::from_snapshot(snapshot)))
     }
 
+    /// Replaces an active prompt's lock with the entities of a fresh Snapshot, for the 1
+    /// re-resolution after a referenced character moved. The prompt keeps its ticket, so it
+    /// keeps its place in the Canonical Order.
+    ///
+    /// Returns the new admission, which is [`Admission::Queued`] if the fresh Snapshot overlaps
+    /// another lock, and the waiting prompts the dropped entities let go ahead, as
+    /// [`Self::release`] does.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`LockError::UnknownTicket`] if the ticket is not active.
+    pub fn refresh(
+        &mut self,
+        ticket: PromptTicket,
+        snapshot: &Snapshot,
+    ) -> Result<(Admission, Vec<PromptTicket>), LockError> {
+        let previous = self
+            .active
+            .remove(&ticket)
+            .ok_or(LockError::UnknownTicket(ticket))?;
+        for entity in &previous.entities {
+            self.owners.remove(entity);
+        }
+        let admission = self.lock_or_queue(ticket, PendingAiResolution::from_snapshot(snapshot));
+        Ok((admission, self.mark_ready()))
+    }
+
     /// Ends a prompt, whether it resolved, failed, or was cancelled while waiting.
     ///
     /// Returns the waiting prompts that can now go ahead, in order. Build a fresh Snapshot
@@ -318,6 +345,26 @@ mod tests {
         ]));
         let (third, _) = locks.submit(&snapshot_of(&[entity(3, 0, 0)]));
         assert_eq!(locks.release(second), Ok(vec![third]));
+    }
+
+    #[test]
+    fn refresh_swaps_the_lock_and_frees_dropped_entities() {
+        let mut locks = ResolutionLocks::new();
+        let (first, _) = locks.submit(&snapshot_of(&[player(1), entity(2, 1, 0)]));
+        let (second, admission) = locks.submit(&snapshot_of(&[entity(3, 0, 0), entity(2, 1, 0)]));
+        assert_eq!(admission, Admission::Queued);
+
+        let fresh = snapshot_of(&[player(1), entity(4, 1, 0)]);
+        assert_eq!(
+            locks.refresh(first, &fresh),
+            Ok((Admission::Locked, vec![second]))
+        );
+        assert!(locks.is_locked(EntityId(4)));
+        assert!(!locks.is_locked(EntityId(2)));
+        assert_eq!(
+            locks.refresh(second, &fresh),
+            Err(LockError::UnknownTicket(second))
+        );
     }
 
     #[test]

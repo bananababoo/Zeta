@@ -9,8 +9,10 @@ use std::collections::BTreeMap;
 use std::env::{self, VarError};
 use std::fmt;
 use std::fs;
+use std::net::{Ipv4Addr, SocketAddr};
 
 use thiserror::Error;
+use zeta_core::settings::DEFAULT_SERVER_PORT;
 
 /// Environment variable naming the AI provider, such as `gemini`.
 pub const AI_PROVIDER_VARIABLE: &str = "ZETA_AI_PROVIDER";
@@ -35,6 +37,9 @@ pub const POSTGRES_PASSWORD_VARIABLE: &str = "POSTGRES_PASSWORD";
 
 /// Environment variable holding the PostgreSQL database name.
 pub const POSTGRES_DB_VARIABLE: &str = "POSTGRES_DB";
+
+/// Environment variable holding the IP address and port the game server listens on.
+pub const LISTEN_ADDRESS_VARIABLE: &str = "ZETA_LISTEN_ADDRESS";
 
 const DEFAULT_POSTGRES_HOST: &str = "127.0.0.1";
 const DEFAULT_POSTGRES_PORT: u16 = 5432;
@@ -80,6 +85,42 @@ pub enum ConfigError {
         /// The rejected value.
         value: String,
     },
+    /// An address variable is not an IP address and port such as `127.0.0.1:7777`.
+    #[error("{variable} is {value:?}; expected an IP address and port such as 127.0.0.1:7777")]
+    InvalidAddress {
+        /// Name of the variable.
+        variable: &'static str,
+        /// The rejected value.
+        value: String,
+    },
+}
+
+/// Reads the address the game server listens on from [`LISTEN_ADDRESS_VARIABLE`], loading
+/// `.env` first if it exists, and defaults to `127.0.0.1` on [`DEFAULT_SERVER_PORT`].
+///
+/// # Errors
+/// [`ConfigError`] if the variable is set but not Unicode or not a socket address.
+pub fn listen_address_from_environment() -> Result<SocketAddr, ConfigError> {
+    let dotenv = load_dotenv_file();
+    listen_address_from_lookup(|variable| lookup_with_dotenv(&dotenv, variable))
+}
+
+/// Reads the listen address through `lookup`, which returns a variable's value.
+///
+/// # Errors
+/// [`ConfigError`] if the variable is set but not Unicode or not a socket address.
+pub fn listen_address_from_lookup(
+    lookup: impl Fn(&'static str) -> Result<String, VarError>,
+) -> Result<SocketAddr, ConfigError> {
+    match optional_variable(&lookup, LISTEN_ADDRESS_VARIABLE)? {
+        Some(value) => value
+            .parse::<SocketAddr>()
+            .map_err(|_| ConfigError::InvalidAddress {
+                variable: LISTEN_ADDRESS_VARIABLE,
+                value,
+            }),
+        None => Ok(SocketAddr::from((Ipv4Addr::LOCALHOST, DEFAULT_SERVER_PORT))),
+    }
 }
 
 /// An AI provider key. Its `Debug` output is redacted so the key never reaches a log.
@@ -555,5 +596,29 @@ EMPTY_VALUE=
         assert_eq!(parsed.get("POSTGRES_USER"), Some(&"zeta".to_owned()));
         assert_eq!(parsed.get("POSTGRES_PASSWORD"), Some(&"secret".to_owned()));
         assert_eq!(parsed.get("EMPTY_VALUE"), Some(&String::new()));
+    }
+
+    #[test]
+    fn listen_address_defaults_to_the_local_machine_on_the_default_port() {
+        let address = listen_address_from_lookup(lookup_in(&[])).expect("default address");
+        assert_eq!(
+            address,
+            SocketAddr::from((Ipv4Addr::LOCALHOST, DEFAULT_SERVER_PORT))
+        );
+    }
+
+    #[test]
+    fn listen_address_reads_the_variable_and_rejects_bad_values() {
+        let address =
+            listen_address_from_lookup(lookup_in(&[(LISTEN_ADDRESS_VARIABLE, " 0.0.0.0:9000 ")]))
+                .expect("valid address");
+        assert_eq!(address, SocketAddr::from((Ipv4Addr::UNSPECIFIED, 9000)));
+        assert_eq!(
+            listen_address_from_lookup(lookup_in(&[(LISTEN_ADDRESS_VARIABLE, "localhost")])),
+            Err(ConfigError::InvalidAddress {
+                variable: LISTEN_ADDRESS_VARIABLE,
+                value: "localhost".into(),
+            })
+        );
     }
 }
