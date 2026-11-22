@@ -5,8 +5,10 @@
 //! listed in `.env.example` at the repository root. Switching AI provider or model is a
 //! change to `.env`, never to code.
 
+use std::collections::BTreeMap;
 use std::env::{self, VarError};
 use std::fmt;
+use std::fs;
 
 use thiserror::Error;
 
@@ -155,10 +157,8 @@ impl AiConfig {
     /// # Errors
     /// [`ConfigError`] if a variable is missing, not Unicode, or invalid.
     pub fn from_environment() -> Result<Self, ConfigError> {
-        // A missing `.env` is normal on a deployed server, where real environment variables
-        // are used instead, so the result is ignored.
-        let _ = dotenvy::dotenv();
-        Self::from_lookup(env::var)
+        let dotenv = load_dotenv_file();
+        Self::from_lookup(|variable| lookup_with_dotenv(&dotenv, variable))
     }
 
     /// Reads the configuration through `lookup`, which returns a variable's value. Tests
@@ -232,8 +232,8 @@ impl DatabaseConfig {
     /// # Errors
     /// [`ConfigError`] if a variable is missing, not Unicode, or invalid.
     pub fn from_environment() -> Result<Self, ConfigError> {
-        let _ = dotenvy::dotenv();
-        Self::from_lookup(env::var)
+        let dotenv = load_dotenv_file();
+        Self::from_lookup(|variable| lookup_with_dotenv(&dotenv, variable))
     }
 
     /// Reads the database configuration through `lookup`, which returns a variable's value.
@@ -296,6 +296,62 @@ fn required_variable(
     variable: &'static str,
 ) -> Result<String, ConfigError> {
     optional_variable(lookup, variable)?.ok_or(ConfigError::Missing { variable })
+}
+
+fn lookup_with_dotenv(
+    dotenv: &BTreeMap<String, String>,
+    variable: &'static str,
+) -> Result<String, VarError> {
+    match env::var(variable) {
+        Ok(value) => Ok(value),
+        Err(VarError::NotPresent) => dotenv.get(variable).cloned().ok_or(VarError::NotPresent),
+        Err(not_unicode) => Err(not_unicode),
+    }
+}
+
+/// Reads the nearest `.env` file walking up from the current working directory.
+///
+/// Never mutates process-global environment variables, avoiding `unsafe` under Rust 2024.
+fn load_dotenv_file() -> BTreeMap<String, String> {
+    let Ok(directory) = env::current_dir() else {
+        return BTreeMap::new();
+    };
+    for ancestor in directory.ancestors() {
+        let candidate = ancestor.join(".env");
+        if let Ok(contents) = fs::read_to_string(candidate) {
+            return parse_dotenv(&contents);
+        }
+    }
+    BTreeMap::new()
+}
+
+fn parse_dotenv(contents: &str) -> BTreeMap<String, String> {
+    let mut entries = BTreeMap::new();
+    for raw_line in contents.lines() {
+        let line = raw_line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let line = line.strip_prefix("export ").unwrap_or(line).trim_start();
+        let Some((raw_key, raw_value)) = line.split_once('=') else {
+            continue;
+        };
+        let key = raw_key.trim();
+        if key.is_empty() {
+            continue;
+        }
+        let value = raw_value.trim();
+        let unquoted = if value.len() >= 2
+            && ((value.starts_with('"') && value.ends_with('"'))
+                || (value.starts_with('\'') && value.ends_with('\'')))
+        {
+            &value[1..value.len() - 1]
+        } else {
+            value.split(" #").next().unwrap_or(value).trim()
+        };
+        entries.insert(key.to_owned(), unquoted.to_owned());
+    }
+    entries
 }
 
 #[cfg(test)]
@@ -477,5 +533,27 @@ mod tests {
             database: "zeta".to_owned(),
         };
         assert!(!format!("{config:?}").contains("super-secret"));
+    }
+
+    #[test]
+    fn dotenv_parser_handles_comments_quotes_and_whitespace() {
+        let contents = "\
+# leading comment
+
+ZETA_AI_PROVIDER=gemini
+export ZETA_AI_MODEL = \"gemini-3.5-flash-lite\"
+POSTGRES_USER = 'zeta'
+POSTGRES_PASSWORD=secret # inline comment
+EMPTY_VALUE=
+";
+        let parsed = parse_dotenv(contents);
+        assert_eq!(parsed.get("ZETA_AI_PROVIDER"), Some(&"gemini".to_owned()));
+        assert_eq!(
+            parsed.get("ZETA_AI_MODEL"),
+            Some(&"gemini-3.5-flash-lite".to_owned())
+        );
+        assert_eq!(parsed.get("POSTGRES_USER"), Some(&"zeta".to_owned()));
+        assert_eq!(parsed.get("POSTGRES_PASSWORD"), Some(&"secret".to_owned()));
+        assert_eq!(parsed.get("EMPTY_VALUE"), Some(&String::new()));
     }
 }

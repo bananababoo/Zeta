@@ -5,8 +5,9 @@
 use std::time::Duration;
 
 use serde_json::Value;
+use sqlx::migrate::{Migration, MigrationType, Migrator};
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions, PgRow};
-use sqlx::{PgPool, Row};
+use sqlx::{PgPool, Row, SqlSafeStr};
 use thiserror::Error;
 use zeta_core::event_log::{
     AppliedChange, EventCause, EventLogError, EventRecord, EventSequence, MapPartitionId,
@@ -68,7 +69,7 @@ impl EventLogStore {
         let pool = default_pool_options()
             .connect_with(connect_options(config))
             .await?;
-        sqlx::migrate!("./migrations").run(&pool).await?;
+        event_log_migrator().run(&pool).await?;
         Ok(Self { pool })
     }
 
@@ -263,6 +264,16 @@ impl EventLogStore {
     }
 }
 
+fn event_log_migrator() -> Migrator {
+    Migrator::with_migrations(vec![Migration::new(
+        1,
+        "event log".into(),
+        MigrationType::Simple,
+        include_str!("../migrations/0001_event_log.sql").into_sql_str(),
+        false,
+    )])
+}
+
 fn connect_options(config: &DatabaseConfig) -> PgConnectOptions {
     PgConnectOptions::new()
         .host(&config.host)
@@ -449,7 +460,7 @@ mod tests {
                 .await
                 .expect("connect isolated test pool");
 
-            sqlx::migrate!("./migrations")
+            event_log_migrator()
                 .run(&pool)
                 .await
                 .expect("apply event log migration");

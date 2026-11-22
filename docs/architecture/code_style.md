@@ -169,10 +169,12 @@ Does not define the AI DM scenario test suite or its pass thresholds.
 ## 11. Dependencies
 
 ### What
-A dependency is added only when it saves significant work and is widely used and actively maintained. Each one is declared in the workspace [`Cargo.toml`](../../Cargo.toml) with a comment saying why it is needed. `zeta_core` depends only on `serde`, `serde_json`, `thiserror`, and optional `bevy_ecs` behind the `bevy` feature.
+A dependency is added only when it saves substantial protocol, cryptography, or engine work that cannot be written cleanly in a short module with the standard library, and only when it is widely used and actively maintained. Each dependency is declared in the workspace [`Cargo.toml`](../../Cargo.toml) with a comment saying why it is needed, with `default-features = false` whenever the crate bundles optional subsystems so unused features and duplicate backends stay out of `Cargo.lock`. `zeta_core` depends only on `serde`, `serde_json`, `thiserror`, and optional `bevy_ecs` behind the `bevy` feature.
+
+Any pre-`1.0` dependency, such as `bevy_ecs`, `bevy_app`, `reqwest`, or `sqlx`, is quarantined inside the single module that needs it behind Zeta's own types or traits. Game rules and callers outside that module never import its types directly.
 
 ### Why
-Every dependency is code the project must keep updating for as long as the game runs. Abandoned dependencies block compiler and engine upgrades.
+Every external crate and enabled feature can break when it updates or stall compiler upgrades when it is abandoned. Turning off unused features cuts transitive crates and duplicate libraries from the build. Quarantining pre-`1.0` libraries behind Zeta's own interfaces means a breaking library upgrade edits 1 file instead of the codebase.
 
 ### Boundaries
 Does not choose libraries for a role; the networking library is chosen in [`technical_architecture.md`](technical_architecture.md) Section 1, and the database library is chosen in [`persistence.md`](persistence.md) Section 1.

@@ -18,19 +18,17 @@ serde_json = "1"
 # Typed error enums with Display messages, without hand-written boilerplate.
 thiserror = "2"
 # ECS components, resources, and systems without windowing or rendering (optional in zeta_core).
-bevy_ecs = "0.20"
+bevy_ecs = { version = "0.20", default-features = false, features = ["std"] }
 
 # Server only. zeta_core never depends on these (see docs/architecture/code_style.md Section 3).
 # Headless schedule and plugin runner for the authoritative server.
-bevy_app = "0.20"
+bevy_app = { version = "0.20", default-features = false, features = ["std"] }
 # Async runtime for HTTP calls, PostgreSQL queries, and Bevy-to-tokio bridging.
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "time"] }
 # HTTP client for AI provider calls. The most used Rust HTTP client, built on tokio and rustls.
-reqwest = { version = "0.13", features = ["json"] }
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "json"] }
 # Async PostgreSQL client, connection pool, and versioned migration runner.
-sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "tls-rustls", "postgres", "migrate", "json", "macros"] }
-# Loads a local .env file so developers keep keys out of the repository and their shell.
-dotenvy = "0.15"
+sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "tls-rustls-aws-lc-rs", "postgres", "migrate", "json"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
