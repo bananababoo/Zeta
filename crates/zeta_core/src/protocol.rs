@@ -3,7 +3,7 @@
 //! Rules: `docs/architecture/technical_architecture.md` Sections 1 and 5.
 //!
 //! Type definitions live in 1 submodule per gameplay domain ([`world`], [`turn`], [`actions`],
-//! [`log`]); a new milestone adds a new submodule. Every type is re-exported here, so callers
+//! [`log`], [`inventory`]); a new milestone adds a new submodule. Every type is re-exported here, so callers
 //! write `zeta_core::protocol::MoveRequest` whatever file defines it.
 //!
 //! Registration stays in 1 place, [`register_protocol`], on purpose. The networking library
@@ -18,12 +18,17 @@
 //!   same line.
 
 pub mod actions;
+pub mod inventory;
 pub mod log;
 pub mod turn;
 pub mod world;
 
 pub use actions::{
     FreeformActionPrompt, MoveRequest, PlayerAssigned, PromptState, PromptStatusUpdate,
+};
+pub use inventory::{
+    CustomItem, InvalidItemStack, Inventory, InventoryError, Item, ItemStack, ItemVerb,
+    ItemVerbRequest, StackId,
 };
 pub use log::{DiceRollShown, LogEntryKind, NarrationLogEntry};
 pub use turn::{EndTurnRequest, TurnBubble};
@@ -85,6 +90,8 @@ pub fn register_protocol(registrar: &mut impl ProtocolRegistrar) {
     registrar.server_message::<NarrationLogEntry>(Delivery::Ordered);
     registrar.server_message::<DiceRollShown>(Delivery::Ordered);
     registrar.server_message::<PromptStatusUpdate>(Delivery::Ordered);
+    registrar.component::<Inventory>();
+    registrar.client_message::<ItemVerbRequest>(Delivery::Ordered);
 }
 
 /// Shared by the submodule tests: serializes to JSON and back, and expects the same value.
@@ -163,6 +170,8 @@ mod tests {
                 "server NarrationLogEntry Ordered",
                 "server DiceRollShown Ordered",
                 "server PromptStatusUpdate Ordered",
+                "component Inventory",
+                "client ItemVerbRequest Ordered",
             ]
         );
     }

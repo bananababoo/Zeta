@@ -8,6 +8,7 @@
 
 mod effects;
 mod event_log;
+mod inventory;
 mod movement;
 mod players;
 mod prompts;
@@ -73,6 +74,7 @@ impl<P: AiProvider + Send + Sync + 'static> Plugin for WorldPlugin<P> {
             .init_resource::<prompts::IncomingPrompts>()
             .init_resource::<DiceRoller>()
             .init_resource::<EventLogWriter>()
+            .init_resource::<inventory::IncomingItemVerbs>()
             .add_systems(Startup, scene::spawn_test_scene)
             .add_systems(
                 Update,
@@ -80,6 +82,8 @@ impl<P: AiProvider + Send + Sync + 'static> Plugin for WorldPlugin<P> {
                     players::connect_players,
                     players::disconnect_players,
                     movement::handle_move_requests,
+                    inventory::collect_item_verbs,
+                    inventory::run_item_verbs,
                     prompts::collect_prompts,
                     turn_bubble::handle_end_turn_requests,
                     prompts::run_resolutions::<P>,
@@ -186,11 +190,13 @@ mod tests {
     use bevy_app::Last;
     use bevy_ecs::prelude::{MessageReader, ResMut, World};
     use zeta_core::ai::{AiExchange, AiResponse, ReplayProvider};
+    use zeta_core::catalog::CatalogId;
+    use zeta_core::event_log::{ItemChange, ItemChangeKind};
     use zeta_core::grid::{GridPos, MapBounds};
     use zeta_core::protocol::{
-        Collider, DiceRollShown, EndTurnRequest, EntityName, FreeformActionPrompt, MapArea,
-        MoveRequest, PlayerAssigned, PlayerCharacter, PromptState, PromptStatusUpdate, Tags,
-        TurnBubble, Visual,
+        Collider, DiceRollShown, EndTurnRequest, EntityName, FreeformActionPrompt, Inventory, Item,
+        ItemStack, ItemVerb, ItemVerbRequest, MapArea, MoveRequest, PlayerAssigned,
+        PlayerCharacter, PromptState, PromptStatusUpdate, StackId, Tags, TurnBubble, Visual,
     };
     use zeta_core::resolution::{D20, Volume};
     use zeta_core::snapshot::Snapshot;
@@ -276,8 +282,9 @@ mod tests {
     fn exchange(app: &mut App, actor: EntityId, text: &str, response: &str) -> AiExchange {
         let snapshot = snapshot_of(app, actor);
         let active = turn_bubble::bubble_of(app.world_mut(), actor).is_some();
+        let items = prompts::item_context(app.world(), actor, None);
         AiExchange {
-            request: prompts::resolution_request(&snapshot, text, active),
+            request: prompts::resolution_request(&snapshot, text, active, &items),
             response: AiResponse {
                 text: response.to_owned(),
                 provider_turn: None,
@@ -341,6 +348,7 @@ mod tests {
             connection,
             FreeformActionPrompt {
                 text: text.to_owned(),
+                utilize: None,
             },
         );
     }
@@ -523,7 +531,9 @@ mod tests {
         let records = records(&app);
         assert_eq!(records.len(), 2);
         assert!(records.iter().all(|record| {
-            let zeta_core::event_log::EventCause::FreeformAction(cause) = &record.cause;
+            let zeta_core::event_log::EventCause::FreeformAction(cause) = &record.cause else {
+                return false;
+            };
             cause.actor == character && cause.roll.is_some() && cause.exchanges.len() == 1
         }));
         assert!(nothing_locked(&app));
@@ -716,7 +726,12 @@ mod tests {
         assert!(!sent.has_line(LogEntryKind::Speech, "Hello."));
         let records = records(&app);
         assert_eq!(records.len(), 1);
-        let zeta_core::event_log::EventCause::FreeformAction(cause) = &records[0].cause;
+        let zeta_core::event_log::EventCause::FreeformAction(cause) = &records[0].cause else {
+            panic!(
+                "expected a Freeform Action record, got {:?}",
+                records[0].cause
+            );
+        };
         assert_eq!(cause.exchanges.len(), 2);
         assert!(nothing_locked(&app));
     }
@@ -839,5 +854,454 @@ mod tests {
         );
         let mut bubbles = app.world_mut().query::<&TurnBubble>();
         assert_eq!(bubbles.iter(app.world()).count(), 0);
+    }
+
+    fn inventory_of(app: &App, id: EntityId) -> Inventory {
+        let entity = engine(app, id).expect("indexed");
+        app.world()
+            .get::<Inventory>(entity)
+            .cloned()
+            .expect("the entity carries items")
+    }
+
+    fn catalog_id(text: &str) -> CatalogId {
+        CatalogId::new(text).expect("valid id")
+    }
+
+    /// The stack of `id` holding catalog item `item`.
+    fn stack_of(app: &App, id: EntityId, item: &str) -> StackId {
+        inventory_of(app, id)
+            .stacks()
+            .iter()
+            .find(|stack| stack.item().catalog_id() == Some(&catalog_id(item)))
+            .map(ItemStack::id)
+            .expect("the item is carried")
+    }
+
+    fn held(app: &App, id: EntityId, item: &str) -> u32 {
+        inventory_of(app, id)
+            .stacks()
+            .iter()
+            .filter(|stack| stack.item().catalog_id() == Some(&catalog_id(item)))
+            .map(ItemStack::quantity)
+            .sum()
+    }
+
+    fn verb(app: &mut App, connection: PlayerConnection, request: ItemVerbRequest) {
+        send(app, connection, request);
+        app.update();
+    }
+
+    fn request(verb: ItemVerb, stack: StackId) -> ItemVerbRequest {
+        ItemVerbRequest {
+            verb,
+            stack,
+            quantity: 1,
+            recipient: None,
+            craft_target: None,
+        }
+    }
+
+    fn item_changes(app: &App) -> Vec<ItemChange> {
+        records(app)
+            .into_iter()
+            .flat_map(|record| record.change.items)
+            .collect()
+    }
+
+    #[test]
+    fn characters_start_with_items_and_the_goblin_carries_a_scimitar() {
+        let mut app = test_app(&[10]);
+        let (_, character) = connect(&mut app);
+        let goblin = named(&mut app, "Goblin");
+        assert_eq!(held(&app, character, "painters_supplies"), 1);
+        assert_eq!(held(&app, character, "rations"), 2);
+        assert_eq!(held(&app, goblin, "scimitar"), 1);
+        let entity = engine(&app, character).expect("indexed");
+        assert!(app.world().get::<Networked>(entity).is_some());
+    }
+
+    #[test]
+    fn item_verbs_change_the_inventory_and_are_recorded() {
+        let mut app = test_app(&[10]);
+        let (connection, character) = connect(&mut app);
+        let start = position(&mut app, character);
+
+        let sword = stack_of(&app, character, "longsword");
+        verb(&mut app, connection, request(ItemVerb::Equip, sword));
+        let equipped = inventory_of(&app, character);
+        assert!(equipped.stack(sword).expect("held").equipped());
+
+        let rations = stack_of(&app, character, "rations");
+        verb(&mut app, connection, request(ItemVerb::Consume, rations));
+        assert_eq!(held(&app, character, "rations"), 1);
+
+        let rope = stack_of(&app, character, "rope");
+        verb(&mut app, connection, request(ItemVerb::Drop, rope));
+        assert_eq!(held(&app, character, "rope"), 0);
+
+        let tool = stack_of(&app, character, "painters_supplies");
+        verb(
+            &mut app,
+            connection,
+            ItemVerbRequest {
+                craft_target: Some(catalog_id("wooden_staff")),
+                ..request(ItemVerb::Craft, tool)
+            },
+        );
+        assert_eq!(held(&app, character, "wooden_staff"), 1);
+        assert_eq!(held(&app, character, "painters_supplies"), 1);
+
+        let records = records(&app);
+        assert_eq!(records.len(), 4);
+        assert!(records.iter().all(|record| matches!(
+            &record.cause,
+            zeta_core::event_log::EventCause::ItemVerb(cause) if cause.actor == character
+        )));
+        let dropped = records[2].change.spawned.clone();
+        assert_eq!(dropped.len(), 1);
+        assert_eq!(position(&mut app, dropped[0]), start);
+        assert_eq!(held(&app, dropped[0], "rope"), 1);
+        let changes = item_changes(&app);
+        assert_eq!(changes.len(), 5, "{changes:?}");
+        assert_eq!(changes[0].kind, ItemChangeKind::Equipped);
+        assert!(
+            app.world()
+                .resource::<Sent>()
+                .has_line(LogEntryKind::Action, "Equips the Longsword.")
+        );
+    }
+
+    #[test]
+    fn refused_verbs_change_nothing_and_say_why() {
+        let mut app = test_app(&[10]);
+        let (connection, character) = connect(&mut app);
+        let goblin = named(&mut app, "Goblin");
+        let sword = stack_of(&app, character, "longsword");
+        let tool = stack_of(&app, character, "painters_supplies");
+        verb(
+            &mut app,
+            connection,
+            ItemVerbRequest {
+                recipient: Some(goblin),
+                ..request(ItemVerb::Give, sword)
+            },
+        );
+        verb(&mut app, connection, request(ItemVerb::Consume, sword));
+        verb(
+            &mut app,
+            connection,
+            ItemVerbRequest {
+                craft_target: Some(catalog_id("longsword")),
+                ..request(ItemVerb::Craft, tool)
+            },
+        );
+        verb(&mut app, connection, request(ItemVerb::Equip, StackId(999)));
+
+        assert_eq!(held(&app, character, "longsword"), 1);
+        assert_eq!(held(&app, goblin, "longsword"), 0);
+        assert_eq!(records(&app).len(), 0);
+        let notices = app
+            .world()
+            .resource::<Sent>()
+            .lines
+            .iter()
+            .filter(|line| {
+                line.message.kind == LogEntryKind::Notice
+                    && line.recipients == Recipients::Only(connection)
+            })
+            .count();
+        assert_eq!(notices, 4);
+        assert!(
+            app.world()
+                .resource::<Sent>()
+                .has_line(LogEntryKind::Notice, "Move next to Goblin first.")
+        );
+    }
+
+    #[test]
+    fn give_moves_items_to_an_adjacent_holder() {
+        let mut app = test_app(&[10]);
+        let (connection, character) = connect(&mut app);
+        let goblin = named(&mut app, "Goblin");
+        let here = position(&mut app, character);
+        let goblin_entity = engine(&app, goblin).expect("indexed");
+        *app.world_mut()
+            .get_mut::<GridPos>(goblin_entity)
+            .expect("position") = GridPos::new(here.x + 1, here.y);
+        let rations = stack_of(&app, character, "rations");
+        verb(
+            &mut app,
+            connection,
+            ItemVerbRequest {
+                quantity: 2,
+                recipient: Some(goblin),
+                ..request(ItemVerb::Give, rations)
+            },
+        );
+        assert_eq!(held(&app, character, "rations"), 0);
+        assert_eq!(held(&app, goblin, "rations"), 2);
+        let changes = item_changes(&app);
+        assert_eq!(changes.len(), 2);
+        assert_eq!(changes[1].holder, goblin);
+        assert_eq!(changes[1].kind, ItemChangeKind::Gained);
+    }
+
+    #[test]
+    fn award_and_take_effects_move_items() {
+        let mut app = test_app(&[10]);
+        let (connection, character) = connect(&mut app);
+        let goblin = named(&mut app, "Goblin");
+        let snapshot = snapshot_of(&mut app, character);
+        let goblin_local = local_id(&snapshot, goblin);
+        let response = format!(
+            r#"{{"ok": true, "chk": null, "fail": [], "fx": [
+            {{"op": "take", "id": {goblin_local}, "item": "scimitar", "custom_name": null,
+              "qty": 1}},
+            {{"op": "award", "id": 0, "item": "scimitar", "custom": null, "qty": 1}},
+            {{"op": "award", "id": 0, "item": null, "qty": 1, "custom": {{
+              "name": "Goblin Map", "weight_thousandths_of_pound": 10,
+              "description": "A crude map scratched on hide.", "tags": ["map"]}}}},
+            {{"op": "take", "id": 0, "item": "rations", "custom_name": null, "qty": 1}}
+            ]}}"#
+        );
+        let first = exchange(&mut app, character, "I take the goblin's blade.", &response);
+        replay(&mut app, vec![first]);
+        prompt(&mut app, connection, "I take the goblin's blade.");
+        run_until(&mut app, |world| finished_count(world, connection) == 1);
+
+        assert_eq!(held(&app, goblin, "scimitar"), 0);
+        assert_eq!(held(&app, character, "scimitar"), 1);
+        assert_eq!(held(&app, character, "rations"), 1);
+        assert!(
+            inventory_of(&app, character)
+                .stacks()
+                .iter()
+                .any(|stack| matches!(
+                    stack.item(),
+                    Item::Custom(custom) if custom.name == "Goblin Map"
+                ))
+        );
+        let changes = item_changes(&app);
+        assert_eq!(changes.len(), 4, "{changes:?}");
+        assert_eq!(changes[0].holder, goblin);
+        assert_eq!(changes[0].kind, ItemChangeKind::Lost);
+    }
+
+    #[test]
+    fn an_attached_item_reaches_the_ai_request() {
+        let mut app = test_app(&[10]);
+        let (_, character) = connect(&mut app);
+        let rope = stack_of(&app, character, "rope");
+        let sword = stack_of(&app, character, "longsword");
+        let context = prompts::item_context(app.world(), character, Some(rope));
+        let snapshot = snapshot_of(&mut app, character);
+        let request = prompts::resolution_request(&snapshot, "I tie a knot.", false, &context);
+        let [zeta_core::ai::AiMessage::User { text }] = request.messages.as_slice() else {
+            panic!("expected 1 user message");
+        };
+        let body: serde_json::Value = serde_json::from_str(text).expect("JSON");
+        assert_eq!(body["utilize"]["item"], "Rope");
+        assert_eq!(body["utilize"]["checks"][0]["dc"], 10);
+        assert_eq!(body["character"]["items"][0]["name"], "Longsword");
+        let no_checks = prompts::item_context(app.world(), character, Some(sword));
+        assert_eq!(no_checks.utilize, None);
+        assert_eq!(
+            prompts::utilize_refusal(app.world(), character, Some(rope)),
+            None
+        );
+        assert_eq!(
+            prompts::utilize_refusal(app.world(), character, Some(sword)),
+            Some("That item has no use to attach to an action.")
+        );
+        assert_eq!(
+            prompts::utilize_refusal(app.world(), character, Some(StackId(999))),
+            Some("You no longer carry that item.")
+        );
+    }
+
+    /// Moves `mover` to the square east of `target`.
+    fn place_next_to(app: &mut App, mover: EntityId, target: EntityId) {
+        let here = position(app, target);
+        let entity = engine(app, mover).expect("indexed");
+        *app.world_mut()
+            .get_mut::<GridPos>(entity)
+            .expect("position") = GridPos::new(here.x + 1, here.y);
+    }
+
+    fn has_notice(app: &App, text: &str) -> bool {
+        app.world()
+            .resource::<Sent>()
+            .has_line(LogEntryKind::Notice, text)
+    }
+
+    #[test]
+    fn locked_actors_and_recipients_refuse_item_verbs() {
+        let mut app = test_app(&[10]);
+        let (connection, character) = connect(&mut app);
+        let goblin = named(&mut app, "Goblin");
+        place_next_to(&mut app, goblin, character);
+        let rations = stack_of(&app, character, "rations");
+        let give = ItemVerbRequest {
+            recipient: Some(goblin),
+            ..request(ItemVerb::Give, rations)
+        };
+
+        // Only the goblin is locked: a Snapshot holding just the goblin.
+        let snapshot = snapshot_of(&mut app, character);
+        let goblin_record = snapshot
+            .entities()
+            .iter()
+            .find(|entity| entity.world_id == goblin)
+            .expect("the goblin is perceived")
+            .clone();
+        let goblin_only = zeta_core::snapshot::Snapshot::build(
+            goblin_record,
+            Vec::new(),
+            |_| false,
+            zeta_core::snapshot::PerceptionSettings::default(),
+        );
+        let (goblin_ticket, _) = app
+            .world_mut()
+            .resource_mut::<ResolutionLocksResource>()
+            .0
+            .submit(&goblin_only);
+        verb(&mut app, connection, give.clone());
+        assert!(has_notice(
+            &app,
+            "Goblin is part of an action that is still resolving."
+        ));
+        app.world_mut()
+            .resource_mut::<ResolutionLocksResource>()
+            .0
+            .release(goblin_ticket)
+            .expect("active");
+
+        // The actor is locked.
+        app.world_mut()
+            .resource_mut::<ResolutionLocksResource>()
+            .0
+            .submit(&snapshot);
+        verb(&mut app, connection, give);
+        assert!(has_notice(
+            &app,
+            "Your items cannot change while an action involving your character resolves."
+        ));
+
+        assert_eq!(held(&app, character, "rations"), 2);
+        assert_eq!(held(&app, goblin, "rations"), 0);
+        assert_eq!(records(&app).len(), 0);
+    }
+
+    #[test]
+    fn utilize_as_an_item_verb_points_to_the_action_prompt() {
+        let mut app = test_app(&[10]);
+        let (connection, character) = connect(&mut app);
+        let rope = stack_of(&app, character, "rope");
+        verb(&mut app, connection, request(ItemVerb::Utilize, rope));
+        assert!(has_notice(
+            &app,
+            "Describe how you use the Rope in the action prompt."
+        ));
+        assert_eq!(held(&app, character, "rope"), 1);
+        assert_eq!(records(&app).len(), 0);
+    }
+
+    #[test]
+    fn quantities_outside_the_stack_change_nothing() {
+        let mut app = test_app(&[10]);
+        let (connection, character) = connect(&mut app);
+        let goblin = named(&mut app, "Goblin");
+        place_next_to(&mut app, goblin, character);
+        let rope = stack_of(&app, character, "rope");
+        let rations = stack_of(&app, character, "rations");
+        for quantity in [0, 5] {
+            verb(
+                &mut app,
+                connection,
+                ItemVerbRequest {
+                    quantity,
+                    ..request(ItemVerb::Drop, rope)
+                },
+            );
+            verb(
+                &mut app,
+                connection,
+                ItemVerbRequest {
+                    quantity,
+                    recipient: Some(goblin),
+                    ..request(ItemVerb::Give, rations)
+                },
+            );
+        }
+        assert!(has_notice(&app, "Choose at least 1."));
+        assert!(has_notice(&app, "You carry only 1."));
+        assert!(has_notice(&app, "You carry only 2."));
+        assert_eq!(held(&app, character, "rope"), 1);
+        assert_eq!(held(&app, character, "rations"), 2);
+        assert_eq!(held(&app, goblin, "rations"), 0);
+        assert_eq!(records(&app).len(), 0);
+    }
+
+    #[test]
+    fn a_full_recipient_stack_keeps_the_items_with_the_giver() {
+        let mut app = test_app(&[10]);
+        let (connection, character) = connect(&mut app);
+        let goblin = named(&mut app, "Goblin");
+        place_next_to(&mut app, goblin, character);
+        let goblin_entity = engine(&app, goblin).expect("indexed");
+        app.world_mut()
+            .get_mut::<Inventory>(goblin_entity)
+            .expect("the goblin carries items")
+            .add(Item::Catalog(catalog_id("rations")), u32::MAX)
+            .expect("adds");
+        let rations = stack_of(&app, character, "rations");
+        verb(
+            &mut app,
+            connection,
+            ItemVerbRequest {
+                recipient: Some(goblin),
+                ..request(ItemVerb::Give, rations)
+            },
+        );
+        assert!(has_notice(&app, "That stack cannot hold any more."));
+        assert_eq!(held(&app, character, "rations"), 2);
+        assert_eq!(held(&app, goblin, "rations"), u32::MAX);
+        assert_eq!(records(&app).len(), 0);
+    }
+
+    #[test]
+    fn give_needs_a_creature_that_carries_items() {
+        let mut app = test_app(&[10]);
+        let (connection, character) = connect(&mut app);
+        let barrel = named(&mut app, "Oil Barrel");
+        place_next_to(&mut app, barrel, character);
+        let sword = stack_of(&app, character, "longsword");
+        verb(
+            &mut app,
+            connection,
+            ItemVerbRequest {
+                recipient: Some(barrel),
+                ..request(ItemVerb::Give, sword)
+            },
+        );
+        assert!(has_notice(&app, "Oil Barrel cannot carry items."));
+
+        // A dropped pile holds items but is no creature.
+        let rope = stack_of(&app, character, "rope");
+        verb(&mut app, connection, request(ItemVerb::Drop, rope));
+        let pile = records(&app)[0].change.spawned[0];
+        verb(
+            &mut app,
+            connection,
+            ItemVerbRequest {
+                recipient: Some(pile),
+                ..request(ItemVerb::Give, sword)
+            },
+        );
+        assert!(has_notice(&app, "Rope cannot carry items."));
+        assert_eq!(held(&app, character, "longsword"), 1);
+        assert_eq!(held(&app, pile, "longsword"), 0);
+        assert_eq!(records(&app).len(), 1);
     }
 }

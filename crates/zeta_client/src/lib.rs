@@ -5,6 +5,8 @@
 
 pub mod dice;
 pub mod focus;
+pub mod frame_pacing;
+pub mod inventory;
 pub mod layout;
 pub mod map;
 pub mod movement_input;
@@ -25,6 +27,7 @@ pub struct ClientPlugins;
 impl PluginGroup for ClientPlugins {
     fn build(self) -> PluginGroupBuilder {
         PluginGroupBuilder::start::<Self>()
+            .add(frame_pacing::FramePacingPlugin)
             .add(player::LocalPlayerPlugin)
             .add(map::MapPlugin)
             .add(movement_input::MovementInputPlugin)
@@ -32,5 +35,6 @@ impl PluginGroup for ClientPlugins {
             .add(turn_banner::TurnBubbleBannerPlugin)
             .add(dice::DiceRollPlugin)
             .add(narration_log::NarrationLogPlugin)
+            .add(inventory::InventoryPlugin)
     }
 }

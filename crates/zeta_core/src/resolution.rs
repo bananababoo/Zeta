@@ -7,6 +7,8 @@
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+use crate::protocol::inventory::CustomItem;
+
 /// Local integer identifier assigned per request in the Snapshot.
 pub type LocalId = u32;
 
@@ -118,6 +120,22 @@ pub enum WorldEffect {
     },
     /// `{"op": "bubble", "active": true, "ids": [0, 3]}`
     Bubble { active: bool, ids: Vec<LocalId> },
+    /// `{"op": "award", "id": 0, "item": "rope", "custom": null, "qty": 1}`: gives entity `id`
+    /// `qty` of 1 catalog item, or of 1 custom narrative item when `item` is null.
+    Award {
+        id: LocalId,
+        item: Option<String>,
+        custom: Option<CustomItem>,
+        qty: u32,
+    },
+    /// `{"op": "take", "id": 3, "item": "rope", "custom_name": null, "qty": 1}`: removes up to
+    /// `qty` of 1 catalog item, or of the custom item named `custom_name`, from entity `id`.
+    Take {
+        id: LocalId,
+        item: Option<String>,
+        custom_name: Option<String>,
+        qty: u32,
+    },
 }
 
 impl WorldEffect {
@@ -132,6 +150,8 @@ impl WorldEffect {
             Self::Destroy { .. } => "destroy",
             Self::History { .. } => "history",
             Self::Bubble { .. } => "bubble",
+            Self::Award { .. } => "award",
+            Self::Take { .. } => "take",
         }
     }
 
@@ -141,7 +161,9 @@ impl WorldEffect {
             Self::Speak { id, .. }
             | Self::Move { id, .. }
             | Self::Modify { id, .. }
-            | Self::Destroy { id, .. } => std::slice::from_ref(id),
+            | Self::Destroy { id, .. }
+            | Self::Award { id, .. }
+            | Self::Take { id, .. } => std::slice::from_ref(id),
             Self::History { ids, .. } | Self::Bubble { ids, .. } => ids,
             Self::Narrate { .. } | Self::Spawn { .. } => &[],
         }
@@ -389,7 +411,42 @@ fn world_effect_json_schema() -> serde_json::Value {
             &["op", "active", "ids"],
         ),
     ]);
+    variants.extend(item_effect_schemas());
     serde_json::json!({ "anyOf": variants })
+}
+
+fn item_effect_schemas() -> [serde_json::Value; 2] {
+    let custom = object_schema(
+        &serde_json::json!({
+            "name": { "type": "string" },
+            "weight_thousandths_of_pound": { "type": "integer" },
+            "description": { "type": "string" },
+            "tags": { "type": "array", "items": { "type": "string" } }
+        }),
+        &["name", "weight_thousandths_of_pound", "description", "tags"],
+    );
+    [
+        object_schema(
+            &serde_json::json!({
+                "op": { "type": "string", "enum": ["award"] },
+                "id": { "type": "integer" },
+                "item": { "type": ["string", "null"] },
+                "custom": { "anyOf": [custom, { "type": "null" }] },
+                "qty": { "type": "integer" }
+            }),
+            &["op", "id", "item", "custom", "qty"],
+        ),
+        object_schema(
+            &serde_json::json!({
+                "op": { "type": "string", "enum": ["take"] },
+                "id": { "type": "integer" },
+                "item": { "type": ["string", "null"] },
+                "custom_name": { "type": ["string", "null"] },
+                "qty": { "type": "integer" }
+            }),
+            &["op", "id", "item", "custom_name", "qty"],
+        ),
+    ]
 }
 
 fn settling_effect_schemas() -> [serde_json::Value; 2] {
@@ -657,11 +714,63 @@ mod tests {
         assert_eq!(
             ops,
             [
-                "narrate", "speak", "move", "modify", "spawn", "destroy", "history", "bubble"
+                "narrate", "speak", "move", "modify", "spawn", "destroy", "history", "bubble",
+                "award", "take"
             ]
         );
         for variant in variants {
             assert_eq!(variant["additionalProperties"], false);
         }
+    }
+
+    #[test]
+    fn documented_item_examples_parse() {
+        assert_eq!(
+            effect(r#"{"op": "award", "id": 0, "item": "rope", "custom": null, "qty": 1}"#),
+            WorldEffect::Award {
+                id: 0,
+                item: Some("rope".into()),
+                custom: None,
+                qty: 1,
+            }
+        );
+        assert_eq!(
+            effect(
+                r#"{"op": "award", "id": 0, "item": null, "custom": {"name": "Sealed Letter", "weight_thousandths_of_pound": 10, "description": "A letter sealed with the baron's crest.", "tags": ["sealed"]}, "qty": 1}"#
+            ),
+            WorldEffect::Award {
+                id: 0,
+                item: None,
+                custom: Some(CustomItem {
+                    name: "Sealed Letter".into(),
+                    weight_thousandths_of_pound: 10,
+                    description: "A letter sealed with the baron's crest.".into(),
+                    tags: ["sealed".to_owned()].into(),
+                }),
+                qty: 1,
+            }
+        );
+        let take =
+            effect(r#"{"op": "take", "id": 3, "item": "rope", "custom_name": null, "qty": 1}"#);
+        assert_eq!(
+            take,
+            WorldEffect::Take {
+                id: 3,
+                item: Some("rope".into()),
+                custom_name: None,
+                qty: 1,
+            }
+        );
+        assert_eq!(take.referenced_ids(), [3]);
+        assert_eq!(
+            serde_json::to_value(&take).expect("serializes")["op"],
+            take.op()
+        );
+    }
+
+    #[test]
+    fn custom_items_reject_combat_fields() {
+        let armed = r#"{"op": "award", "id": 0, "item": null, "custom": {"name": "Blade", "weight_thousandths_of_pound": 10, "description": "A blade.", "tags": [], "damage": "1d8"}, "qty": 1}"#;
+        assert!(serde_json::from_str::<WorldEffect>(armed).is_err());
     }
 }

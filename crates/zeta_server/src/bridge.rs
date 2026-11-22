@@ -12,6 +12,7 @@ use thiserror::Error;
 use tokio::runtime::{Builder, Handle, Runtime};
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use zeta_core::ai::{AiProvider, AiRequest, ResolveError, ResolvedAction, resolve_action};
+use zeta_core::catalog::Catalog;
 use zeta_core::grid::MapBounds;
 use zeta_core::pending_resolution::{PromptTicket, ResolutionLocks};
 use zeta_core::snapshot::Snapshot;
@@ -145,6 +146,7 @@ impl<P: AiProvider + Send + Sync + 'static> AiBridge<P> {
                     job.request,
                     &pending.snapshot,
                     job.bounds,
+                    Catalog::srd(),
                     job.retry_cap,
                 )
                 .await

@@ -5,6 +5,7 @@
 //! response is ever returned, so a chain reaction never applies halfway.
 
 use crate::ai::{AiExchange, AiMessage, AiProvider, AiRequest, ProviderError};
+use crate::catalog::Catalog;
 use crate::grid::MapBounds;
 use crate::resolution::AiResolution;
 use crate::snapshot::Snapshot;
@@ -53,6 +54,7 @@ pub async fn resolve_action<P: AiProvider>(
     request: AiRequest,
     snapshot: &Snapshot,
     bounds: MapBounds,
+    catalog: &Catalog,
     retry_cap: u32,
 ) -> Result<ResolvedAction, ResolveError> {
     let mut request = request;
@@ -63,7 +65,7 @@ pub async fn resolve_action<P: AiProvider>(
             Ok(response) => response,
             Err(source) => return Err(ResolveError::Provider { source, exchanges }),
         };
-        let checked = parse_and_validate(&response.text, snapshot, bounds);
+        let checked = parse_and_validate(&response.text, snapshot, bounds, catalog);
         exchanges.push(AiExchange {
             request: request.clone(),
             response: response.clone(),
@@ -148,7 +150,7 @@ mod tests {
                     provider_turn: None,
                 },
             });
-            if let Err(errors) = parse_and_validate(text, &snapshot(), BOUNDS) {
+            if let Err(errors) = parse_and_validate(text, &snapshot(), BOUNDS, Catalog::srd()) {
                 request.messages.push(AiMessage::Assistant {
                     text: (*text).into(),
                     provider_turn: None,
@@ -169,6 +171,7 @@ mod tests {
             first_request(),
             &snapshot(),
             BOUNDS,
+            Catalog::srd(),
             2,
         ))
         .expect("valid response");
@@ -190,6 +193,7 @@ mod tests {
             first_request(),
             &snapshot(),
             BOUNDS,
+            Catalog::srd(),
             2,
         ))
         .expect("second response is valid");
@@ -205,6 +209,7 @@ mod tests {
             first_request(),
             &snapshot(),
             BOUNDS,
+            Catalog::srd(),
             1,
         ));
         assert!(matches!(
@@ -221,6 +226,7 @@ mod tests {
             first_request(),
             &snapshot(),
             BOUNDS,
+            Catalog::srd(),
             2,
         ));
         assert!(matches!(
@@ -243,7 +249,8 @@ mod tests {
             text: INVALID.into(),
             provider_turn: Some(turn.clone()),
         };
-        let errors = parse_and_validate(INVALID, &snapshot(), BOUNDS).expect_err("invalid");
+        let errors =
+            parse_and_validate(INVALID, &snapshot(), BOUNDS, Catalog::srd()).expect_err("invalid");
         let mut second_req = first_req.clone();
         second_req.messages.push(AiMessage::Assistant {
             text: INVALID.into(),
@@ -265,8 +272,15 @@ mod tests {
                 },
             },
         ]);
-        let resolved =
-            block_on(resolve_action(&replay, first_req, &snapshot(), BOUNDS, 2)).expect("valid");
+        let resolved = block_on(resolve_action(
+            &replay,
+            first_req,
+            &snapshot(),
+            BOUNDS,
+            Catalog::srd(),
+            2,
+        ))
+        .expect("valid");
         assert_eq!(resolved.exchanges.len(), 2);
         assert!(matches!(
             &resolved.exchanges[1].request.messages[1],

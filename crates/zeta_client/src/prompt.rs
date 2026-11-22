@@ -8,7 +8,7 @@
 use bevy::input::ButtonState;
 use bevy::input::keyboard::{Key, KeyboardInput};
 use bevy::prelude::*;
-use zeta_core::protocol::{FreeformActionPrompt, PromptState, PromptStatusUpdate};
+use zeta_core::protocol::{FreeformActionPrompt, PromptState, PromptStatusUpdate, StackId};
 
 use crate::focus::{TextEntryActive, TextEntryUpdate, UiPanel};
 use crate::settings::ClientSettings;
@@ -20,11 +20,32 @@ const PROMPT_FONT_SIZE: f32 = 18.0;
 /// Font size of the status line.
 const STATUS_FONT_SIZE: f32 = 14.0;
 
-/// The text box: whether it has focus and what has been typed.
+/// An item attached to the prompt by `Utilize`: the stack the server attaches the catalog
+/// checks for, and the line shown above the typed text.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PromptAttachment {
+    /// The carried stack being used.
+    pub stack: StackId,
+    /// Shown in the text box, such as `Thieves' Tools: Pick a lock (DC 15)`.
+    pub label: String,
+}
+
+/// Client-only request to open the text box with an item attached and starting text typed.
+/// Other plugins (the inventory) send it; the prompt plugin owns the text box.
+#[derive(Message, Clone, Debug, PartialEq, Eq)]
+pub struct OpenPromptWithItem {
+    /// The attached item.
+    pub attachment: PromptAttachment,
+    /// Text typed in the box when it opens.
+    pub text: String,
+}
+
+/// The text box: whether it has focus, what has been typed, and any attached item.
 #[derive(Resource, Clone, Debug, Default, PartialEq, Eq)]
 pub struct PromptEditor {
     focused: bool,
     text: String,
+    attachment: Option<PromptAttachment>,
 }
 
 /// What 1 key press did to the text box.
@@ -34,8 +55,8 @@ pub enum PromptKeyOutcome {
     Ignored,
     /// Focus or text changed.
     Edited,
-    /// The player submitted this text.
-    Submitted(String),
+    /// The player submitted this prompt.
+    Submitted(FreeformActionPrompt),
 }
 
 impl PromptEditor {
@@ -49,9 +70,23 @@ impl PromptEditor {
         &self.text
     }
 
+    /// The attached item, if any.
+    pub fn attachment(&self) -> Option<&PromptAttachment> {
+        self.attachment.as_ref()
+    }
+
+    /// Focuses the box with `attachment` attached and `text` typed, cut to `max_characters`.
+    /// Replaces any text and attachment already there.
+    pub fn open_with(&mut self, attachment: PromptAttachment, text: &str, max_characters: usize) {
+        self.focused = true;
+        self.text = text.chars().take(max_characters).collect();
+        self.attachment = Some(attachment);
+    }
+
     /// Applies 1 key press. Enter focuses an unfocused box; in a focused box Enter submits the
-    /// trimmed text, Escape cancels, Backspace deletes, and characters are typed up to
-    /// `max_characters`. Submitting blank text only closes the box.
+    /// trimmed text with the attached item, Escape cancels, Backspace deletes, and characters
+    /// are typed up to `max_characters`. Submitting blank text only closes the box. Closing
+    /// the box always drops the attachment.
     pub fn press(&mut self, key: &Key, max_characters: usize) -> PromptKeyOutcome {
         if !self.focused {
             if *key == Key::Enter {
@@ -65,15 +100,20 @@ impl PromptEditor {
                 self.focused = false;
                 let submitted = self.text.trim().to_owned();
                 self.text.clear();
+                let attachment = self.attachment.take();
                 if submitted.is_empty() {
                     PromptKeyOutcome::Edited
                 } else {
-                    PromptKeyOutcome::Submitted(submitted)
+                    PromptKeyOutcome::Submitted(FreeformActionPrompt {
+                        text: submitted,
+                        utilize: attachment.map(|attachment| attachment.stack),
+                    })
                 }
             }
             Key::Escape => {
                 self.focused = false;
                 self.text.clear();
+                self.attachment = None;
                 PromptKeyOutcome::Edited
             }
             Key::Backspace => {
@@ -120,6 +160,7 @@ impl Plugin for FreeformActionPromptPlugin {
             .init_resource::<TextEntryActive>()
             .init_resource::<PromptEditor>()
             .init_resource::<LatestPromptStatus>()
+            .add_message::<OpenPromptWithItem>()
             .add_systems(Startup, spawn_prompt_panel)
             .add_systems(
                 Update,
@@ -132,12 +173,15 @@ impl Plugin for FreeformActionPromptPlugin {
     }
 }
 
-/// The text box line: the hint when unfocused, the typed text and a cursor when focused.
+/// The text box line: the hint when unfocused; when focused, the attached item on its own
+/// line, then the typed text and a cursor.
 pub fn prompt_input_text(editor: &PromptEditor) -> String {
-    if editor.focused {
-        format!("> {}_", editor.text)
-    } else {
-        PROMPT_HINT.to_owned()
+    if !editor.focused {
+        return PROMPT_HINT.to_owned();
+    }
+    match &editor.attachment {
+        Some(attachment) => format!("[Utilize {}]\n> {}_", attachment.label, editor.text),
+        None => format!("> {}_", editor.text),
     }
 }
 
@@ -192,19 +236,27 @@ fn spawn_prompt_panel(mut commands: Commands) {
 )]
 fn edit_prompt(
     mut keyboard: MessageReader<KeyboardInput>,
+    mut openings: MessageReader<OpenPromptWithItem>,
     settings: Res<ClientSettings>,
     mut editor: ResMut<PromptEditor>,
     mut text_entry: ResMut<TextEntryActive>,
     mut prompts: MessageWriter<FreeformActionPrompt>,
 ) {
+    if let Some(opening) = openings.read().last() {
+        editor.open_with(
+            opening.attachment.clone(),
+            &opening.text,
+            settings.prompt_max_characters,
+        );
+    }
     for input in keyboard.read() {
         if input.state != ButtonState::Pressed {
             continue;
         }
         match editor.press(&input.logical_key, settings.prompt_max_characters) {
             PromptKeyOutcome::Ignored | PromptKeyOutcome::Edited => {}
-            PromptKeyOutcome::Submitted(text) => {
-                prompts.write(FreeformActionPrompt { text });
+            PromptKeyOutcome::Submitted(prompt) => {
+                prompts.write(prompt);
             }
         }
     }
@@ -263,6 +315,66 @@ mod tests {
 
     fn character(text: &str) -> Key {
         Key::Character(text.into())
+    }
+
+    fn rope_attachment() -> PromptAttachment {
+        PromptAttachment {
+            stack: StackId(4),
+            label: "Rope: Tie a knot (DC 10)".to_owned(),
+        }
+    }
+
+    #[test]
+    fn an_attached_item_is_shown_and_sent_with_the_prompt() {
+        let mut editor = PromptEditor::default();
+        editor.open_with(rope_attachment(), "I use my Rope to ", 100);
+        assert!(editor.is_focused());
+        assert_eq!(
+            prompt_input_text(&editor),
+            "[Utilize Rope: Tie a knot (DC 10)]\n> I use my Rope to _"
+        );
+        editor.press(&character("x"), 100);
+        assert_eq!(
+            editor.press(&Key::Enter, 100),
+            PromptKeyOutcome::Submitted(FreeformActionPrompt {
+                text: "I use my Rope to x".to_owned(),
+                utilize: Some(StackId(4)),
+            })
+        );
+        assert_eq!(editor.attachment(), None);
+    }
+
+    #[test]
+    fn escape_drops_the_attached_item() {
+        let mut editor = PromptEditor::default();
+        editor.open_with(rope_attachment(), "abc", 2);
+        assert_eq!(editor.text(), "ab");
+        editor.press(&Key::Escape, 100);
+        assert_eq!(editor.attachment(), None);
+        editor.press(&Key::Enter, 100);
+        editor.press(&character("go"), 100);
+        assert_eq!(
+            editor.press(&Key::Enter, 100),
+            PromptKeyOutcome::Submitted(FreeformActionPrompt {
+                text: "go".to_owned(),
+                utilize: None,
+            })
+        );
+    }
+
+    #[test]
+    fn the_plugin_opens_the_box_for_an_item_and_takes_the_keyboard() {
+        let mut app = test_app();
+        app.world_mut().write_message(OpenPromptWithItem {
+            attachment: rope_attachment(),
+            text: "I use my Rope".to_owned(),
+        });
+        app.update();
+        assert!(app.world().resource::<TextEntryActive>().0);
+        assert_eq!(
+            app.world().resource::<PromptEditor>().attachment(),
+            Some(&rope_attachment())
+        );
     }
 
     fn test_app() -> App {
@@ -331,7 +443,10 @@ mod tests {
         assert_eq!(editor.text(), "hi ! ");
         assert_eq!(
             editor.press(&Key::Enter, 100),
-            PromptKeyOutcome::Submitted("hi !".to_owned())
+            PromptKeyOutcome::Submitted(FreeformActionPrompt {
+                text: "hi !".to_owned(),
+                utilize: None,
+            })
         );
         assert!(!editor.is_focused());
         assert_eq!(editor.text(), "");
@@ -394,7 +509,8 @@ mod tests {
         assert_eq!(
             sent(&app),
             vec![FreeformActionPrompt {
-                text: "look".to_owned()
+                text: "look".to_owned(),
+                utilize: None,
             }]
         );
         assert!(!app.world().resource::<TextEntryActive>().0);

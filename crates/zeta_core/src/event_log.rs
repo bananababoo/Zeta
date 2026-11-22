@@ -9,6 +9,7 @@ use thiserror::Error;
 
 use crate::ai::AiExchange;
 use crate::entity::EntityId;
+use crate::protocol::inventory::{ItemStack, ItemVerbRequest};
 use crate::resolution::{AiResolution, Branch, CheckRoll};
 use crate::snapshot::Snapshot;
 use crate::time::UtcTimestamp;
@@ -32,6 +33,17 @@ pub struct MapPartitionId(pub u64);
 pub enum EventCause {
     /// A player's Freeform Action Prompt, resolved by the AI DM.
     FreeformAction(FreeformActionCause),
+    /// A player's item verb, resolved by deterministic rules without the AI DM.
+    ItemVerb(ItemVerbCause),
+}
+
+/// Everything needed to explain and replay 1 item verb.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ItemVerbCause {
+    /// The acting character.
+    pub actor: EntityId,
+    /// The request as the player sent it.
+    pub request: ItemVerbRequest,
 }
 
 /// Everything needed to explain and replay 1 resolved Freeform Action Prompt.
@@ -52,12 +64,54 @@ pub struct FreeformActionCause {
 /// The change that was applied.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AppliedChange {
-    /// The validated resolution.
-    pub resolution: AiResolution,
-    /// The branch the roll selected.
-    pub branch: Branch,
-    /// Identifiers given to entities created by `spawn` effects, in effect order.
+    /// The validated resolution, when the AI DM resolved the cause.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolution: Option<AiResolution>,
+    /// The branch the roll selected, when the AI DM resolved the cause.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch: Option<Branch>,
+    /// Identifiers given to entities created by `spawn` effects or dropped items, in order.
     pub spawned: Vec<EntityId>,
+    /// Items that changed hands or equipped state, in order.
+    #[serde(default)]
+    pub items: Vec<ItemChange>,
+}
+
+impl AppliedChange {
+    /// The change made by 1 AI resolution branch, before item changes are added.
+    pub fn resolved(resolution: AiResolution, branch: Branch, spawned: Vec<EntityId>) -> Self {
+        Self {
+            resolution: Some(resolution),
+            branch: Some(branch),
+            spawned,
+            items: Vec::new(),
+        }
+    }
+}
+
+/// 1 item change on 1 entity.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ItemChange {
+    /// The entity whose inventory changed.
+    pub holder: EntityId,
+    /// What happened.
+    pub kind: ItemChangeKind,
+    /// The items involved, with the stack id they had in `holder`'s inventory.
+    pub stack: ItemStack,
+}
+
+/// What happened to the items in an [`ItemChange`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ItemChangeKind {
+    /// The holder received the items.
+    Gained,
+    /// The holder lost the items: dropped, given, consumed, or taken.
+    Lost,
+    /// The holder equipped the stack.
+    Equipped,
+    /// The holder unequipped the stack.
+    Unequipped,
 }
 
 /// 1 entry in the Event Log.
@@ -161,16 +215,66 @@ mod tests {
     }
 
     fn change() -> AppliedChange {
-        AppliedChange {
-            resolution: AiResolution {
+        AppliedChange::resolved(
+            AiResolution {
                 ok: true,
                 chk: None,
                 fx: vec![],
                 fail: vec![],
             },
-            branch: Branch::Success,
+            Branch::Success,
+            vec![],
+        )
+    }
+
+    #[test]
+    fn records_without_item_fields_still_parse() {
+        let old = r#"{"resolution": {"ok": true, "chk": null, "fx": [], "fail": []}, "branch": "success", "spawned": []}"#;
+        let parsed: AppliedChange = serde_json::from_str(old).expect("parses");
+        assert_eq!(parsed, change());
+    }
+
+    #[test]
+    fn item_verb_records_round_trip_without_a_resolution() {
+        use crate::catalog::CatalogId;
+        use crate::protocol::inventory::{Inventory, Item, ItemVerb, StackId};
+
+        let mut inventory = Inventory::default();
+        let stack = inventory
+            .add(
+                Item::Catalog(CatalogId::new("rations").expect("valid id")),
+                1,
+            )
+            .expect("adds");
+        let eaten = inventory.remove(stack, 1).expect("removes");
+        let cause = EventCause::ItemVerb(ItemVerbCause {
+            actor: EntityId(1),
+            request: ItemVerbRequest {
+                verb: ItemVerb::Consume,
+                stack: StackId(0),
+                quantity: 1,
+                recipient: None,
+                craft_target: None,
+            },
+        });
+        let change = AppliedChange {
+            resolution: None,
+            branch: None,
             spawned: vec![],
-        }
+            items: vec![ItemChange {
+                holder: EntityId(1),
+                kind: ItemChangeKind::Lost,
+                stack: eaten,
+            }],
+        };
+        let mut log = EventLog::new();
+        log.append(UtcTimestamp::from_unix_milliseconds(1), cause, change)
+            .expect("first record");
+        let json = serde_json::to_value(&log.records()[0]).expect("serializes");
+        assert_eq!(json["cause"]["kind"], "item_verb");
+        assert!(json["change"].get("resolution").is_none());
+        let parsed: EventRecord = serde_json::from_value(json).expect("parses");
+        assert_eq!(parsed, log.records()[0]);
     }
 
     #[test]

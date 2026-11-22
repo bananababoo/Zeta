@@ -1,0 +1,3637 @@
+{
+  "items": [
+    {
+      "id": "acid",
+      "name": "Acid",
+      "category": "adventuring_gear",
+      "cost": {
+        "copper_pieces": 2500
+      },
+      "weight_thousandths_of_pound": 1000,
+      "consumable": true
+    },
+    {
+      "id": "alchemists_fire",
+      "name": "Alchemist's Fire",
+      "category": "adventuring_gear",
+      "cost": {
+        "copper_pieces": 5000
+      },
+      "weight_thousandths_of_pound": 1000,
+      "consumable": true
+    },
+    {
+      "id": "alchemists_supplies",
+      "name": "Alchemist's Supplies",
+      "category": "tool",
+      "cost": {
+        "copper_pieces": 5000
+      },
+      "weight_thousandths_of_pound": 8000,
+      "tool": {
+        "kind": "artisans",
+        "ability": "intelligence"
+      },
+      "utilize": [
+        {
+          "description": "Identify a substance",
+          "dc": 15
+        },
+        {
+          "description": "Start a fire",
+          "dc": 15
+        }
+      ],
+      "crafts": [
+        "acid",
+        "alchemists_fire",
+        "component_pouch",
+        "oil",
+        "paper",
+        "perfume"
+      ]
+    },
+    {
+      "id": "ale_mug",
+      "name": "Ale (mug)",
+      "category": "food_and_drink",
+      "cost": {
+        "copper_pieces": 4
+      },
+      "weight_thousandths_of_pound": 0,
+      "consumable": true
+    },
+    {
+      "id": "amulet",
+      "name": "Amulet",
+      "category": "spellcasting_focus",
+      "cost": {
+        "copper_pieces": 500
+      },
+      "weight_thousandths_of_pound": 1000
+    },
+    {
+      "id": "antitoxin",
+      "name": "Antitoxin",
+      "category": "adventuring_gear",
+      "cost": {
+        "copper_pieces": 5000
+      },
+      "weight_thousandths_of_pound": 0,
+      "consumable": true
+    },
+    {
+      "id": "arcane_focus",
+      "name": "Arcane Focus",
+      "category": "item_group",
+      "weight_thousandths_of_pound": 0,
+      "group_members": [
+        "crystal",
+        "orb",
+        "rod",
+        "staff",
+        "wand"
+      ]
+    },
+    {
+      "id": "arrow",
+      "name": "Arrow",
+      "category": "ammunition",
+      "cost": {
+        "copper_pieces": 5
+      },
+      "weight_thousandths_of_pound": 50
+    },
+    {
+      "id": "arrows_20",
+      "name": "Arrows (20)",
+      "category": "ammunition",
+      "cost": {
+        "copper_pieces": 100
+      },
+      "weight_thousandths_of_pound": 1000,
+      "contents": [
+        {
+          "item": "arrow",
+          "quantity": 20
+        }
+      ]
+    },
+    {
+      "id": "artisans_tools",
+      "name": "Artisan's Tools",
+      "category": "item_group",
+      "weight_thousandths_of_pound": 0,
+      "group_members": [
+        "alchemists_supplies",
+        "brewers_supplies",
+        "calligraphers_supplies",
+        "carpenters_tools",
+        "cartographers_tools",
+        "cobblers_tools",
+        "cooks_utensils",
+        "glassblowers_tools",
+        "jewelers_tools",
+        "leatherworkers_tools",
+        "masons_tools",
+        "painters_supplies",
+        "potters_tools",
+        "smiths_tools",
+        "tinkers_tools",
+        "weavers_tools",
+        "woodcarvers_tools"
+      ]
+    },
+    {
+      "id": "assassins_blood",
+      "name": "Assassin's Blood",
+      "category": "adventuring_gear",
+      "cost": {
+        "copper_pieces": 15000
+      },
+      "weight_thousandths_of_pound": 0,
+      "consumable": true
+    },
+    {
+      "id": "backpack",
+      "name": "Backpack",
+      "category": "adventuring_gear",
+      "cost": {
+        "copper_pieces": 200
+      },
+      "weight_thousandths_of_pound": 5000
+    },
+    {
+      "id": "bagpipes",
+      "name": "Bagpipes",
+      "category": "tool",
+      "cost": {
+        "copper_pieces": 3000
+      },
+      "weight_thousandths_of_pound": 6000,
+      "tool": {
+        "kind": "musical_instrument",
+        "ability": "charisma"
+      },
+      "utilize": [
+        {
+          "description": "Play a known tune",
+          "dc": 10
+        },
+        {
+          "description": "Improvise a song",
+          "dc": 15
+        }
+      ]
+    },
+    {
+      "id": "ball_bearings",
+      "name": "Ball Bearings",
+      "category": "adventuring_gear",
+      "cost": {
+        "copper_pieces": 100
+      },
+      "weight_thousandths_of_pound": 2000
+    },
+    {
+      "id": "barrel",
+      "name": "Barrel",
+      "category": "adventuring_gear",
+      "cost": {
+        "copper_pieces": 200
+      },
+      "weight_thousandths_of_pound": 70000
+    },
+    {
+      "id": "basic_poison",
+      "name": "Basic Poison",
+      "category": "adventuring_gear",
+      "cost": {
+        "copper_pieces": 10000
+      },
+      "weight_thousandths_of_pound": 0,
+      "consumable": true
+    },
+    {
+      "id": "basket",
+      "name": "Basket",
+      "category": "adventuring_gear",
+      "cost": {
+        "copper_pieces": 40
+      },
+      "weight_thousandths_of_pound": 2000
+    },
+    {
+      "id": "battleaxe",
+      "name": "Battleaxe",
+      "category": "weapon",
+      "cost": {
+        "copper_pieces": 1000
+      },
+      "weight_thousandths_of_pound": 4000,
+      "weapon": {
+        "category": "martial",
+        "kind": "melee",
+        "damage_dice": {
+          "count": 1,
+          "sides": 8
+        },
+        "damage_type": "slashing",
+        "versatile_dice": {
+          "count": 1,
+          "sides": 10
+        },
+        "properties": [
+          "versatile"
+        ],
+        "mastery": "topple"
+      }
+    },
+    {
+      "id": "bedroll",
+      "name": "Bedroll",
+      "category": "adventuring_gear",
+      "cost": {
+        "copper_pieces": 100
+      },
+      "weight_thousandths_of_pound": 7000
+    },
+    {
+      "id": "bell",
+      "name": "Bell",
+      "category": "adventuring_gear",
+      "cost": {
+        "copper_pieces": 100
+      },
+      "weight_thousandths_of_pound": 0
+    },
+    {
+      "id": "blanket",
+      "name": "Blanket",
+      "category": "adventuring_gear",
+      "cost": {
+        "copper_pieces": 50
+      },
+      "weight_thousandths_of_pound": 3000
+    },
+    {
+      "id": "block_and_tackle",
+      "name": "Block and Tackle",
+      "category": "adventuring_gear",
+      "cost": {
+        "copper_pieces": 100
+      },
+      "weight_thousandths_of_pound": 5000
+    },
+    {
+      "id": "blowgun",
+      "name": "Blowgun",
+      "category": "weapon",
+      "cost": {
+        "copper_pieces": 1000
+      },
+      "weight_thousandths_of_pound": 1000,
+      "weapon": {
+        "category": "martial",
+        "kind": "ranged",
+        "damage_dice": {
+          "count": 1,
+          "sides": 1
+        },
+        "damage_type": "piercing",
+        "properties": [
+          "ammunition",
+          "loading"
+        ],
+        "range": {
+          "normal_feet": 25,
+          "long_feet": 100
+        },
+        "mastery": "vex",
+        "ammunition": "needle"
+      }
+    },
+    {
+      "id": "bolt",
+      "name": "Bolt",
+      "category": "ammunition",
+      "cost": {
+        "copper_pieces": 5
+      },
+      "weight_thousandths_of_pound": 75
+    },
+    {
+      "id": "bolts_20",
+      "name": "Bolts (20)",
+      "category": "ammunition",
+      "cost": {
+        "copper_pieces": 100
+      },
+      "weight_thousandths_of_pound": 1500,
+      "contents": [
+        {
+          "item": "bolt",
+          "quantity": 20
+        }
+      ]
+    },
+    {
+      "id": "book",
+      "name": "Book",
+      "category": "adventuring_gear",
+      "cost": {
+        "copper_pieces": 2500
+      },
+      "weight_thousandths_of_pound": 5000
+    },
+    {
+      "id": "bread_loaf",
+      "name": "Bread (loaf)",
+      "category": "food_and_drink",
+      "cost": {
+        "copper_pieces": 2
+      },
+      "weight_thousandths_of_pound": 0,
+      "consumable": true
+    },
+    {
+      "id": "breastplate",
+      "name": "Breastplate",
+      "category": "armor",
+      "cost": {
+        "copper_pieces": 40000
+      },
+      "weight_thousandths_of_pound": 20000,
+      "armor": {
+        "category": "medium",
+        "armor_class": 14,
+        "stealth_disadvantage": false
+      }
+    },
+    {
+      "id": "brewers_supplies",
+      "name": "Brewer's Supplies",
+      "category": "tool",
+      "cost": {
+        "copper_pieces": 2000
+      },
+      "weight_thousandths_of_pound": 9000,
+      "tool": {
+        "kind": "artisans",
+        "ability": "intelligence"
+      },
+      "utilize": [
+        {
+          "description": "Detect poisoned drink",
+          "dc": 15
+        },
+        {
+          "description": "Identify alcohol",
+          "dc": 10
+        }
+      ],
+      "crafts": [
+        "antitoxin"
+      ]
+    },
+    {
+      "id": "bucket",
+      "name": "Bucket",
+      "category": "adventuring_gear",
+      "cost": {
+        "copper_pieces": 5
+      },
+      "weight_thousandths_of_pound": 2000
+    },
+    {
+      "id": "bullseye_lantern",
+      "name": "Bullseye Lantern",
+      "category": "adventuring_gear",
+      "cost": {
+        "copper_pieces": 1000
+      },
+      "weight_thousandths_of_pound": 2000
+    },
+    {
+      "id": "burglars_pack",
+      "name": "Burglar's Pack",
+      "category": "adventuring_gear",
+      "cost": {
+        "copper_pieces": 1600
+      },
+      "weight_thousandths_of_pound": 47500,
+      "contents": [
+        {
+          "item": "backpack",
+          "quantity": 1
+        },
+        {
+          "item": "ball_bearings",
+          "quantity": 1
+        },
+        {
+          "item": "bell",
+          "quantity": 1
+        },
+        {
+          "item": "candle",
+          "quantity": 10
+        },
+        {
+          "item": "crowbar",
+          "quantity": 1
+        },
+        {
+          "item": "hooded_lantern",
+          "quantity": 1
+        },
+        {
+          "item": "oil",
+          "quantity": 7
+        },
+        {
+          "item": "rations",
+          "quantity": 5
+        },
+        {
+          "item": "rope",
+          "quantity": 1
+        },
+        {
+          "item": "tinderbox",
+          "quantity": 1
+        },
+        {
+          "item": "waterskin",
+          "quantity": 1
+        }
+      ]
+    },
+    {
+      "id": "burnt_othur_fumes",
+      "name": "Burnt Othur Fumes",
+      "category": "adventuring_gear",
+      "cost": {
+        "copper_pieces": 50000
+      },
+      "weight_thousandths_of_pound": 0,
+      "consumable": true
+    },
+    {
+      "id": "calligraphers_supplies",
+      "name": "Calligrapher's Supplies",
+      "category": "tool",
+      "cost": {
+        "copper_pieces": 1000
+      },
+      "weight_thousandths_of_pound": 5000,
+      "tool": {
+        "kind": "artisans",
+        "ability": "dexterity"
+      },
+      "utilize": [
+        {
+          "description": "Write text with impressive flourishes that guard against forgery",
+          "dc": 15
+        }
+      ],
+      "crafts": [
+        "ink"
+      ]
+    },
+    {
+      "id": "caltrops",
+      "name": "Caltrops",
+      "category": "adventuring_gear",
+      "cost": {
+        "copper_pieces": 100
+      },
+      "weight_thousandths_of_pound": 2000
+    },
+    {
+      "id": "candle",
+      "name": "Candle",
+      "category": "adventuring_gear",
+      "cost": {
+        "copper_pieces": 1
+      },
+      "weight_thousandths_of_pound": 0,
+      "consumable": true
+    },
+    {
+      "id": "carpenters_tools",
+      "name": "Carpenter's Tools",
+      "category": "tool",
+      "cost": {
+        "copper_pieces": 800
+      },
+      "weight_thousandths_of_pound": 6000,
+      "tool": {
+        "kind": "artisans",
+        "ability": "strength"
+      },
+      "utilize": [
+        {
+          "description": "Seal or pry open a door or container",
+          "dc": 20
+        }
+      ],
+      "crafts": [
+        "barrel",
+        "chest",
+        "club",
+        "greatclub",
+        "ladder",
+        "pole",
+        "portable_ram",
+        "quarterstaff",
+        "torch"
+      ]
+    },
+    {
+      "id": "cartographers_tools",
+      "name": "Cartographer's Tools",
+      "category": "tool",
+      "cost": {
+        "copper_pieces": 1500
+      },
+      "weight_thousandths_of_pound": 6000,
+      "tool": {
+        "kind": "artisans",
+        "ability": "wisdom"
+      },
+      "utilize": [
+        {
+          "description": "Draft a map of a small area",
+          "dc": 15
+        }
+      ],
+      "crafts": [
+        "map"
+      ]
+    },
+    {
+      "id": "chain",
+      "name": "Chain",
+      "category": "adventuring_gear",
+      "cost": {
+        "copper_pieces": 500
+      },
+      "weight_thousandths_of_pound": 10000,
+      "utilize": [
+        {
+          "description": "Wrap a Chain around an unwilling creature within 5 feet",
+          "dc": 13,
+          "ability": "strength",
+          "skill": "athletics"
+        }
+      ]
+    },
+    {
+      "id": "chain_mail",
+      "name": "Chain Mail",
+      "category": "armor",
+      "cost": {
+        "copper_pieces": 7500
+      },
+      "weight_thousandths_of_pound": 55000,
+      "armor": {
+        "category": "heavy",
+        "armor_class": 16,
+        "strength_requirement": 13,
+        "stealth_disadvantage": true
+      }
+    },
+    {
+      "id": "chain_shirt",
+      "name": "Chain Shirt",
+      "category": "armor",
+      "cost": {
+        "copper_pieces": 5000
+      },
+      "weight_thousandths_of_pound": 20000,
+      "armor": {
+        "category": "medium",
+        "armor_class": 13,
+        "stealth_disadvantage": false
+      }
+    },
+    {
+      "id": "cheese_wedge",
+      "name": "Cheese (wedge)",
+      "category": "food_and_drink",
+      "cost": {
+        "copper_pieces": 10
+      },
+      "weight_thousandths_of_pound": 0,
+      "consumable": true
+    },
+    {
+      "id": "chest",
+      "name": "Chest",
+      "category": "adventuring_gear",
+      "cost": {
+        "copper_pieces": 500
+      },
+      "weight_thousandths_of_pound": 25000
+    },
+    {
+      "id": "climbers_kit",
+      "name": "Climber's Kit",
+      "category": "adventuring_gear",
+      "cost": {
+        "copper_pieces": 2500
+      },
+      "weight_thousandths_of_pound": 12000
+    },
+    {
+      "id": "club",
+      "name": "Club",
+      "category": "weapon",
+      "cost": {
+        "copper_pieces": 10
+      },
+      "weight_thousandths_of_pound": 2000,
+      "weapon": {
+        "category": "simple",
+        "kind": "melee",
+        "damage_dice": {
+          "count": 1,
+          "sides": 4
+        },
+        "damage_type": "bludgeoning",
+        "properties": [
+          "light"
+        ],
+        "mastery": "slow"
+      }
+    },
+    {
+      "id": "cobblers_tools",
+      "name": "Cobbler's Tools",
+      "category": "tool",
+      "cost": {
+        "copper_pieces": 500
+      },
+      "weight_thousandths_of_pound": 5000,
+      "tool": {
+        "kind": "artisans",
+        "ability": "dexterity"
+      },
+      "utilize": [
+        {
+          "description": "Modify footwear to give Advantage on the wearer's next Dexterity (Acrobatics) check",
+          "dc": 10
+        }
+      ],
+      "crafts": [
+        "climbers_kit"
+      ]
+    },
+    {
+      "id": "common_wine_bottle",
+      "name": "Common Wine (bottle)",
+      "category": "food_and_drink",
+      "cost": {
+        "copper_pieces": 20
+      },
+      "weight_thousandths_of_pound": 0,
+      "consumable": true
+    },
+    {
+      "id": "component_pouch",
+      "name": "Component Pouch",
+      "category": "adventuring_gear",
+      "cost": {
+        "copper_pieces": 2500
+      },
+      "weight_thousandths_of_pound": 2000
+    },
+    {
+      "id": "cooks_utensils",
+      "name": "Cook's Utensils",
+      "category": "tool",
+      "cost": {
+        "copper_pieces": 100
+      },
+      "weight_thousandths_of_pound": 8000,
+      "tool": {
+        "kind": "artisans",
+        "ability": "wisdom"
+      },
+      "utilize": [
+        {
+          "description": "Improve food's flavor",
+          "dc": 10
+        },
+        {
+          "description": "Detect spoiled or poisoned food",
+          "dc": 15
+        }
+      ],
+      "crafts": [
+        "rations"
+      ]
+    },
+    {
+      "id": "costume",
+      "name": "Costume",
+      "category": "adventuring_gear",
+      "cost": {
+        "copper_pieces": 500
+      },
+      "weight_thousandths_of_pound": 4000
+    },
+    {
+      "id": "crossbow_bolt_case",
+      "name": "Crossbow Bolt Case",
+      "category": "adventuring_gear",
+      "cost": {
+        "copper_pieces": 100
+      },
+      "weight_thousandths_of_pound": 1000
+    },
+    {
+      "id": "crowbar",
+      "name": "Crowbar",
+      "category": "adventuring_gear",
+      "cost": {
+        "copper_pieces": 200
+      },
+      "weight_thousandths_of_pound": 5000
+    },
+    {
+      "id": "crystal",
+      "name": "Crystal",
+      "category": "spellcasting_focus",
+      "cost": {
+        "copper_pieces": 1000
+      },
+      "weight_thousandths_of_pound": 1000
+    },
+    {
+      "id": "dagger",
+      "name": "Dagger",
+      "category": "weapon",
+      "cost": {
+        "copper_pieces": 200
+      },
+      "weight_thousandths_of_pound": 1000,
+      "weapon": {
+        "category": "simple",
+        "kind": "melee",
+        "damage_dice": {
+          "count": 1,
+          "sides": 4
+        },
+        "damage_type": "piercing",
+        "properties": [
+          "finesse",
+          "light",
+          "thrown"
+        ],
+        "range": {
+          "normal_feet": 20,
+          "long_feet": 60
+        },
+        "mastery": "nick"
+      }
+    },
+    {
+      "id": "dart",
+      "name": "Dart",
+      "category": "weapon",
+      "cost": {
+        "copper_pieces": 5
+      },
+      "weight_thousandths_of_pound": 250,
+      "weapon": {
+        "category": "simple",
+        "kind": "ranged",
+        "damage_dice": {
+          "count": 1,
+          "sides": 4
+        },
+        "damage_type": "piercing",
+        "properties": [
+          "finesse",
+          "thrown"
+        ],
+        "range": {
+          "normal_feet": 20,
+          "long_feet": 60
+        },
+        "mastery": "vex"
+      }
+    },
+    {
+      "id": "dice_set",
+      "name": "Dice Set",
+      "category": "tool",
+      "cost": {
+        "copper_pieces": 10
+      },
+      "weight_thousandths_of_pound": 0,
+      "tool": {
+        "kind": "gaming_set",
+        "ability": "wisdom"
+      },
+      "utilize": [
+        {
+          "description": "Discern whether someone is cheating",
+          "dc": 10
+        },
+        {
+          "description": "Win the game",
+          "dc": 20
+        }
+      ]
+    },
+    {
+      "id": "diplomats_pack",
+      "name": "Diplomat's Pack",
+      "category": "adventuring_gear",
+      "cost": {
+        "copper_pieces": 3900
+      },
+      "weight_thousandths_of_pound": 39000,
+      "contents": [
+        {
+          "item": "chest",
+          "quantity": 1
+        },
+        {
+          "item": "fine_clothes",
+          "quantity": 1
+        },
+        {
+          "item": "ink",
+          "quantity": 1
+        },
+        {
+          "item": "ink_pen",
+          "quantity": 5
+        },
+        {
+          "item": "lamp",
+          "quantity": 1
+        },
+        {
+          "item": "map_or_scroll_case",
+          "quantity": 2
+        },
+        {
+          "item": "oil",
+          "quantity": 4
+        },
+        {
+          "item": "paper",
+          "quantity": 5
+        },
+        {
+          "item": "parchment",
+          "quantity": 5
+        },
+        {
+          "item": "perfume",
+          "quantity": 1
+        },
+        {
+          "item": "tinderbox",
+          "quantity": 1
+        }
+      ]
+    },
+    {
+      "id": "disguise_kit",
+      "name": "Disguise Kit",
+      "category": "tool",
+      "cost": {
+        "copper_pieces": 2500
+      },
+      "weight_thousandths_of_pound": 3000,
+      "tool": {
+        "kind": "other",
+        "ability": "charisma"
+      },
+      "utilize": [
+        {
+          "description": "Apply makeup",
+          "dc": 10
+        }
+      ],
+      "crafts": [
+        "costume"
+      ]
+    },
+    {
+      "id": "dragonchess_set",
+      "name": "Dragonchess Set",
+      "category": "tool",
+      "cost": {
+        "copper_pieces": 100
+      },
+      "weight_thousandths_of_pound": 0,
+      "tool": {
+        "kind": "gaming_set",
+        "ability": "wisdom"
+      },
+      "utilize": [
+        {
+          "description": "Discern whether someone is cheating",
+          "dc": 10
+        },
+        {
+          "description": "Win the game",
+          "dc": 20
+        }
+      ]
+    },
+    {
+      "id": "druidic_focus",
+      "name": "Druidic Focus",
+      "category": "item_group",
+      "weight_thousandths_of_pound": 0,
+      "group_members": [
+        "sprig_of_mistletoe",
+        "wooden_staff",
+        "yew_wand"
+      ]
+    },
+    {
+      "id": "drum",
+      "name": "Drum",
+      "category": "tool",
+      "cost": {
+        "copper_pieces": 600
+      },
+      "weight_thousandths_of_pound": 3000,
+      "tool": {
+        "kind": "musical_instrument",
+        "ability": "charisma"
+      },
+      "utilize": [
+        {
+          "description": "Play a known tune",
+          "dc": 10
+        },
+        {
+          "description": "Improvise a song",
+          "dc": 15
+        }
+      ]
+    },
+    {
+      "id": "dulcimer",
+      "name": "Dulcimer",
+      "category": "tool",
+      "cost": {
+        "copper_pieces": 2500
+      },
+      "weight_thousandths_of_pound": 10000,
+      "tool": {
+        "kind": "musical_instrument",
+        "ability": "charisma"
+      },
+      "utilize": [
+        {
+          "description": "Play a known tune",
+          "dc": 10
+        },
+        {
+          "description": "Improvise a song",
+          "dc": 15
+        }
+      ]
+    },
+    {
+      "id": "dungeoneers_pack",
+      "name": "Dungeoneer's Pack",
+      "category": "adventuring_gear",
+      "cost": {
+        "copper_pieces": 1200
+      },
+      "weight_thousandths_of_pound": 55000,
+      "contents": [
+        {
+          "item": "backpack",
+          "quantity": 1
+        },
+        {
+          "item": "caltrops",
+          "quantity": 1
+        },
+        {
+          "item": "crowbar",
+          "quantity": 1
+        },
+        {
+          "item": "oil",
+          "quantity": 2
+        },
+        {
+          "item": "rations",
+          "quantity": 10
+        },
+        {
+          "item": "rope",
+          "quantity": 1
+        },
+        {
+          "item": "tinderbox",
+          "quantity": 1
+        },
+        {
+          "item": "torch",
+          "quantity": 10
+        },
+        {
+          "item": "waterskin",
+          "quantity": 1
+        }
+      ]
+    },
+    {
+      "id": "emblem",
+      "name": "Emblem",
+      "category": "spellcasting_focus",
+      "cost": {
+        "copper_pieces": 500
+      },
+      "weight_thousandths_of_pound": 0
+    },
+    {
+      "id": "entertainers_pack",
+      "name": "Entertainer's Pack",
+      "category": "adventuring_gear",
+      "cost": {
+        "copper_pieces": 4000
+      },
+      "weight_thousandths_of_pound": 58500,
+      "contents": [
+        {
+          "item": "backpack",
+          "quantity": 1
+        },
+        {
+          "item": "bedroll",
+          "quantity": 1
+        },
+        {
+          "item": "bell",
+          "quantity": 1
+        },
+        {
+          "item": "bullseye_lantern",
+          "quantity": 1
+        },
+        {
+          "item": "costume",
+          "quantity": 3
+        },
+        {
+          "item": "mirror",
+          "quantity": 1
+        },
+        {
+          "item": "oil",
+          "quantity": 8
+        },
+        {
+          "item": "rations",
+          "quantity": 9
+        },
+        {
+          "item": "tinderbox",
+          "quantity": 1
+        },
+        {
+          "item": "waterskin",
+          "quantity": 1
+        }
+      ]
+    },
+    {
+      "id": "essence_of_ether",
+      "name": "Essence of Ether",
+      "category": "adventuring_gear",
+      "cost": {
+        "copper_pieces": 30000
+      },
+      "weight_thousandths_of_pound": 0,
+      "consumable": true
+    },
+    {
+      "id": "exotic_saddle",
+      "name": "Exotic Saddle",
+      "category": "tack_and_harness",
+      "cost": {
+        "copper_pieces": 6000
+      },
+      "weight_thousandths_of_pound": 40000
+    },
+    {
+      "id": "explorers_pack",
+      "name": "Explorer's Pack",
+      "category": "adventuring_gear",
+      "cost": {
+        "copper_pieces": 1000
+      },
+      "weight_thousandths_of_pound": 55000,
+      "contents": [
+        {
+          "item": "backpack",
+          "quantity": 1
+        },
+        {
+          "item": "bedroll",
+          "quantity": 1
+        },
+        {
+          "item": "oil",
+          "quantity": 2
+        },
+        {
+          "item": "rations",
+          "quantity": 10
+        },
+        {
+          "item": "rope",
+          "quantity": 1
+        },
+        {
+          "item": "tinderbox",
+          "quantity": 1
+        },
+        {
+          "item": "torch",
+          "quantity": 10
+        },
+        {
+          "item": "waterskin",
+          "quantity": 1
+        }
+      ]
+    },
+    {
+      "id": "feed_per_day",
+      "name": "Feed (per day)",
+      "category": "tack_and_harness",
+      "cost": {
+        "copper_pieces": 5
+      },
+      "weight_thousandths_of_pound": 10000
+    },
+    {
+      "id": "fine_clothes",
+      "name": "Fine Clothes",
+      "category": "adventuring_gear",
+      "cost": {
+        "copper_pieces": 1500
+      },
+      "weight_thousandths_of_pound": 6000
+    },
+    {
+      "id": "fine_wine_bottle",
+      "name": "Fine Wine (bottle)",
+      "category": "food_and_drink",
+      "cost": {
+        "copper_pieces": 1000
+      },
+      "weight_thousandths_of_pound": 0,
+      "consumable": true
+    },
+    {
+      "id": "firearm_bullet",
+      "name": "Firearm Bullet",
+      "category": "ammunition",
+      "cost": {
+        "copper_pieces": 30
+      },
+      "weight_thousandths_of_pound": 200,
+      "consumable": true
+    },
+    {
+      "id": "firearm_bullets_10",
+      "name": "Firearm Bullets (10)",
+      "category": "ammunition",
+      "cost": {
+        "copper_pieces": 300
+      },
+      "weight_thousandths_of_pound": 2000,
+      "consumable": true,
+      "contents": [
+        {
+          "item": "firearm_bullet",
+          "quantity": 10
+        }
+      ]
+    },
+    {
+      "id": "flail",
+      "name": "Flail",
+      "category": "weapon",
+      "cost": {
+        "copper_pieces": 1000
+      },
+      "weight_thousandths_of_pound": 2000,
+      "weapon": {
+        "category": "martial",
+        "kind": "melee",
+        "damage_dice": {
+          "count": 1,
+          "sides": 8
+        },
+        "damage_type": "bludgeoning",
+        "mastery": "sap"
+      }
+    },
+    {
+      "id": "flask",
+      "name": "Flask",
+      "category": "adventuring_gear",
+      "cost": {
+        "copper_pieces": 2
+      },
+      "weight_thousandths_of_pound": 1000
+    },
+    {
+      "id": "flute",
+      "name": "Flute",
+      "category": "tool",
+      "cost": {
+        "copper_pieces": 200
+      },
+      "weight_thousandths_of_pound": 1000,
+      "tool": {
+        "kind": "musical_instrument",
+        "ability": "charisma"
+      },
+      "utilize": [
+        {
+          "description": "Play a known tune",
+          "dc": 10
+        },
+        {
+          "description": "Improvise a song",
+          "dc": 15
+        }
+      ]
+    },
+    {
+      "id": "forgery_kit",
+      "name": "Forgery Kit",
+      "category": "tool",
+      "cost": {
+        "copper_pieces": 1500
+      },
+      "weight_thousandths_of_pound": 5000,
+      "tool": {
+        "kind": "other",
+        "ability": "dexterity"
+      },
+      "utilize": [
+        {
+          "description": "Mimic 10 or fewer words of someone else's handwriting",
+          "dc": 15
+        },
+        {
+          "description": "Duplicate a wax seal",
+          "dc": 20
+        }
+      ]
+    },
+    {
+      "id": "gaming_set",
+      "name": "Gaming Set",
+      "category": "item_group",
+      "weight_thousandths_of_pound": 0,
+      "group_members": [
+        "dice_set",
+        "dragonchess_set",
+        "playing_cards",
+        "three_dragon_ante_set"
+      ]
+    },
+    {
+      "id": "glaive",
+      "name": "Glaive",
+      "category": "weapon",
+      "cost": {
+        "copper_pieces": 2000
+      },
+      "weight_thousandths_of_pound": 6000,
+      "weapon": {
+        "category": "martial",
+        "kind": "melee",
+        "damage_dice": {
+          "count": 1,
+          "sides": 10
+        },
+        "damage_type": "slashing",
+        "properties": [
+          "heavy",
+          "reach",
+          "two_handed"
+        ],
+        "mastery": "graze"
+      }
+    },
+    {
+      "id": "glass_bottle",
+      "name": "Glass Bottle",
+      "category": "adventuring_gear",
+      "cost": {
+        "copper_pieces": 200
+      },
+      "weight_thousandths_of_pound": 2000
+    },
+    {
+      "id": "glassblowers_tools",
+      "name": "Glassblower's Tools",
+      "category": "tool",
+      "cost": {
+        "copper_pieces": 3000
+      },
+      "weight_thousandths_of_pound": 5000,
+      "tool": {
+        "kind": "artisans",
+        "ability": "intelligence"
+      },
+      "utilize": [
+        {
+          "description": "Discern what a glass object held in the past 24 hours",
+          "dc": 15
+        }
+      ],
+      "crafts": [
+        "glass_bottle",
+        "magnifying_glass",
+        "spyglass",
+        "vial"
+      ]
+    },
+    {
+      "id": "grappling_hook",
+      "name": "Grappling Hook",
+      "category": "adventuring_gear",
+      "cost": {
+        "copper_pieces": 200
+      },
+      "weight_thousandths_of_pound": 4000,
+      "utilize": [
+        {
+          "description": "Throw the Grappling Hook at a railing, a ledge, or another catch within 50 feet",
+          "dc": 13,
+          "ability": "dexterity",
+          "skill": "acrobatics"
+        }
+      ]
+    },
+    {
+      "id": "greataxe",
+      "name": "Greataxe",
+      "category": "weapon",
+      "cost": {
+        "copper_pieces": 3000
+      },
+      "weight_thousandths_of_pound": 7000,
+      "weapon": {
+        "category": "martial",
+        "kind": "melee",
+        "damage_dice": {
+          "count": 1,
+          "sides": 12
+        },
+        "damage_type": "slashing",
+        "properties": [
+          "heavy",
+          "two_handed"
+        ],
+        "mastery": "cleave"
+      }
+    },
+    {
+      "id": "greatclub",
+      "name": "Greatclub",
+      "category": "weapon",
+      "cost": {
+        "copper_pieces": 20
+      },
+      "weight_thousandths_of_pound": 10000,
+      "weapon": {
+        "category": "simple",
+        "kind": "melee",
+        "damage_dice": {
+          "count": 1,
+          "sides": 8
+        },
+        "damage_type": "bludgeoning",
+        "properties": [
+          "two_handed"
+        ],
+        "mastery": "push"
+      }
+    },
+    {
+      "id": "greatsword",
+      "name": "Greatsword",
+      "category": "weapon",
+      "cost": {
+        "copper_pieces": 5000
+      },
+      "weight_thousandths_of_pound": 6000,
+      "weapon": {
+        "category": "martial",
+        "kind": "melee",
+        "damage_dice": {
+          "count": 2,
+          "sides": 6
+        },
+        "damage_type": "slashing",
+        "properties": [
+          "heavy",
+          "two_handed"
+        ],
+        "mastery": "graze"
+      }
+    },
+    {
+      "id": "halberd",
+      "name": "Halberd",
+      "category": "weapon",
+      "cost": {
+        "copper_pieces": 2000
+      },
+      "weight_thousandths_of_pound": 6000,
+      "weapon": {
+        "category": "martial",
+        "kind": "melee",
+        "damage_dice": {
+          "count": 1,
+          "sides": 10
+        },
+        "damage_type": "slashing",
+        "properties": [
+          "heavy",
+          "reach",
+          "two_handed"
+        ],
+        "mastery": "cleave"
+      }
+    },
+    {
+      "id": "half_plate_armor",
+      "name": "Half Plate Armor",
+      "category": "armor",
+      "cost": {
+        "copper_pieces": 75000
+      },
+      "weight_thousandths_of_pound": 40000,
+      "armor": {
+        "category": "medium",
+        "armor_class": 15,
+        "stealth_disadvantage": true
+      }
+    },
+    {
+      "id": "hand_crossbow",
+      "name": "Hand Crossbow",
+      "category": "weapon",
+      "cost": {
+        "copper_pieces": 7500
+      },
+      "weight_thousandths_of_pound": 3000,
+      "weapon": {
+        "category": "martial",
+        "kind": "ranged",
+        "damage_dice": {
+          "count": 1,
+          "sides": 6
+        },
+        "damage_type": "piercing",
+        "properties": [
+          "ammunition",
+          "light",
+          "loading"
+        ],
+        "range": {
+          "normal_feet": 30,
+          "long_feet": 120
+        },
+        "mastery": "vex",
+        "ammunition": "bolt"
+      }
+    },
+    {
+      "id": "handaxe",
+      "name": "Handaxe",
+      "category": "weapon",
+      "cost": {
+        "copper_pieces": 500
+      },
+      "weight_thousandths_of_pound": 2000,
+      "weapon": {
+        "category": "simple",
+        "kind": "melee",
+        "damage_dice": {
+          "count": 1,
+          "sides": 6
+        },
+        "damage_type": "slashing",
+        "properties": [
+          "light",
+          "thrown"
+        ],
+        "range": {
+          "normal_feet": 20,
+          "long_feet": 60
+        },
+        "mastery": "vex"
+      }
+    },
+    {
+      "id": "healers_kit",
+      "name": "Healer's Kit",
+      "category": "adventuring_gear",
+      "cost": {
+        "copper_pieces": 500
+      },
+      "weight_thousandths_of_pound": 3000
+    },
+    {
+      "id": "heavy_crossbow",
+      "name": "Heavy Crossbow",
+      "category": "weapon",
+      "cost": {
+        "copper_pieces": 5000
+      },
+      "weight_thousandths_of_pound": 18000,
+      "weapon": {
+        "category": "martial",
+        "kind": "ranged",
+        "damage_dice": {
+          "count": 1,
+          "sides": 10
+        },
+        "damage_type": "piercing",
+        "properties": [
+          "ammunition",
+          "heavy",
+          "loading",
+          "two_handed"
+        ],
+        "range": {
+          "normal_feet": 100,
+          "long_feet": 400
+        },
+        "mastery": "push",
+        "ammunition": "bolt"
+      }
+    },
+    {
+      "id": "herbalism_kit",
+      "name": "Herbalism Kit",
+      "category": "tool",
+      "cost": {
+        "copper_pieces": 500
+      },
+      "weight_thousandths_of_pound": 3000,
+      "tool": {
+        "kind": "other",
+        "ability": "intelligence"
+      },
+      "utilize": [
+        {
+          "description": "Identify a plant",
+          "dc": 10
+        }
+      ],
+      "crafts": [
+        "antitoxin",
+        "candle",
+        "healers_kit"
+      ]
+    },
+    {
+      "id": "hide_armor",
+      "name": "Hide Armor",
+      "category": "armor",
+      "cost": {
+        "copper_pieces": 1000
+      },
+      "weight_thousandths_of_pound": 12000,
+      "armor": {
+        "category": "medium",
+        "armor_class": 12,
+        "stealth_disadvantage": false
+      }
+    },
+    {
+      "id": "holy_symbol",
+      "name": "Holy Symbol",
+      "category": "item_group",
+      "weight_thousandths_of_pound": 0,
+      "group_members": [
+        "amulet",
+        "emblem",
+        "reliquary"
+      ]
+    },
+    {
+      "id": "holy_water",
+      "name": "Holy Water",
+      "category": "adventuring_gear",
+      "cost": {
+        "copper_pieces": 2500
+      },
+      "weight_thousandths_of_pound": 1000,
+      "consumable": true
+    },
+    {
+      "id": "hooded_lantern",
+      "name": "Hooded Lantern",
+      "category": "adventuring_gear",
+      "cost": {
+        "copper_pieces": 500
+      },
+      "weight_thousandths_of_pound": 2000
+    },
+    {
+      "id": "horn",
+      "name": "Horn",
+      "category": "tool",
+      "cost": {
+        "copper_pieces": 300
+      },
+      "weight_thousandths_of_pound": 2000,
+      "tool": {
+        "kind": "musical_instrument",
+        "ability": "charisma"
+      },
+      "utilize": [
+        {
+          "description": "Play a known tune",
+          "dc": 10
+        },
+        {
+          "description": "Improvise a song",
+          "dc": 15
+        }
+      ]
+    },
+    {
+      "id": "hunting_trap",
+      "name": "Hunting Trap",
+      "category": "adventuring_gear",
+      "cost": {
+        "copper_pieces": 500
+      },
+      "weight_thousandths_of_pound": 25000
+    },
+    {
+      "id": "ink",
+      "name": "Ink",
+      "category": "adventuring_gear",
+      "cost": {
+        "copper_pieces": 1000
+      },
+      "weight_thousandths_of_pound": 0,
+      "consumable": true
+    },
+    {
+      "id": "ink_pen",
+      "name": "Ink Pen",
+      "category": "adventuring_gear",
+      "cost": {
+        "copper_pieces": 2
+      },
+      "weight_thousandths_of_pound": 0
+    },
+    {
+      "id": "iron_pot",
+      "name": "Iron Pot",
+      "category": "adventuring_gear",
+      "cost": {
+        "copper_pieces": 200
+      },
+      "weight_thousandths_of_pound": 10000
+    },
+    {
+      "id": "iron_spike",
+      "name": "Iron Spike",
+      "category": "adventuring_gear",
+      "cost": {
+        "copper_pieces": 10
+      },
+      "weight_thousandths_of_pound": 500
+    },
+    {
+      "id": "iron_spikes",
+      "name": "Iron Spikes",
+      "category": "adventuring_gear",
+      "cost": {
+        "copper_pieces": 100
+      },
+      "weight_thousandths_of_pound": 5000,
+      "contents": [
+        {
+          "item": "iron_spike",
+          "quantity": 10
+        }
+      ]
+    },
+    {
+      "id": "javelin",
+      "name": "Javelin",
+      "category": "weapon",
+      "cost": {
+        "copper_pieces": 50
+      },
+      "weight_thousandths_of_pound": 2000,
+      "weapon": {
+        "category": "simple",
+        "kind": "melee",
+        "damage_dice": {
+          "count": 1,
+          "sides": 6
+        },
+        "damage_type": "piercing",
+        "properties": [
+          "thrown"
+        ],
+        "range": {
+          "normal_feet": 30,
+          "long_feet": 120
+        },
+        "mastery": "slow"
+      }
+    },
+    {
+      "id": "jewelers_tools",
+      "name": "Jeweler's Tools",
+      "category": "tool",
+      "cost": {
+        "copper_pieces": 2500
+      },
+      "weight_thousandths_of_pound": 2000,
+      "tool": {
+        "kind": "artisans",
+        "ability": "intelligence"
+      },
+      "utilize": [
+        {
+          "description": "Discern a gem's value",
+          "dc": 15
+        }
+      ],
+      "crafts": [
+        "arcane_focus",
+        "holy_symbol"
+      ]
+    },
+    {
+      "id": "jug",
+      "name": "Jug",
+      "category": "adventuring_gear",
+      "cost": {
+        "copper_pieces": 2
+      },
+      "weight_thousandths_of_pound": 4000
+    },
+    {
+      "id": "ladder",
+      "name": "Ladder",
+      "category": "adventuring_gear",
+      "cost": {
+        "copper_pieces": 10
+      },
+      "weight_thousandths_of_pound": 25000
+    },
+    {
+      "id": "lamp",
+      "name": "Lamp",
+      "category": "adventuring_gear",
+      "cost": {
+        "copper_pieces": 50
+      },
+      "weight_thousandths_of_pound": 1000
+    },
+    {
+      "id": "lance",
+      "name": "Lance",
+      "category": "weapon",
+      "cost": {
+        "copper_pieces": 1000
+      },
+      "weight_thousandths_of_pound": 6000,
+      "weapon": {
+        "category": "martial",
+        "kind": "melee",
+        "damage_dice": {
+          "count": 1,
+          "sides": 10
+        },
+        "damage_type": "piercing",
+        "properties": [
+          "heavy",
+          "reach",
+          "two_handed"
+        ],
+        "mastery": "topple"
+      }
+    },
+    {
+      "id": "leather_armor",
+      "name": "Leather Armor",
+      "category": "armor",
+      "cost": {
+        "copper_pieces": 1000
+      },
+      "weight_thousandths_of_pound": 10000,
+      "armor": {
+        "category": "light",
+        "armor_class": 11,
+        "stealth_disadvantage": false
+      }
+    },
+    {
+      "id": "leatherworkers_tools",
+      "name": "Leatherworker's Tools",
+      "category": "tool",
+      "cost": {
+        "copper_pieces": 500
+      },
+      "weight_thousandths_of_pound": 5000,
+      "tool": {
+        "kind": "artisans",
+        "ability": "dexterity"
+      },
+      "utilize": [
+        {
+          "description": "Add a design to a leather item",
+          "dc": 10
+        }
+      ],
+      "crafts": [
+        "backpack",
+        "crossbow_bolt_case",
+        "hide_armor",
+        "leather_armor",
+        "map_or_scroll_case",
+        "parchment",
+        "pouch",
+        "quiver",
+        "sling",
+        "studded_leather_armor",
+        "waterskin",
+        "whip"
+      ]
+    },
+    {
+      "id": "light_crossbow",
+      "name": "Light Crossbow",
+      "category": "weapon",
+      "cost": {
+        "copper_pieces": 2500
+      },
+      "weight_thousandths_of_pound": 5000,
+      "weapon": {
+        "category": "simple",
+        "kind": "ranged",
+        "damage_dice": {
+          "count": 1,
+          "sides": 8
+        },
+        "damage_type": "piercing",
+        "properties": [
+          "ammunition",
+          "loading",
+          "two_handed"
+        ],
+        "range": {
+          "normal_feet": 80,
+          "long_feet": 320
+        },
+        "mastery": "slow",
+        "ammunition": "bolt"
+      }
+    },
+    {
+      "id": "light_hammer",
+      "name": "Light Hammer",
+      "category": "weapon",
+      "cost": {
+        "copper_pieces": 200
+      },
+      "weight_thousandths_of_pound": 2000,
+      "weapon": {
+        "category": "simple",
+        "kind": "melee",
+        "damage_dice": {
+          "count": 1,
+          "sides": 4
+        },
+        "damage_type": "bludgeoning",
+        "properties": [
+          "light",
+          "thrown"
+        ],
+        "range": {
+          "normal_feet": 20,
+          "long_feet": 60
+        },
+        "mastery": "nick"
+      }
+    },
+    {
+      "id": "lock",
+      "name": "Lock",
+      "category": "adventuring_gear",
+      "cost": {
+        "copper_pieces": 1000
+      },
+      "weight_thousandths_of_pound": 1000
+    },
+    {
+      "id": "longbow",
+      "name": "Longbow",
+      "category": "weapon",
+      "cost": {
+        "copper_pieces": 5000
+      },
+      "weight_thousandths_of_pound": 2000,
+      "weapon": {
+        "category": "martial",
+        "kind": "ranged",
+        "damage_dice": {
+          "count": 1,
+          "sides": 8
+        },
+        "damage_type": "piercing",
+        "properties": [
+          "ammunition",
+          "heavy",
+          "two_handed"
+        ],
+        "range": {
+          "normal_feet": 150,
+          "long_feet": 600
+        },
+        "mastery": "slow",
+        "ammunition": "arrow"
+      }
+    },
+    {
+      "id": "longsword",
+      "name": "Longsword",
+      "category": "weapon",
+      "cost": {
+        "copper_pieces": 1500
+      },
+      "weight_thousandths_of_pound": 3000,
+      "weapon": {
+        "category": "martial",
+        "kind": "melee",
+        "damage_dice": {
+          "count": 1,
+          "sides": 8
+        },
+        "damage_type": "slashing",
+        "versatile_dice": {
+          "count": 1,
+          "sides": 10
+        },
+        "properties": [
+          "versatile"
+        ],
+        "mastery": "sap"
+      }
+    },
+    {
+      "id": "lute",
+      "name": "Lute",
+      "category": "tool",
+      "cost": {
+        "copper_pieces": 3500
+      },
+      "weight_thousandths_of_pound": 2000,
+      "tool": {
+        "kind": "musical_instrument",
+        "ability": "charisma"
+      },
+      "utilize": [
+        {
+          "description": "Play a known tune",
+          "dc": 10
+        },
+        {
+          "description": "Improvise a song",
+          "dc": 15
+        }
+      ]
+    },
+    {
+      "id": "lyre",
+      "name": "Lyre",
+      "category": "tool",
+      "cost": {
+        "copper_pieces": 3000
+      },
+      "weight_thousandths_of_pound": 2000,
+      "tool": {
+        "kind": "musical_instrument",
+        "ability": "charisma"
+      },
+      "utilize": [
+        {
+          "description": "Play a known tune",
+          "dc": 10
+        },
+        {
+          "description": "Improvise a song",
+          "dc": 15
+        }
+      ]
+    },
+    {
+      "id": "mace",
+      "name": "Mace",
+      "category": "weapon",
+      "cost": {
+        "copper_pieces": 500
+      },
+      "weight_thousandths_of_pound": 4000,
+      "weapon": {
+        "category": "simple",
+        "kind": "melee",
+        "damage_dice": {
+          "count": 1,
+          "sides": 6
+        },
+        "damage_type": "bludgeoning",
+        "mastery": "sap"
+      }
+    },
+    {
+      "id": "magnifying_glass",
+      "name": "Magnifying Glass",
+      "category": "adventuring_gear",
+      "cost": {
+        "copper_pieces": 10000
+      },
+      "weight_thousandths_of_pound": 0
+    },
+    {
+      "id": "malice",
+      "name": "Malice",
+      "category": "adventuring_gear",
+      "cost": {
+        "copper_pieces": 25000
+      },
+      "weight_thousandths_of_pound": 0,
+      "consumable": true
+    },
+    {
+      "id": "manacles",
+      "name": "Manacles",
+      "category": "adventuring_gear",
+      "cost": {
+        "copper_pieces": 200
+      },
+      "weight_thousandths_of_pound": 6000,
+      "utilize": [
+        {
+          "description": "Use Manacles to bind an unwilling Small or Medium creature within 5 feet",
+          "dc": 13,
+          "ability": "dexterity",
+          "skill": "sleight_of_hand"
+        }
+      ]
+    },
+    {
+      "id": "map",
+      "name": "Map",
+      "category": "adventuring_gear",
+      "cost": {
+        "copper_pieces": 100
+      },
+      "weight_thousandths_of_pound": 0
+    },
+    {
+      "id": "map_or_scroll_case",
+      "name": "Map or Scroll Case",
+      "category": "adventuring_gear",
+      "cost": {
+        "copper_pieces": 100
+      },
+      "weight_thousandths_of_pound": 1000
+    },
+    {
+      "id": "masons_tools",
+      "name": "Mason's Tools",
+      "category": "tool",
+      "cost": {
+        "copper_pieces": 1000
+      },
+      "weight_thousandths_of_pound": 8000,
+      "tool": {
+        "kind": "artisans",
+        "ability": "strength"
+      },
+      "utilize": [
+        {
+          "description": "Chisel a symbol or hole in stone",
+          "dc": 10
+        }
+      ],
+      "crafts": [
+        "block_and_tackle"
+      ]
+    },
+    {
+      "id": "maul",
+      "name": "Maul",
+      "category": "weapon",
+      "cost": {
+        "copper_pieces": 1000
+      },
+      "weight_thousandths_of_pound": 10000,
+      "weapon": {
+        "category": "martial",
+        "kind": "melee",
+        "damage_dice": {
+          "count": 2,
+          "sides": 6
+        },
+        "damage_type": "bludgeoning",
+        "properties": [
+          "heavy",
+          "two_handed"
+        ],
+        "mastery": "topple"
+      }
+    },
+    {
+      "id": "midnight_tears",
+      "name": "Midnight Tears",
+      "category": "adventuring_gear",
+      "cost": {
+        "copper_pieces": 150000
+      },
+      "weight_thousandths_of_pound": 0,
+      "consumable": true
+    },
+    {
+      "id": "military_saddle",
+      "name": "Military Saddle",
+      "category": "tack_and_harness",
+      "cost": {
+        "copper_pieces": 2000
+      },
+      "weight_thousandths_of_pound": 30000
+    },
+    {
+      "id": "mirror",
+      "name": "Mirror",
+      "category": "adventuring_gear",
+      "cost": {
+        "copper_pieces": 500
+      },
+      "weight_thousandths_of_pound": 500
+    },
+    {
+      "id": "morningstar",
+      "name": "Morningstar",
+      "category": "weapon",
+      "cost": {
+        "copper_pieces": 1500
+      },
+      "weight_thousandths_of_pound": 4000,
+      "weapon": {
+        "category": "martial",
+        "kind": "melee",
+        "damage_dice": {
+          "count": 1,
+          "sides": 8
+        },
+        "damage_type": "piercing",
+        "mastery": "sap"
+      }
+    },
+    {
+      "id": "musical_instrument",
+      "name": "Musical Instrument",
+      "category": "item_group",
+      "weight_thousandths_of_pound": 0,
+      "group_members": [
+        "bagpipes",
+        "drum",
+        "dulcimer",
+        "flute",
+        "horn",
+        "lute",
+        "lyre",
+        "pan_flute",
+        "shawm",
+        "viol"
+      ]
+    },
+    {
+      "id": "musket",
+      "name": "Musket",
+      "category": "weapon",
+      "cost": {
+        "copper_pieces": 50000
+      },
+      "weight_thousandths_of_pound": 10000,
+      "weapon": {
+        "category": "martial",
+        "kind": "ranged",
+        "damage_dice": {
+          "count": 1,
+          "sides": 12
+        },
+        "damage_type": "piercing",
+        "properties": [
+          "ammunition",
+          "loading",
+          "two_handed"
+        ],
+        "range": {
+          "normal_feet": 40,
+          "long_feet": 120
+        },
+        "mastery": "slow",
+        "ammunition": "firearm_bullet"
+      }
+    },
+    {
+      "id": "navigators_tools",
+      "name": "Navigator's Tools",
+      "category": "tool",
+      "cost": {
+        "copper_pieces": 2500
+      },
+      "weight_thousandths_of_pound": 2000,
+      "tool": {
+        "kind": "other",
+        "ability": "wisdom"
+      },
+      "utilize": [
+        {
+          "description": "Plot a course",
+          "dc": 10
+        },
+        {
+          "description": "Determine position by stargazing",
+          "dc": 15
+        }
+      ]
+    },
+    {
+      "id": "needle",
+      "name": "Needle",
+      "category": "ammunition",
+      "cost": {
+        "copper_pieces": 2
+      },
+      "weight_thousandths_of_pound": 20
+    },
+    {
+      "id": "needles_50",
+      "name": "Needles (50)",
+      "category": "ammunition",
+      "cost": {
+        "copper_pieces": 100
+      },
+      "weight_thousandths_of_pound": 1000,
+      "contents": [
+        {
+          "item": "needle",
+          "quantity": 50
+        }
+      ]
+    },
+    {
+      "id": "net",
+      "name": "Net",
+      "category": "adventuring_gear",
+      "cost": {
+        "copper_pieces": 100
+      },
+      "weight_thousandths_of_pound": 3000
+    },
+    {
+      "id": "oil",
+      "name": "Oil",
+      "category": "adventuring_gear",
+      "cost": {
+        "copper_pieces": 10
+      },
+      "weight_thousandths_of_pound": 1000,
+      "consumable": true
+    },
+    {
+      "id": "oil_of_taggit",
+      "name": "Oil of Taggit",
+      "category": "adventuring_gear",
+      "cost": {
+        "copper_pieces": 40000
+      },
+      "weight_thousandths_of_pound": 0,
+      "consumable": true
+    },
+    {
+      "id": "orb",
+      "name": "Orb",
+      "category": "spellcasting_focus",
+      "cost": {
+        "copper_pieces": 2000
+      },
+      "weight_thousandths_of_pound": 3000
+    },
+    {
+      "id": "padded_armor",
+      "name": "Padded Armor",
+      "category": "armor",
+      "cost": {
+        "copper_pieces": 500
+      },
+      "weight_thousandths_of_pound": 8000,
+      "armor": {
+        "category": "light",
+        "armor_class": 11,
+        "stealth_disadvantage": true
+      }
+    },
+    {
+      "id": "painters_supplies",
+      "name": "Painter's Supplies",
+      "category": "tool",
+      "cost": {
+        "copper_pieces": 1000
+      },
+      "weight_thousandths_of_pound": 5000,
+      "tool": {
+        "kind": "artisans",
+        "ability": "wisdom"
+      },
+      "utilize": [
+        {
+          "description": "Paint a recognizable image of something you've seen",
+          "dc": 10
+        }
+      ],
+      "crafts": [
+        "druidic_focus",
+        "holy_symbol"
+      ]
+    },
+    {
+      "id": "pale_tincture",
+      "name": "Pale Tincture",
+      "category": "adventuring_gear",
+      "cost": {
+        "copper_pieces": 25000
+      },
+      "weight_thousandths_of_pound": 0,
+      "consumable": true
+    },
+    {
+      "id": "pan_flute",
+      "name": "Pan Flute",
+      "category": "tool",
+      "cost": {
+        "copper_pieces": 1200
+      },
+      "weight_thousandths_of_pound": 2000,
+      "tool": {
+        "kind": "musical_instrument",
+        "ability": "charisma"
+      },
+      "utilize": [
+        {
+          "description": "Play a known tune",
+          "dc": 10
+        },
+        {
+          "description": "Improvise a song",
+          "dc": 15
+        }
+      ]
+    },
+    {
+      "id": "paper",
+      "name": "Paper",
+      "category": "adventuring_gear",
+      "cost": {
+        "copper_pieces": 20
+      },
+      "weight_thousandths_of_pound": 0
+    },
+    {
+      "id": "parchment",
+      "name": "Parchment",
+      "category": "adventuring_gear",
+      "cost": {
+        "copper_pieces": 10
+      },
+      "weight_thousandths_of_pound": 0
+    },
+    {
+      "id": "perfume",
+      "name": "Perfume",
+      "category": "adventuring_gear",
+      "cost": {
+        "copper_pieces": 500
+      },
+      "weight_thousandths_of_pound": 0,
+      "consumable": true
+    },
+    {
+      "id": "pike",
+      "name": "Pike",
+      "category": "weapon",
+      "cost": {
+        "copper_pieces": 500
+      },
+      "weight_thousandths_of_pound": 18000,
+      "weapon": {
+        "category": "martial",
+        "kind": "melee",
+        "damage_dice": {
+          "count": 1,
+          "sides": 10
+        },
+        "damage_type": "piercing",
+        "properties": [
+          "heavy",
+          "reach",
+          "two_handed"
+        ],
+        "mastery": "push"
+      }
+    },
+    {
+      "id": "pistol",
+      "name": "Pistol",
+      "category": "weapon",
+      "cost": {
+        "copper_pieces": 25000
+      },
+      "weight_thousandths_of_pound": 3000,
+      "weapon": {
+        "category": "martial",
+        "kind": "ranged",
+        "damage_dice": {
+          "count": 1,
+          "sides": 10
+        },
+        "damage_type": "piercing",
+        "properties": [
+          "ammunition",
+          "loading"
+        ],
+        "range": {
+          "normal_feet": 30,
+          "long_feet": 90
+        },
+        "mastery": "vex",
+        "ammunition": "firearm_bullet"
+      }
+    },
+    {
+      "id": "plate_armor",
+      "name": "Plate Armor",
+      "category": "armor",
+      "cost": {
+        "copper_pieces": 150000
+      },
+      "weight_thousandths_of_pound": 65000,
+      "armor": {
+        "category": "heavy",
+        "armor_class": 18,
+        "strength_requirement": 15,
+        "stealth_disadvantage": true
+      }
+    },
+    {
+      "id": "playing_cards",
+      "name": "Playing Cards",
+      "category": "tool",
+      "cost": {
+        "copper_pieces": 50
+      },
+      "weight_thousandths_of_pound": 0,
+      "tool": {
+        "kind": "gaming_set",
+        "ability": "wisdom"
+      },
+      "utilize": [
+        {
+          "description": "Discern whether someone is cheating",
+          "dc": 10
+        },
+        {
+          "description": "Win the game",
+          "dc": 20
+        }
+      ]
+    },
+    {
+      "id": "poisoners_kit",
+      "name": "Poisoner's Kit",
+      "category": "tool",
+      "cost": {
+        "copper_pieces": 5000
+      },
+      "weight_thousandths_of_pound": 2000,
+      "tool": {
+        "kind": "other",
+        "ability": "intelligence"
+      },
+      "utilize": [
+        {
+          "description": "Detect a poisoned object",
+          "dc": 10
+        }
+      ],
+      "crafts": [
+        "basic_poison"
+      ]
+    },
+    {
+      "id": "pole",
+      "name": "Pole",
+      "category": "adventuring_gear",
+      "cost": {
+        "copper_pieces": 5
+      },
+      "weight_thousandths_of_pound": 7000
+    },
+    {
+      "id": "portable_ram",
+      "name": "Portable Ram",
+      "category": "adventuring_gear",
+      "cost": {
+        "copper_pieces": 400
+      },
+      "weight_thousandths_of_pound": 35000
+    },
+    {
+      "id": "potters_tools",
+      "name": "Potter's Tools",
+      "category": "tool",
+      "cost": {
+        "copper_pieces": 1000
+      },
+      "weight_thousandths_of_pound": 3000,
+      "tool": {
+        "kind": "artisans",
+        "ability": "intelligence"
+      },
+      "utilize": [
+        {
+          "description": "Discern what a ceramic object held in the past 24 hours",
+          "dc": 15
+        }
+      ],
+      "crafts": [
+        "jug",
+        "lamp"
+      ]
+    },
+    {
+      "id": "pouch",
+      "name": "Pouch",
+      "category": "adventuring_gear",
+      "cost": {
+        "copper_pieces": 50
+      },
+      "weight_thousandths_of_pound": 1000
+    },
+    {
+      "id": "priests_pack",
+      "name": "Priest's Pack",
+      "category": "adventuring_gear",
+      "cost": {
+        "copper_pieces": 3300
+      },
+      "weight_thousandths_of_pound": 29000,
+      "contents": [
+        {
+          "item": "backpack",
+          "quantity": 1
+        },
+        {
+          "item": "blanket",
+          "quantity": 1
+        },
+        {
+          "item": "holy_water",
+          "quantity": 1
+        },
+        {
+          "item": "lamp",
+          "quantity": 1
+        },
+        {
+          "item": "rations",
+          "quantity": 7
+        },
+        {
+          "item": "robe",
+          "quantity": 1
+        },
+        {
+          "item": "tinderbox",
+          "quantity": 1
+        }
+      ]
+    },
+    {
+      "id": "purple_worm_poison",
+      "name": "Purple Worm Poison",
+      "category": "adventuring_gear",
+      "cost": {
+        "copper_pieces": 200000
+      },
+      "weight_thousandths_of_pound": 0,
+      "consumable": true
+    },
+    {
+      "id": "quarterstaff",
+      "name": "Quarterstaff",
+      "category": "weapon",
+      "cost": {
+        "copper_pieces": 20
+      },
+      "weight_thousandths_of_pound": 4000,
+      "weapon": {
+        "category": "simple",
+        "kind": "melee",
+        "damage_dice": {
+          "count": 1,
+          "sides": 6
+        },
+        "damage_type": "bludgeoning",
+        "versatile_dice": {
+          "count": 1,
+          "sides": 8
+        },
+        "properties": [
+          "versatile"
+        ],
+        "mastery": "topple"
+      }
+    },
+    {
+      "id": "quiver",
+      "name": "Quiver",
+      "category": "adventuring_gear",
+      "cost": {
+        "copper_pieces": 100
+      },
+      "weight_thousandths_of_pound": 1000
+    },
+    {
+      "id": "rapier",
+      "name": "Rapier",
+      "category": "weapon",
+      "cost": {
+        "copper_pieces": 2500
+      },
+      "weight_thousandths_of_pound": 2000,
+      "weapon": {
+        "category": "martial",
+        "kind": "melee",
+        "damage_dice": {
+          "count": 1,
+          "sides": 8
+        },
+        "damage_type": "piercing",
+        "properties": [
+          "finesse"
+        ],
+        "mastery": "vex"
+      }
+    },
+    {
+      "id": "rations",
+      "name": "Rations",
+      "category": "adventuring_gear",
+      "cost": {
+        "copper_pieces": 50
+      },
+      "weight_thousandths_of_pound": 2000,
+      "consumable": true
+    },
+    {
+      "id": "reliquary",
+      "name": "Reliquary",
+      "category": "spellcasting_focus",
+      "cost": {
+        "copper_pieces": 500
+      },
+      "weight_thousandths_of_pound": 2000
+    },
+    {
+      "id": "riding_saddle",
+      "name": "Riding Saddle",
+      "category": "tack_and_harness",
+      "cost": {
+        "copper_pieces": 1000
+      },
+      "weight_thousandths_of_pound": 25000
+    },
+    {
+      "id": "ring_mail",
+      "name": "Ring Mail",
+      "category": "armor",
+      "cost": {
+        "copper_pieces": 3000
+      },
+      "weight_thousandths_of_pound": 40000,
+      "armor": {
+        "category": "heavy",
+        "armor_class": 14,
+        "stealth_disadvantage": true
+      }
+    },
+    {
+      "id": "robe",
+      "name": "Robe",
+      "category": "adventuring_gear",
+      "cost": {
+        "copper_pieces": 100
+      },
+      "weight_thousandths_of_pound": 4000
+    },
+    {
+      "id": "rod",
+      "name": "Rod",
+      "category": "spellcasting_focus",
+      "cost": {
+        "copper_pieces": 1000
+      },
+      "weight_thousandths_of_pound": 2000
+    },
+    {
+      "id": "rope",
+      "name": "Rope",
+      "category": "adventuring_gear",
+      "cost": {
+        "copper_pieces": 100
+      },
+      "weight_thousandths_of_pound": 5000,
+      "utilize": [
+        {
+          "description": "Tie a knot with Rope",
+          "dc": 10,
+          "ability": "dexterity",
+          "skill": "sleight_of_hand"
+        }
+      ]
+    },
+    {
+      "id": "sack",
+      "name": "Sack",
+      "category": "adventuring_gear",
+      "cost": {
+        "copper_pieces": 1
+      },
+      "weight_thousandths_of_pound": 500
+    },
+    {
+      "id": "scale_mail",
+      "name": "Scale Mail",
+      "category": "armor",
+      "cost": {
+        "copper_pieces": 5000
+      },
+      "weight_thousandths_of_pound": 45000,
+      "armor": {
+        "category": "medium",
+        "armor_class": 14,
+        "stealth_disadvantage": true
+      }
+    },
+    {
+      "id": "scholars_pack",
+      "name": "Scholar's Pack",
+      "category": "adventuring_gear",
+      "cost": {
+        "copper_pieces": 4000
+      },
+      "weight_thousandths_of_pound": 22000,
+      "contents": [
+        {
+          "item": "backpack",
+          "quantity": 1
+        },
+        {
+          "item": "book",
+          "quantity": 1
+        },
+        {
+          "item": "ink",
+          "quantity": 1
+        },
+        {
+          "item": "ink_pen",
+          "quantity": 1
+        },
+        {
+          "item": "lamp",
+          "quantity": 1
+        },
+        {
+          "item": "oil",
+          "quantity": 10
+        },
+        {
+          "item": "parchment",
+          "quantity": 10
+        },
+        {
+          "item": "tinderbox",
+          "quantity": 1
+        }
+      ]
+    },
+    {
+      "id": "scimitar",
+      "name": "Scimitar",
+      "category": "weapon",
+      "cost": {
+        "copper_pieces": 2500
+      },
+      "weight_thousandths_of_pound": 3000,
+      "weapon": {
+        "category": "martial",
+        "kind": "melee",
+        "damage_dice": {
+          "count": 1,
+          "sides": 6
+        },
+        "damage_type": "slashing",
+        "properties": [
+          "finesse",
+          "light"
+        ],
+        "mastery": "nick"
+      }
+    },
+    {
+      "id": "serpent_venom",
+      "name": "Serpent Venom",
+      "category": "adventuring_gear",
+      "cost": {
+        "copper_pieces": 20000
+      },
+      "weight_thousandths_of_pound": 0,
+      "consumable": true
+    },
+    {
+      "id": "shawm",
+      "name": "Shawm",
+      "category": "tool",
+      "cost": {
+        "copper_pieces": 200
+      },
+      "weight_thousandths_of_pound": 1000,
+      "tool": {
+        "kind": "musical_instrument",
+        "ability": "charisma"
+      },
+      "utilize": [
+        {
+          "description": "Play a known tune",
+          "dc": 10
+        },
+        {
+          "description": "Improvise a song",
+          "dc": 15
+        }
+      ]
+    },
+    {
+      "id": "shield",
+      "name": "Shield",
+      "category": "armor",
+      "cost": {
+        "copper_pieces": 1000
+      },
+      "weight_thousandths_of_pound": 6000,
+      "armor": {
+        "category": "shield",
+        "armor_class": 2,
+        "stealth_disadvantage": false
+      }
+    },
+    {
+      "id": "shortbow",
+      "name": "Shortbow",
+      "category": "weapon",
+      "cost": {
+        "copper_pieces": 2500
+      },
+      "weight_thousandths_of_pound": 2000,
+      "weapon": {
+        "category": "simple",
+        "kind": "ranged",
+        "damage_dice": {
+          "count": 1,
+          "sides": 6
+        },
+        "damage_type": "piercing",
+        "properties": [
+          "ammunition",
+          "two_handed"
+        ],
+        "range": {
+          "normal_feet": 80,
+          "long_feet": 320
+        },
+        "mastery": "vex",
+        "ammunition": "arrow"
+      }
+    },
+    {
+      "id": "shortsword",
+      "name": "Shortsword",
+      "category": "weapon",
+      "cost": {
+        "copper_pieces": 1000
+      },
+      "weight_thousandths_of_pound": 2000,
+      "weapon": {
+        "category": "martial",
+        "kind": "melee",
+        "damage_dice": {
+          "count": 1,
+          "sides": 6
+        },
+        "damage_type": "piercing",
+        "properties": [
+          "finesse",
+          "light"
+        ],
+        "mastery": "vex"
+      }
+    },
+    {
+      "id": "shovel",
+      "name": "Shovel",
+      "category": "adventuring_gear",
+      "cost": {
+        "copper_pieces": 200
+      },
+      "weight_thousandths_of_pound": 5000
+    },
+    {
+      "id": "sickle",
+      "name": "Sickle",
+      "category": "weapon",
+      "cost": {
+        "copper_pieces": 100
+      },
+      "weight_thousandths_of_pound": 2000,
+      "weapon": {
+        "category": "simple",
+        "kind": "melee",
+        "damage_dice": {
+          "count": 1,
+          "sides": 4
+        },
+        "damage_type": "slashing",
+        "properties": [
+          "light"
+        ],
+        "mastery": "nick"
+      }
+    },
+    {
+      "id": "signal_whistle",
+      "name": "Signal Whistle",
+      "category": "adventuring_gear",
+      "cost": {
+        "copper_pieces": 5
+      },
+      "weight_thousandths_of_pound": 0
+    },
+    {
+      "id": "sling",
+      "name": "Sling",
+      "category": "weapon",
+      "cost": {
+        "copper_pieces": 10
+      },
+      "weight_thousandths_of_pound": 0,
+      "weapon": {
+        "category": "simple",
+        "kind": "ranged",
+        "damage_dice": {
+          "count": 1,
+          "sides": 4
+        },
+        "damage_type": "bludgeoning",
+        "properties": [
+          "ammunition"
+        ],
+        "range": {
+          "normal_feet": 30,
+          "long_feet": 120
+        },
+        "mastery": "slow",
+        "ammunition": "sling_bullet"
+      }
+    },
+    {
+      "id": "sling_bullet",
+      "name": "Sling Bullet",
+      "category": "ammunition",
+      "cost": {
+        "copper_pieces": 1,
+        "per_quantity": 5
+      },
+      "weight_thousandths_of_pound": 75
+    },
+    {
+      "id": "sling_bullets_20",
+      "name": "Sling Bullets (20)",
+      "category": "ammunition",
+      "cost": {
+        "copper_pieces": 4
+      },
+      "weight_thousandths_of_pound": 1500,
+      "contents": [
+        {
+          "item": "sling_bullet",
+          "quantity": 20
+        }
+      ]
+    },
+    {
+      "id": "smiths_tools",
+      "name": "Smith's Tools",
+      "category": "tool",
+      "cost": {
+        "copper_pieces": 2000
+      },
+      "weight_thousandths_of_pound": 8000,
+      "tool": {
+        "kind": "artisans",
+        "ability": "strength"
+      },
+      "utilize": [
+        {
+          "description": "Pry open a door or container",
+          "dc": 20
+        }
+      ],
+      "crafts": [
+        "ball_bearings",
+        "battleaxe",
+        "breastplate",
+        "bucket",
+        "caltrops",
+        "chain",
+        "chain_mail",
+        "chain_shirt",
+        "crowbar",
+        "dagger",
+        "firearm_bullets_10",
+        "flail",
+        "glaive",
+        "grappling_hook",
+        "greataxe",
+        "greatsword",
+        "halberd",
+        "half_plate_armor",
+        "handaxe",
+        "iron_pot",
+        "iron_spikes",
+        "javelin",
+        "lance",
+        "light_hammer",
+        "longsword",
+        "mace",
+        "maul",
+        "morningstar",
+        "pike",
+        "plate_armor",
+        "rapier",
+        "ring_mail",
+        "scale_mail",
+        "scimitar",
+        "shortsword",
+        "sickle",
+        "sling_bullets_20",
+        "spear",
+        "splint_armor",
+        "trident",
+        "war_pick",
+        "warhammer"
+      ]
+    },
+    {
+      "id": "spear",
+      "name": "Spear",
+      "category": "weapon",
+      "cost": {
+        "copper_pieces": 100
+      },
+      "weight_thousandths_of_pound": 3000,
+      "weapon": {
+        "category": "simple",
+        "kind": "melee",
+        "damage_dice": {
+          "count": 1,
+          "sides": 6
+        },
+        "damage_type": "piercing",
+        "versatile_dice": {
+          "count": 1,
+          "sides": 8
+        },
+        "properties": [
+          "thrown",
+          "versatile"
+        ],
+        "range": {
+          "normal_feet": 20,
+          "long_feet": 60
+        },
+        "mastery": "sap"
+      }
+    },
+    {
+      "id": "splint_armor",
+      "name": "Splint Armor",
+      "category": "armor",
+      "cost": {
+        "copper_pieces": 20000
+      },
+      "weight_thousandths_of_pound": 60000,
+      "armor": {
+        "category": "heavy",
+        "armor_class": 17,
+        "strength_requirement": 15,
+        "stealth_disadvantage": true
+      }
+    },
+    {
+      "id": "sprig_of_mistletoe",
+      "name": "Sprig of Mistletoe",
+      "category": "spellcasting_focus",
+      "cost": {
+        "copper_pieces": 100
+      },
+      "weight_thousandths_of_pound": 0
+    },
+    {
+      "id": "spyglass",
+      "name": "Spyglass",
+      "category": "adventuring_gear",
+      "cost": {
+        "copper_pieces": 100000
+      },
+      "weight_thousandths_of_pound": 1000
+    },
+    {
+      "id": "staff",
+      "name": "Staff",
+      "category": "spellcasting_focus",
+      "cost": {
+        "copper_pieces": 500
+      },
+      "weight_thousandths_of_pound": 4000
+    },
+    {
+      "id": "string",
+      "name": "String",
+      "category": "adventuring_gear",
+      "cost": {
+        "copper_pieces": 10
+      },
+      "weight_thousandths_of_pound": 0
+    },
+    {
+      "id": "studded_leather_armor",
+      "name": "Studded Leather Armor",
+      "category": "armor",
+      "cost": {
+        "copper_pieces": 4500
+      },
+      "weight_thousandths_of_pound": 13000,
+      "armor": {
+        "category": "light",
+        "armor_class": 12,
+        "stealth_disadvantage": false
+      }
+    },
+    {
+      "id": "tent",
+      "name": "Tent",
+      "category": "adventuring_gear",
+      "cost": {
+        "copper_pieces": 200
+      },
+      "weight_thousandths_of_pound": 20000
+    },
+    {
+      "id": "thieves_tools",
+      "name": "Thieves' Tools",
+      "category": "tool",
+      "cost": {
+        "copper_pieces": 2500
+      },
+      "weight_thousandths_of_pound": 1000,
+      "tool": {
+        "kind": "other",
+        "ability": "dexterity"
+      },
+      "utilize": [
+        {
+          "description": "Pick a lock",
+          "dc": 15
+        },
+        {
+          "description": "Disarm a trap",
+          "dc": 15
+        }
+      ]
+    },
+    {
+      "id": "three_dragon_ante_set",
+      "name": "Three-Dragon Ante Set",
+      "category": "tool",
+      "cost": {
+        "copper_pieces": 100
+      },
+      "weight_thousandths_of_pound": 0,
+      "tool": {
+        "kind": "gaming_set",
+        "ability": "wisdom"
+      },
+      "utilize": [
+        {
+          "description": "Discern whether someone is cheating",
+          "dc": 10
+        },
+        {
+          "description": "Win the game",
+          "dc": 20
+        }
+      ]
+    },
+    {
+      "id": "tinderbox",
+      "name": "Tinderbox",
+      "category": "adventuring_gear",
+      "cost": {
+        "copper_pieces": 50
+      },
+      "weight_thousandths_of_pound": 1000
+    },
+    {
+      "id": "tinkers_tools",
+      "name": "Tinker's Tools",
+      "category": "tool",
+      "cost": {
+        "copper_pieces": 5000
+      },
+      "weight_thousandths_of_pound": 10000,
+      "tool": {
+        "kind": "artisans",
+        "ability": "dexterity"
+      },
+      "utilize": [
+        {
+          "description": "Assemble a Tiny item composed of scrap, which falls apart in 1 minute",
+          "dc": 20
+        }
+      ],
+      "crafts": [
+        "bell",
+        "bullseye_lantern",
+        "flask",
+        "hooded_lantern",
+        "hunting_trap",
+        "lock",
+        "manacles",
+        "mirror",
+        "musket",
+        "pistol",
+        "shovel",
+        "signal_whistle",
+        "tinderbox"
+      ]
+    },
+    {
+      "id": "torch",
+      "name": "Torch",
+      "category": "adventuring_gear",
+      "cost": {
+        "copper_pieces": 1
+      },
+      "weight_thousandths_of_pound": 1000,
+      "consumable": true
+    },
+    {
+      "id": "torpor",
+      "name": "Torpor",
+      "category": "adventuring_gear",
+      "cost": {
+        "copper_pieces": 60000
+      },
+      "weight_thousandths_of_pound": 0,
+      "consumable": true
+    },
+    {
+      "id": "travelers_clothes",
+      "name": "Traveler's Clothes",
+      "category": "adventuring_gear",
+      "cost": {
+        "copper_pieces": 200
+      },
+      "weight_thousandths_of_pound": 4000
+    },
+    {
+      "id": "trident",
+      "name": "Trident",
+      "category": "weapon",
+      "cost": {
+        "copper_pieces": 500
+      },
+      "weight_thousandths_of_pound": 4000,
+      "weapon": {
+        "category": "martial",
+        "kind": "melee",
+        "damage_dice": {
+          "count": 1,
+          "sides": 8
+        },
+        "damage_type": "piercing",
+        "versatile_dice": {
+          "count": 1,
+          "sides": 10
+        },
+        "properties": [
+          "thrown",
+          "versatile"
+        ],
+        "range": {
+          "normal_feet": 20,
+          "long_feet": 60
+        },
+        "mastery": "topple"
+      }
+    },
+    {
+      "id": "trinket",
+      "name": "Trinket",
+      "category": "adventuring_gear",
+      "weight_thousandths_of_pound": 0
+    },
+    {
+      "id": "truth_serum",
+      "name": "Truth Serum",
+      "category": "adventuring_gear",
+      "cost": {
+        "copper_pieces": 15000
+      },
+      "weight_thousandths_of_pound": 0,
+      "consumable": true
+    },
+    {
+      "id": "vial",
+      "name": "Vial",
+      "category": "adventuring_gear",
+      "cost": {
+        "copper_pieces": 100
+      },
+      "weight_thousandths_of_pound": 0
+    },
+    {
+      "id": "viol",
+      "name": "Viol",
+      "category": "tool",
+      "cost": {
+        "copper_pieces": 3000
+      },
+      "weight_thousandths_of_pound": 1000,
+      "tool": {
+        "kind": "musical_instrument",
+        "ability": "charisma"
+      },
+      "utilize": [
+        {
+          "description": "Play a known tune",
+          "dc": 10
+        },
+        {
+          "description": "Improvise a song",
+          "dc": 15
+        }
+      ]
+    },
+    {
+      "id": "wand",
+      "name": "Wand",
+      "category": "spellcasting_focus",
+      "cost": {
+        "copper_pieces": 1000
+      },
+      "weight_thousandths_of_pound": 1000
+    },
+    {
+      "id": "war_pick",
+      "name": "War Pick",
+      "category": "weapon",
+      "cost": {
+        "copper_pieces": 500
+      },
+      "weight_thousandths_of_pound": 2000,
+      "weapon": {
+        "category": "martial",
+        "kind": "melee",
+        "damage_dice": {
+          "count": 1,
+          "sides": 8
+        },
+        "damage_type": "piercing",
+        "versatile_dice": {
+          "count": 1,
+          "sides": 10
+        },
+        "properties": [
+          "versatile"
+        ],
+        "mastery": "sap"
+      }
+    },
+    {
+      "id": "warhammer",
+      "name": "Warhammer",
+      "category": "weapon",
+      "cost": {
+        "copper_pieces": 1500
+      },
+      "weight_thousandths_of_pound": 5000,
+      "weapon": {
+        "category": "martial",
+        "kind": "melee",
+        "damage_dice": {
+          "count": 1,
+          "sides": 8
+        },
+        "damage_type": "bludgeoning",
+        "versatile_dice": {
+          "count": 1,
+          "sides": 10
+        },
+        "properties": [
+          "versatile"
+        ],
+        "mastery": "push"
+      }
+    },
+    {
+      "id": "waterskin",
+      "name": "Waterskin",
+      "category": "adventuring_gear",
+      "cost": {
+        "copper_pieces": 20
+      },
+      "weight_thousandths_of_pound": 5000
+    },
+    {
+      "id": "weavers_tools",
+      "name": "Weaver's Tools",
+      "category": "tool",
+      "cost": {
+        "copper_pieces": 100
+      },
+      "weight_thousandths_of_pound": 5000,
+      "tool": {
+        "kind": "artisans",
+        "ability": "dexterity"
+      },
+      "utilize": [
+        {
+          "description": "Mend a tear in clothing",
+          "dc": 10
+        },
+        {
+          "description": "Sew a Tiny design",
+          "dc": 10
+        }
+      ],
+      "crafts": [
+        "basket",
+        "bedroll",
+        "blanket",
+        "fine_clothes",
+        "net",
+        "padded_armor",
+        "robe",
+        "rope",
+        "sack",
+        "string",
+        "tent",
+        "travelers_clothes"
+      ]
+    },
+    {
+      "id": "whip",
+      "name": "Whip",
+      "category": "weapon",
+      "cost": {
+        "copper_pieces": 200
+      },
+      "weight_thousandths_of_pound": 3000,
+      "weapon": {
+        "category": "martial",
+        "kind": "melee",
+        "damage_dice": {
+          "count": 1,
+          "sides": 4
+        },
+        "damage_type": "slashing",
+        "properties": [
+          "finesse",
+          "reach"
+        ],
+        "mastery": "slow"
+      }
+    },
+    {
+      "id": "woodcarvers_tools",
+      "name": "Woodcarver's Tools",
+      "category": "tool",
+      "cost": {
+        "copper_pieces": 100
+      },
+      "weight_thousandths_of_pound": 5000,
+      "tool": {
+        "kind": "artisans",
+        "ability": "dexterity"
+      },
+      "utilize": [
+        {
+          "description": "Carve a pattern in wood",
+          "dc": 10
+        }
+      ],
+      "crafts": [
+        "arcane_focus",
+        "arrows_20",
+        "blowgun",
+        "bolts_20",
+        "club",
+        "dart",
+        "druidic_focus",
+        "greatclub",
+        "hand_crossbow",
+        "heavy_crossbow",
+        "ink_pen",
+        "light_crossbow",
+        "longbow",
+        "needles_50",
+        "quarterstaff",
+        "shortbow"
+      ]
+    },
+    {
+      "id": "wooden_staff",
+      "name": "Wooden Staff",
+      "category": "spellcasting_focus",
+      "cost": {
+        "copper_pieces": 500
+      },
+      "weight_thousandths_of_pound": 4000
+    },
+    {
+      "id": "wyvern_poison",
+      "name": "Wyvern Poison",
+      "category": "adventuring_gear",
+      "cost": {
+        "copper_pieces": 120000
+      },
+      "weight_thousandths_of_pound": 0,
+      "consumable": true
+    },
+    {
+      "id": "yew_wand",
+      "name": "Yew Wand",
+      "category": "spellcasting_focus",
+      "cost": {
+        "copper_pieces": 1000
+      },
+      "weight_thousandths_of_pound": 1000
+    }
+  ]
+}

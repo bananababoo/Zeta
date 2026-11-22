@@ -7,6 +7,7 @@
 use std::collections::VecDeque;
 
 use bevy::prelude::*;
+use bevy::window::RequestRedraw;
 use zeta_core::entity::EntityId;
 use zeta_core::protocol::{DiceRollShown, EntityName};
 
@@ -194,8 +195,32 @@ impl Plugin for DiceRollPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<ClientSettings>()
             .init_resource::<DiceDisplay>()
+            // Registers only if no window plugin did (bevy_app-0.20.1/src/sub_app.rs:395).
+            .add_message::<RequestRedraw>()
             .add_systems(Startup, spawn_dice_panel)
-            .add_systems(Update, (queue_rolls, animate_dice, show_dice).chain());
+            .add_systems(
+                Update,
+                (queue_rolls, animate_dice, show_dice, redraw_while_tumbling).chain(),
+            );
+    }
+}
+
+/// Keeps the reactive update loop (`crate::frame_pacing`) drawing every frame while the die
+/// tumbles, so the faces change smoothly. `RequestRedraw`: bevy_window-0.20.1/src/event.rs:61.
+#[allow(
+    clippy::needless_pass_by_value,
+    reason = "Bevy system parameters are passed by value"
+)]
+fn redraw_while_tumbling(
+    display: Res<DiceDisplay>,
+    settings: Res<ClientSettings>,
+    mut redraws: MessageWriter<RequestRedraw>,
+) {
+    let tumbling = display
+        .view(DiceTiming::from_settings(&settings))
+        .is_some_and(|view| !view.settled);
+    if tumbling {
+        redraws.write(RequestRedraw);
     }
 }
 
@@ -420,7 +445,12 @@ mod tests {
         );
 
         app.world_mut().write_message(roll(1, 20, 0, true));
-        for _ in 0..5 {
+        app.update();
+        assert!(
+            !app.world().resource::<Messages<RequestRedraw>>().is_empty(),
+            "a tumbling die keeps the client drawing"
+        );
+        for _ in 0..4 {
             app.update();
         }
         assert_eq!(

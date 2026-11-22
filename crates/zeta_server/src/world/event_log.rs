@@ -160,16 +160,16 @@ mod tests {
     }
 
     fn change() -> AppliedChange {
-        AppliedChange {
-            resolution: AiResolution {
+        AppliedChange::resolved(
+            AiResolution {
                 ok: true,
                 chk: None,
                 fx: vec![],
                 fail: vec![],
             },
-            branch: Branch::Success,
-            spawned: vec![],
-        }
+            Branch::Success,
+            vec![],
+        )
     }
 
     #[test]

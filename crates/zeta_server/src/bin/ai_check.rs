@@ -7,6 +7,7 @@
 use std::process::ExitCode;
 
 use zeta_core::ai::{AiMessage, AiProvider, AiRequest, resolve_action};
+use zeta_core::catalog::Catalog;
 use zeta_core::entity::EntityId;
 use zeta_core::grid::{GridPos, MapBounds};
 use zeta_core::resolution::AiResolution;
@@ -71,6 +72,7 @@ fn main() -> ExitCode {
         request,
         &snapshot,
         bounds,
+        Catalog::srd(),
         VALIDATION_RETRY_CAP,
     )) {
         Ok(resolved) => resolved,
@@ -107,7 +109,7 @@ fn main() -> ExitCode {
                 return ExitCode::FAILURE;
             }
         };
-        match parse_and_validate(&turn_two_response.text, &snapshot, bounds) {
+        match parse_and_validate(&turn_two_response.text, &snapshot, bounds, Catalog::srd()) {
             Ok(resolution) => {
                 println!(
                     "{model} explicit 2-turn provider_turn check succeeded; turn 2 resolution={resolution:?}"

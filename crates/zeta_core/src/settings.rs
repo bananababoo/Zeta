@@ -46,3 +46,39 @@ pub const MAX_PAYLOAD_BYTES: u32 = 1 << 20;
 /// Placeholder: 8 times [`MAX_PAYLOAD_BYTES`]. Replaced when hosting is set up
 /// (`docs/architecture/technical_architecture.md` Section 1).
 pub const MAX_OUTBOX_BYTES: usize = 8 << 20;
+
+/// Longest name, in characters, of a custom narrative item the AI DM creates.
+///
+/// Placeholder. `docs/design/game_design.md` Section 5 limits custom items but sets no length.
+pub const CUSTOM_ITEM_NAME_MAX_CHARACTERS: usize = 48;
+
+/// Longest 1-sentence description, in characters, of a custom narrative item.
+///
+/// Placeholder. `docs/design/game_design.md` Section 5 limits custom items but sets no length.
+pub const CUSTOM_ITEM_DESCRIPTION_MAX_CHARACTERS: usize = 200;
+
+/// Most free-form tags on 1 custom narrative item.
+///
+/// Placeholder. `docs/design/game_design.md` Section 5 limits custom items but sets no count.
+pub const CUSTOM_ITEM_TAG_MAX_COUNT: usize = 8;
+
+/// Longest free-form tag, in characters, on a custom narrative item.
+///
+/// Placeholder. `docs/design/game_design.md` Section 5 limits custom items but sets no length.
+pub const CUSTOM_ITEM_TAG_MAX_CHARACTERS: usize = 32;
+
+/// Heaviest custom narrative item, in thousandths of a pound (50 lb).
+///
+/// Placeholder. `docs/design/game_design.md` Section 5 limits custom items but sets no weight.
+pub const CUSTOM_ITEM_MAX_WEIGHT_THOUSANDTHS_OF_POUND: u32 = 50_000;
+
+/// Most items 1 `award` or `take` effect may move at once.
+///
+/// Placeholder. Not yet defined in any document.
+pub const ITEM_EFFECT_MAX_QUANTITY: u32 = 100;
+
+/// Most catalog entries 1 `inspect` catalog query returns, so 1 vague word cannot fill the
+/// context window.
+///
+/// Placeholder. `docs/architecture/ai_orchestration.md` Section 2 sets no limit.
+pub const CATALOG_QUERY_MAX_RESULTS: usize = 10;

@@ -10,7 +10,7 @@ use bevy::window::PrimaryWindow;
 use zeta_core::entity::EntityId;
 use zeta_core::protocol::{EndTurnRequest, EntityName, TurnBubble};
 
-use crate::focus::{TextEntryActive, TextEntryUpdate, UiPanel, cursor_is_over};
+use crate::focus::{TextEntryActive, TextEntryUpdate, UiPanel, cursor_is_over, key_label};
 use crate::player::LocalPlayer;
 use crate::settings::ClientSettings;
 
@@ -115,7 +115,7 @@ pub fn banner_text(
     reason = "Bevy system parameters are passed by value"
 )]
 fn spawn_banner(mut commands: Commands, settings: Res<ClientSettings>) {
-    let key_name = format!("End turn ({:?})", settings.end_turn_key);
+    let key_name = format!("End turn ({})", key_label(settings.end_turn_key));
     commands
         .spawn((
             TurnBanner,

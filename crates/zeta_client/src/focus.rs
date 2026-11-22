@@ -38,3 +38,38 @@ pub fn cursor_is_over_any<'a>(
         .into_iter()
         .any(|(node, transform)| cursor_is_over(window, node, *transform))
 }
+
+/// A key's name for players: `KeyI` is `I`, `Digit1` is `1`, `ArrowUp` is `Arrow Up`.
+/// `KeyCode` variants (`bevy_input` keyboard.rs:275) are named after the physical key, so the
+/// name comes from their `Debug` text.
+pub fn key_label(key: KeyCode) -> String {
+    let name = format!("{key:?}");
+    if let Some(rest) = name
+        .strip_prefix("Key")
+        .or_else(|| name.strip_prefix("Digit"))
+        .filter(|rest| !rest.is_empty())
+    {
+        return rest.to_owned();
+    }
+    let mut spaced = String::with_capacity(name.len() + 4);
+    for (index, character) in name.chars().enumerate() {
+        if index > 0 && character.is_uppercase() {
+            spaced.push(' ');
+        }
+        spaced.push(character);
+    }
+    spaced
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn key_labels_drop_the_engine_prefixes() {
+        assert_eq!(key_label(KeyCode::KeyI), "I");
+        assert_eq!(key_label(KeyCode::Digit1), "1");
+        assert_eq!(key_label(KeyCode::ArrowUp), "Arrow Up");
+        assert_eq!(key_label(KeyCode::Enter), "Enter");
+    }
+}

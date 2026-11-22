@@ -6,8 +6,8 @@
 use bevy_app::{App, Plugin};
 use bevy_ecs::prelude::{Component, Entity, Message};
 use zeta_core::protocol::{
-    DiceRollShown, EndTurnRequest, FreeformActionPrompt, MoveRequest, NarrationLogEntry,
-    PlayerAssigned, PromptStatusUpdate,
+    DiceRollShown, EndTurnRequest, FreeformActionPrompt, ItemVerbRequest, MoveRequest,
+    NarrationLogEntry, PlayerAssigned, PromptStatusUpdate,
 };
 
 /// 1 player's connection: the engine entity the network layer spawned for it. The server
@@ -71,6 +71,7 @@ impl Plugin for NetMessagesPlugin {
             .add_message::<FromPlayer<MoveRequest>>()
             .add_message::<FromPlayer<FreeformActionPrompt>>()
             .add_message::<FromPlayer<EndTurnRequest>>()
+            .add_message::<FromPlayer<ItemVerbRequest>>()
             .add_message::<ToPlayers<PlayerAssigned>>()
             .add_message::<ToPlayers<NarrationLogEntry>>()
             .add_message::<ToPlayers<DiceRollShown>>()

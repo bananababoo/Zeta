@@ -1,18 +1,22 @@
 //! Executes the `WorldEffect` operations of a validated AI Resolution on the server world.
 //!
 //! Rules: `docs/architecture/ai_orchestration.md` Sections 1 and 3 (the operations and
-//! their fields) and `docs/architecture/technical_architecture.md` Section 2. Every entity a
+//! their fields), `docs/design/game_design.md` Section 5 (item awards and removals), and
+//! `docs/architecture/technical_architecture.md` Section 2. Every entity a
 //! effect names is a Snapshot local identifier, mapped back to its permanent identifier here.
 
 use bevy_ecs::prelude::{Component, World};
+use zeta_core::catalog::CatalogId;
 use zeta_core::entity::EntityId;
+use zeta_core::event_log::ItemChange;
 use zeta_core::grid::{GridPos, MapBounds};
 use zeta_core::protocol::{
-    Collider, EntityName, LogEntryKind, NarrationLogEntry, PlayerCharacter, Tags, Visual,
+    Collider, EntityName, Item, LogEntryKind, NarrationLogEntry, PlayerCharacter, Tags, Visual,
 };
 use zeta_core::resolution::{LocalId, Settle, Volume, WorldEffect};
 use zeta_core::snapshot::Snapshot;
 
+use super::inventory;
 use super::scene::EntitySpec;
 use super::turn_bubble;
 use super::{EntityIndex, LogSequence, NextEntityId};
@@ -56,25 +60,35 @@ pub(crate) fn live_name(world: &World, id: EntityId) -> Option<String> {
     world.get::<EntityName>(entity).map(|name| name.0.clone())
 }
 
-/// Applies `effects` in order and returns the identifiers given to spawned entities.
+/// What applying a resolution's effects changed beyond the live components.
+#[derive(Debug, Default)]
+pub(crate) struct AppliedEffects {
+    /// Identifiers given to spawned entities.
+    pub(crate) spawned: Vec<EntityId>,
+    /// Items gained and lost.
+    pub(crate) items: Vec<ItemChange>,
+}
+
+/// Applies `effects` in order and returns what they spawned and which items changed hands.
 pub(crate) fn apply_effects(
     world: &mut World,
     snapshot: &Snapshot,
     effects: &[WorldEffect],
-) -> Vec<EntityId> {
-    let mut spawned = Vec::new();
+) -> AppliedEffects {
+    let mut applied = AppliedEffects::default();
     for effect in effects {
-        apply_effect(world, snapshot, effect, &mut spawned);
+        apply_effect(world, snapshot, effect, &mut applied);
     }
-    spawned
+    applied
 }
 
 fn apply_effect(
     world: &mut World,
     snapshot: &Snapshot,
     effect: &WorldEffect,
-    spawned: &mut Vec<EntityId>,
+    applied: &mut AppliedEffects,
 ) {
+    let spawned = &mut applied.spawned;
     match effect {
         WorldEffect::Narrate { text } => {
             broadcast_line(world, LogEntryKind::Narration, None, text.clone(), None);
@@ -157,6 +171,9 @@ fn apply_effect(
             spawned.push(id);
         }
         WorldEffect::Destroy { id, .. } => destroy(world, snapshot, *id),
+        WorldEffect::Award { .. } | WorldEffect::Take { .. } => {
+            applied.items.extend(item_effect(world, snapshot, effect));
+        }
         // The Event Log record holds the summary; nothing in the live world changes.
         WorldEffect::History { .. } => {}
         WorldEffect::Bubble { active, ids } => {
@@ -171,6 +188,55 @@ fn apply_effect(
                 turn_bubble::end_bubbles(world, &participants);
             }
         }
+    }
+}
+
+/// Applies an award or take effect and returns the items that changed hands.
+fn item_effect(world: &mut World, snapshot: &Snapshot, effect: &WorldEffect) -> Vec<ItemChange> {
+    match effect {
+        WorldEffect::Award {
+            id,
+            item,
+            custom,
+            qty,
+        } => {
+            // Validation guarantees exactly 1 of `item` and `custom`, and a known catalog id.
+            let item = match (item, custom) {
+                (Some(catalog_id), None) => {
+                    CatalogId::new(catalog_id.as_str()).ok().map(Item::Catalog)
+                }
+                (None, Some(custom)) => Some(Item::Custom(custom.clone())),
+                _ => None,
+            };
+            match (world_id(snapshot, *id), item) {
+                (Some(holder), Some(item)) => inventory::award(world, holder, item, *qty),
+                _ => Vec::new(),
+            }
+        }
+        WorldEffect::Take {
+            id,
+            item,
+            custom_name,
+            qty,
+        } => {
+            let Some(holder) = world_id(snapshot, *id) else {
+                return Vec::new();
+            };
+            match (item, custom_name) {
+                (Some(catalog_id), None) => inventory::take(world, holder, *qty, |held| {
+                    held.catalog_id()
+                        .is_some_and(|held| held.as_str() == catalog_id.as_str())
+                }),
+                (None, Some(name)) => inventory::take(
+                    world,
+                    holder,
+                    *qty,
+                    |held| matches!(held, Item::Custom(custom) if custom.name.eq_ignore_ascii_case(name)),
+                ),
+                _ => Vec::new(),
+            }
+        }
+        _ => Vec::new(),
     }
 }
 

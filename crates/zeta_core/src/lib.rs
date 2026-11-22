@@ -8,9 +8,12 @@
 //! Conventions for all code here: `docs/architecture/code_style.md`.
 
 pub mod ai;
+pub mod catalog;
 pub mod entity;
 pub mod event_log;
 pub mod grid;
+pub mod inspect;
+pub mod item_rules;
 pub mod movement;
 pub mod pending_resolution;
 pub mod protocol;

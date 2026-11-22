@@ -74,3 +74,9 @@ must_use_candidate = "allow"
 unwrap_used = "deny"
 dbg_macro = "deny"
 todo = "deny"
+
+# Debug builds optimize dependencies (Bevy, wgpu, replicon) but not Zeta's own crates: the
+# debug client stays smooth and light on CPU, while our crates keep fast rebuilds and full
+# debug info. Dependencies rebuild only when Cargo.lock changes.
+[profile.dev.package."*"]
+opt-level = 2

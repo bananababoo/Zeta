@@ -8,6 +8,7 @@ use zeta_core::entity::EntityId;
 use zeta_core::grid::{GridPos, MapBounds};
 use zeta_core::protocol::{Collider, EntityName, MapArea, Tags, Visual};
 
+use super::inventory::starting_inventory;
 use super::{EntityIndex, NextEntityId};
 use crate::net::messages::Networked;
 
@@ -30,6 +31,18 @@ const OIL_BARREL_POSITION: GridPos = GridPos::new(8, 9);
 const GOBLIN_POSITION: GridPos = GridPos::new(12, 10);
 /// Where new player characters appear, or the nearest free square to it.
 pub(crate) const PLAYER_SPAWN_POSITION: GridPos = GridPos::new(4, 10);
+/// Catalog items and quantities every new player character carries. Painter's Supplies
+/// make `Craft` testable.
+pub(crate) const PLAYER_STARTING_ITEMS: &[(&str, u32)] = &[
+    ("longsword", 1),
+    ("rope", 1),
+    ("rations", 2),
+    ("painters_supplies", 1),
+];
+/// Catalog items and quantities the goblin carries, so `Give` has a recipient.
+pub(crate) const GOBLIN_STARTING_ITEMS: &[(&str, u32)] = &[("scimitar", 1)];
+/// Display name of the goblin.
+const GOBLIN_NAME: &str = "Goblin";
 
 /// The fields every world entity starts with.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -102,7 +115,7 @@ pub(crate) fn test_scene_entities() -> Vec<EntitySpec> {
         false,
     ));
     entities.push(EntitySpec::new(
-        "Goblin",
+        GOBLIN_NAME,
         GOBLIN_POSITION,
         "A wary goblin watching the far end of the bridge.",
         &[],
@@ -111,7 +124,7 @@ pub(crate) fn test_scene_entities() -> Vec<EntitySpec> {
     entities
 }
 
-/// Startup system: the map bounds and every test scene entity.
+/// Startup system: the map bounds and every test scene entity, the goblin with its items.
 pub(crate) fn spawn_test_scene(
     mut commands: Commands,
     mut index: ResMut<EntityIndex>,
@@ -121,8 +134,12 @@ pub(crate) fn spawn_test_scene(
     commands.spawn((MapArea(TEST_SCENE_BOUNDS), Networked));
     for spec in test_scene_entities() {
         let id = next_id.allocate();
-        let entity = commands.spawn(spec.into_bundle(id)).id();
-        index.0.insert(id, entity);
+        let carries_items = spec.name == GOBLIN_NAME;
+        let mut entity = commands.spawn(spec.into_bundle(id));
+        if carries_items {
+            entity.insert(starting_inventory(GOBLIN_STARTING_ITEMS));
+        }
+        index.0.insert(id, entity.id());
     }
 }
 

@@ -101,6 +101,7 @@ Does not choose the provider for launch; that choice waits for cost and quality 
 ### AI Resolution Schema
 ```rust
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeSet;
 
 /// Local integer identifier assigned per request in the Snapshot.
 pub type LocalId = u32;
@@ -183,6 +184,24 @@ pub enum WorldEffect {
     History { ids: Vec<LocalId>, summary: String, preserved: bool },
     /// {"op": "bubble", "active": true, "ids": [0, 3]}
     Bubble { active: bool, ids: Vec<LocalId> },
+    /// {"op": "award", "id": 0, "item": "rope", "custom": null, "qty": 1}
+    /// Set exactly 1 of item (a catalog id) and custom.
+    Award { id: LocalId, item: Option<String>, custom: Option<CustomItem>, qty: u32 },
+    /// {"op": "take", "id": 3, "item": "rope", "custom_name": null, "qty": 1}
+    /// Set exactly 1 of item (a catalog id) and custom_name.
+    Take { id: LocalId, item: Option<String>, custom_name: Option<String>, qty: u32 },
+}
+
+/// Narrative-only item outside the catalog, with no combat stats or crafting recipes.
+/// {"name": "Sealed Letter", "weight_thousandths_of_pound": 10, "description": "A letter sealed with the baron's crest.", "tags": ["sealed"]}
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(deny_unknown_fields)]
+pub struct CustomItem {
+    pub name: String,
+    pub weight_thousandths_of_pound: u32,
+    /// 1 sentence
+    pub description: String,
+    pub tags: BTreeSet<String>,
 }
 ```
 

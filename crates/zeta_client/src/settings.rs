@@ -97,6 +97,25 @@ pub const MOVE_EAST_KEY: KeyCode = KeyCode::KeyD;
 /// keybindings are decided (`docs/architecture/technical_architecture.md` Section 5).
 pub const END_TURN_KEY: KeyCode = KeyCode::Space;
 
+/// Placeholder: key that opens and closes the inventory panel. Replaced when keybindings are
+/// decided (`docs/architecture/technical_architecture.md` Section 5).
+pub const INVENTORY_KEY: KeyCode = KeyCode::KeyI;
+
+/// Placeholder: logical pixels the inventory panel scrolls per mouse wheel line. Replaced when
+/// the client layout is decided (`docs/architecture/technical_architecture.md` Section 5).
+pub const INVENTORY_SCROLL_PIXELS_PER_LINE: f32 = 20.0;
+
+/// Placeholder: longest wait between updates while the window has focus and nothing happens.
+/// Input wakes the client at once; this bounds how late server messages and timers are seen.
+/// Replaced when client performance targets are decided
+/// (`docs/architecture/technical_architecture.md` Section 5).
+pub const FOCUSED_UPDATE_WAIT: Duration = Duration::from_millis(100);
+
+/// Placeholder: longest wait between updates while the window is out of focus. Replaced when
+/// client performance targets are decided (`docs/architecture/technical_architecture.md`
+/// Section 5).
+pub const UNFOCUSED_UPDATE_WAIT: Duration = Duration::from_millis(250);
+
 /// Layout, timing, and keybinding values the client plugins read. `Default` uses the
 /// placeholder constants of this module.
 #[derive(Resource, Clone, Copy, Debug, PartialEq)]
@@ -121,6 +140,14 @@ pub struct ClientSettings {
     pub movement_keys: MovementKeys,
     /// Key that ends the local player's turn.
     pub end_turn_key: KeyCode,
+    /// Key that opens and closes the inventory panel.
+    pub inventory_key: KeyCode,
+    /// Logical pixels the inventory panel scrolls per mouse wheel line.
+    pub inventory_scroll_pixels_per_line: f32,
+    /// Longest wait between updates while the window has focus.
+    pub focused_update_wait: Duration,
+    /// Longest wait between updates while the window is out of focus.
+    pub unfocused_update_wait: Duration,
 }
 
 /// The 4 keys that move the local character 1 square.
@@ -154,6 +181,10 @@ impl Default for ClientSettings {
                 east: MOVE_EAST_KEY,
             },
             end_turn_key: END_TURN_KEY,
+            inventory_key: INVENTORY_KEY,
+            inventory_scroll_pixels_per_line: INVENTORY_SCROLL_PIXELS_PER_LINE,
+            focused_update_wait: FOCUSED_UPDATE_WAIT,
+            unfocused_update_wait: UNFOCUSED_UPDATE_WAIT,
         }
     }
 }

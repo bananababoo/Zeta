@@ -9,8 +9,9 @@ use bevy_ecs::prelude::{Commands, MessageReader, MessageWriter, Query, Res, ResM
 use zeta_core::grid::{GridPos, MapBounds};
 use zeta_core::protocol::{Collider, PlayerAssigned, PlayerCharacter, TurnBubble};
 
+use super::inventory::starting_inventory;
 use super::prompts::PromptRegistry;
-use super::scene::{EntitySpec, PLAYER_SPAWN_POSITION};
+use super::scene::{EntitySpec, PLAYER_SPAWN_POSITION, PLAYER_STARTING_ITEMS};
 use super::turn_bubble::remove_participant;
 use super::{EntityIndex, NextEntityId, PlayerCharacters};
 use crate::net::messages::{PlayerConnected, PlayerDisconnected, Recipients, ToPlayers};
@@ -61,7 +62,13 @@ pub(crate) fn connect_players(
             tags: Vec::new(),
             passable: false,
         };
-        let entity = commands.spawn((spec.into_bundle(id), PlayerCharacter)).id();
+        let entity = commands
+            .spawn((
+                spec.into_bundle(id),
+                PlayerCharacter,
+                starting_inventory(PLAYER_STARTING_ITEMS),
+            ))
+            .id();
         index.0.insert(id, entity);
         characters.by_connection.insert(connection, id);
         assignments.write(ToPlayers {

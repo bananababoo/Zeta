@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::entity::EntityId;
 use crate::grid::GridPos;
+use crate::protocol::inventory::StackId;
 
 /// Client to server: move the player's character toward a square.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -22,6 +23,10 @@ pub struct MoveRequest {
 pub struct FreeformActionPrompt {
     /// What the player typed; untrusted.
     pub text: String,
+    /// The carried tool stack the player chose `Utilize` on, if any. The server looks up
+    /// that tool's checks in the item catalog itself.
+    #[serde(default)]
+    pub utilize: Option<StackId>,
 }
 
 /// Server to 1 client: the character this player controls.
@@ -68,6 +73,11 @@ mod tests {
         });
         assert_json_round_trip(&FreeformActionPrompt {
             text: "I kick the barrel".to_owned(),
+            utilize: None,
+        });
+        assert_json_round_trip(&FreeformActionPrompt {
+            text: "I paint the goblin".to_owned(),
+            utilize: Some(StackId(2)),
         });
         assert_json_round_trip(&PlayerAssigned {
             character: EntityId(9),
