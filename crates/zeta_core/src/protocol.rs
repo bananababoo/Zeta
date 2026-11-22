@@ -219,3 +219,160 @@ pub fn register_protocol(registrar: &mut impl ProtocolRegistrar) {
     registrar.server_message::<DiceRollShown>(Delivery::Ordered);
     registrar.server_message::<PromptStatusUpdate>(Delivery::Ordered);
 }
+
+#[cfg(test)]
+mod tests {
+    use serde::de::DeserializeOwned;
+
+    use super::*;
+
+    fn assert_json_round_trip<T>(value: &T)
+    where
+        T: Serialize + DeserializeOwned + PartialEq + std::fmt::Debug,
+    {
+        let json = serde_json::to_string(value).expect("serializes");
+        let parsed: T = serde_json::from_str(&json).expect("parses back");
+        assert_eq!(&parsed, value, "{json}");
+    }
+
+    #[test]
+    fn every_replicated_component_round_trips_through_json() {
+        assert_json_round_trip(&MapArea(MapBounds {
+            width: 20,
+            height: 20,
+        }));
+        assert_json_round_trip(&EntityName("Goblin".to_owned()));
+        assert_json_round_trip(&Visual("A rusty oil barrel.".to_owned()));
+        assert_json_round_trip(&Tags(BTreeSet::from(["burning".to_owned()])));
+        assert_json_round_trip(&Collider { passable: false });
+        assert_json_round_trip(&PlayerCharacter);
+        assert_json_round_trip(&TurnBubble {
+            order: vec![EntityId(1), EntityId(2)],
+            current: 1,
+            completed_rounds: 3,
+            movement_used: true,
+            prompt_used: false,
+        });
+    }
+
+    #[test]
+    fn every_message_round_trips_through_json() {
+        assert_json_round_trip(&MoveRequest {
+            target: GridPos { x: 4, y: 7 },
+        });
+        assert_json_round_trip(&FreeformActionPrompt {
+            text: "I kick the barrel".to_owned(),
+        });
+        assert_json_round_trip(&EndTurnRequest);
+        assert_json_round_trip(&PlayerAssigned {
+            character: EntityId(9),
+        });
+        assert_json_round_trip(&NarrationLogEntry {
+            sequence: 5,
+            kind: LogEntryKind::Speech,
+            speaker: Some(EntityId(3)),
+            speaker_name: Some("Goblin".to_owned()),
+            text: "Halt!".to_owned(),
+            vol: Some(Volume::Shout),
+        });
+        assert_json_round_trip(&DiceRollShown {
+            sequence: 6,
+            actor: EntityId(9),
+            natural: D20::new(17).expect("valid face"),
+            modifier: -1,
+            dc: 12,
+            reason: "Kick the barrel over".to_owned(),
+            success: true,
+        });
+        for state in [
+            PromptState::Resolving,
+            PromptState::Queued,
+            PromptState::Applied,
+            PromptState::Rejected,
+        ] {
+            assert_json_round_trip(&PromptStatusUpdate {
+                state,
+                reason: None,
+            });
+        }
+    }
+
+    #[test]
+    fn unit_enums_use_snake_case_names() {
+        assert_eq!(
+            serde_json::to_string(&LogEntryKind::Notice).expect("serializes"),
+            "\"notice\""
+        );
+        assert_eq!(
+            serde_json::to_string(&PromptState::Rejected).expect("serializes"),
+            "\"rejected\""
+        );
+    }
+
+    #[cfg(feature = "bevy")]
+    #[derive(Default)]
+    struct RecordingRegistrar(Vec<String>);
+
+    #[cfg(feature = "bevy")]
+    fn short_name<T>() -> &'static str {
+        let full = std::any::type_name::<T>();
+        full.rsplit("::").next().unwrap_or(full)
+    }
+
+    #[cfg(feature = "bevy")]
+    impl ProtocolRegistrar for RecordingRegistrar {
+        fn component<C>(&mut self)
+        where
+            C: bevy_ecs::prelude::Component<Mutability = bevy_ecs::component::Mutable>
+                + Serialize
+                + DeserializeOwned,
+        {
+            self.0.push(format!("component {}", short_name::<C>()));
+        }
+
+        fn client_message<M>(&mut self, delivery: Delivery)
+        where
+            M: bevy_ecs::prelude::Message + Serialize + DeserializeOwned,
+        {
+            self.0
+                .push(format!("client {} {delivery:?}", short_name::<M>()));
+        }
+
+        fn server_message<M>(&mut self, delivery: Delivery)
+        where
+            M: bevy_ecs::prelude::Message + Serialize + DeserializeOwned,
+        {
+            self.0
+                .push(format!("server {} {delivery:?}", short_name::<M>()));
+        }
+    }
+
+    /// The order is the network identity of each type; changing it breaks every older client.
+    #[cfg(feature = "bevy")]
+    #[test]
+    fn registration_order_is_fixed() {
+        let mut registrar = RecordingRegistrar::default();
+        register_protocol(&mut registrar);
+        assert_eq!(
+            registrar.0,
+            [
+                "component EntityId",
+                "component GridPos",
+                "component MapArea",
+                "component EntityName",
+                "component Visual",
+                "component Tags",
+                "component Collider",
+                "component PlayerCharacter",
+                "component TurnBubble",
+                "client MoveRequest Ordered",
+                "client FreeformActionPrompt Ordered",
+                "client EndTurnRequest Ordered",
+                "server PlayerAssigned Ordered",
+                "server NarrationLogEntry Ordered",
+                "server DiceRollShown Ordered",
+                "server PromptStatusUpdate Ordered",
+            ]
+        );
+    }
+}

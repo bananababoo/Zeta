@@ -1,5 +1,7 @@
 //! Messages between the server world and the network layer, so the world never imports the
 //! networking library.
+//!
+//! Rules: `docs/architecture/technical_architecture.md` Section 1.
 
 use bevy_app::{App, Plugin};
 use bevy_ecs::prelude::{Component, Entity, Message};
