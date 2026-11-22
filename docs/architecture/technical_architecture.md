@@ -3,8 +3,8 @@
 | Field | Value |
 |---|---|
 | **Status** | `Draft` |
-| **Scope** | Bevy workspace, crate boundaries, networking library, hosting, spatial audio, concurrency, visual pipeline, content moderation, and time calculation |
-| **Last Updated** | `2026-11-21` |
+| **Scope** | Bevy workspace, crate boundaries, networking library, hosting, spatial audio, concurrency, visual pipeline, content moderation, time calculation, and client modules |
+| **Last Updated** | `2026-11-22` |
 | **Decision Authority** | Game Director (Project Owner) |
 
 ---
@@ -71,6 +71,19 @@ Every server and client calculates the same time from UTC, so they send no time-
 
 ### Boundaries
 The time rules themselves are defined in [`../design/time_model.md`](../design/time_model.md).
+
+---
+
+## 5. Client Modules
+
+### What
+The client is organized into independent Bevy plugins over replicated ECS components: map and movement, Turn Bubble banner, visible dice rolls and shared narration log, Freeform Action Prompt, character sheet display, inventory and item cards, Hybrid Action Bar, and Downtime crafting and trade. Each plugin reads only the replicated components it owns and sends typed client actions to the server without coupling to the other panels.
+
+### Why
+Independent plugins let the initial slice in [`../prototypes/realism_prototype.md`](../prototypes/realism_prototype.md) enable only map, movement, Turn Bubble, dice, narration log, and Freeform Action Prompt, and let later milestones add character state, inventory, the Hybrid Action Bar, and Downtime trade without rewriting existing client or networking code.
+
+### Boundaries
+Does not define visual layout, fonts, or keybindings.
 
 ---
 

@@ -4,13 +4,13 @@
 |---|---|
 | **Status** | `Draft` |
 | **Scope** | Initial rules-light vertical slice validating the Freeform Action Prompt resolution loop |
-| **Last Updated** | `2026-11-16` |
+| **Last Updated** | `2026-11-22` |
 | **Decision Authority** | Game Director (Project Owner) |
 
 ---
 
 ## Overview
-This document defines the scope of the first Bevy prototype, which is thrown away after use. It skips 5e rules and tests only the Freeform Action Prompt resolution loop, the `PendingAiResolution` lock, and the `WorldEffect` ECS mutation pipeline inside a simple test story.
+This document defines the scope of the first playable Bevy slice. Its test scene and rules-light system prompt are temporary, while its server ECS loop, replication, and core client plugins stay as the foundation that 2024 5e modules add onto. It skips 5e rules and tests only the Freeform Action Prompt resolution loop, the `PendingAiResolution` lock, and the `WorldEffect` ECS mutation pipeline inside a simple test story.
 
 ---
 
@@ -23,7 +23,7 @@ The prototype is multiplayer from the start. An authoritative headless server an
 Full 5e classes, spells, and leveling would take a long time to build and are not needed to test the AI DM loop or the ECS mutation pipeline. Splitting a single-player game into a server and a client later means rewriting most of its code. The `PendingAiResolution` lock also needs 2 or more players to test.
 
 ### Boundaries
-Excludes 5e classes, spell slots, leveling, the time model in [`../design/time_model.md`](../design/time_model.md), multi-server scaling, and out-of-game matchmaking. This document is marked `Deprecated` once the realism loop is validated and 5e integration begins.
+Excludes 5e classes, spell slots, leveling, the item catalog, inventory, the time model in [`../design/time_model.md`](../design/time_model.md), multi-server scaling, and out-of-game matchmaking. This document is marked `Deprecated` once the realism loop is validated and 5e integration begins.
 
 ---
 

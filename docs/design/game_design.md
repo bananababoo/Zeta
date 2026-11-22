@@ -3,8 +3,8 @@
 | Field | Value |
 |---|---|
 | **Status** | `Draft` |
-| **Scope** | Core gameplay vision, audience, world state, playstyles, combat, and stakes |
-| **Last Updated** | `2026-11-16` |
+| **Scope** | Core gameplay vision, audience, world state, playstyles, combat, stakes, and items |
+| **Last Updated** | `2026-11-22` |
 | **Decision Authority** | Game Director (Project Owner) |
 
 ---
@@ -71,7 +71,7 @@ Downtime players cannot use the Freeform Action Prompt, alter world geography, o
 ### What
 Exploration is real-time. Combat and tense encounters trigger **Dynamic Bubble Turns**, which create a **Turn Bubble**: a local turn-based area that other Campaign Mode parties can join mid-combat and that Downtime players can only spectate. Looting is a standard action, so the characters closest to the loot reach it first. Time inside a Turn Bubble is defined in [`time_model.md`](time_model.md) Section 5.
 
-The full game uses the 5e rules, with strict classes, visible dice rolls, and levels 1–20, where the AI DM controls leveling and high-level characters are very rare. Leveling progress is hidden: players see their current level and what each level grants, but no progress bar or experience total, and the AI DM decides when a character levels up based on its accomplishments and announces it in the story.
+The full game uses the 2024 5e rules from the official System Reference Document 5.2.1 under the Creative Commons Attribution 4.0 license, with the required attribution in the game credits and no non-open book content bundled. Characters have strict classes, visible dice rolls, and levels 1–20, where the AI DM controls leveling and high-level characters are very rare. Leveling progress is hidden: players see their current level and what each level grants, but no progress bar or experience total, and the AI DM decides when a character levels up based on its accomplishments and announces it in the story.
 
 Death is **hard permadeath** unless in-world magic such as *Revivify* or *Raise Dead* revives the character; the character's grave, gear, and deeds stay in world history, and the player creates a new character. Death follows the standard 5e rules, including death saving throws and stabilizing. There is no target death rate, and the AI DM judges danger only by realism. The same stakes apply in every Session, including One-Shots.
 
@@ -86,6 +86,21 @@ Real-time exploration keeps the world moving, and turn-based combat gives combat
 
 ### Boundaries
 Players cannot use logout mechanics to pause or escape active Turn Bubbles. Temporary prototype rule omissions are isolated in [`../prototypes/realism_prototype.md`](../prototypes/realism_prototype.md).
+
+---
+
+## 5. Items & Crafting
+
+### What
+Standard equipment, weapons, armor, and tools live in 1 shared item catalog derived from System Reference Document 5.2.1 and compiled into both the server and the client. Each catalog entry defines its passive traits and generic actions (`Equip`, `Attack`, `Consume`, `Craft`, and `Utilize`). `Craft` recipes resolve through deterministic rules without AI calls in both Downtime and Campaign Mode, and `Utilize` opens the Freeform Action Prompt with the item's catalog check attached.
+
+When the AI DM awards an item, it uses a catalog identifier by default. It creates a custom narrative-only item—limited to a name, weight, 1-sentence description, and free-form tags, with **no** combat statistics or crafting recipes—only when a scene calls for a unique story object such as a letter or key.
+
+### Why
+One shared catalog gives every player the same item rules, lets the client display item cards and `Craft` or `Utilize` actions without calling the AI DM, and lets Downtime crafting run at zero AI cost. Limiting custom items to narrative objects stops AI-generated gear from breaking combat balance or the shared economy while still allowing one-of-a-kind story items.
+
+### Boundaries
+Request contents, catalog lookup, and output validation for catalog items are defined in [`../architecture/ai_orchestration.md`](../architecture/ai_orchestration.md) Sections 1, 2, and 4.
 
 ---
 
