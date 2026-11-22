@@ -27,7 +27,7 @@ bevy_app = "0.20"
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "time"] }
 # HTTP client for AI provider calls. The most used Rust HTTP client, built on tokio and rustls.
 reqwest = { version = "0.13", features = ["json"] }
-# Async PostgreSQL client and migration runner with compile-time checked queries.
+# Async PostgreSQL client, connection pool, and versioned migration runner.
 sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "tls-rustls", "postgres", "migrate", "json", "macros"] }
 # Loads a local .env file so developers keep keys out of the repository and their shell.
 dotenvy = "0.15"

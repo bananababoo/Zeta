@@ -1,8 +1,8 @@
 //! Event Log records: every applied change together with its cause.
 //!
-//! Rules: `docs/architecture/persistence.md` Section 2. This module defines the record shape
-//! and an in-memory log; storing records in PostgreSQL belongs to the server. Records are a
-//! stored format: fields and tags are only ever added, never renamed or removed.
+//! Rules: `docs/architecture/persistence.md` Sections 2 and 3. This module defines the record
+//! shape and an in-memory log; storing records in PostgreSQL belongs to the server. Records
+//! are a stored format: fields and tags are only ever added, never renamed or removed.
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -17,6 +17,14 @@ use crate::time::UtcTimestamp;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct EventSequence(pub u64);
+
+/// Identifier of 1 Map Partition in the world, for location indexing and future server
+/// partitioning.
+///
+/// Defined Term: Map Partition (`docs/architecture/persistence.md` Section 3).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct MapPartitionId(pub u64);
 
 /// What caused a change.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
