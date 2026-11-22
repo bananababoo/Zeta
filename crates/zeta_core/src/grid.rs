@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 
 /// A square on the 5-foot grid. `x` grows to the east and `y` grows to the south.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "bevy", derive(bevy_ecs::prelude::Component))]
 pub struct GridPos {
     /// Column, from 0 at the west edge.
     pub x: u32,
@@ -31,6 +32,7 @@ impl GridPos {
 /// The size of a map in squares. Valid positions run from `(0, 0)` to
 /// `(width - 1, height - 1)`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "bevy", derive(bevy_ecs::prelude::Resource))]
 pub struct MapBounds {
     /// Number of columns.
     pub width: u32,

@@ -8,5 +8,6 @@ use serde::{Deserialize, Serialize};
 /// entity. Engine handles map to it at the edge of the server, and the AI DM never sees
 /// it: AI DM requests use per-request local identifiers instead.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "bevy", derive(bevy_ecs::prelude::Component))]
 #[serde(transparent)]
 pub struct EntityId(pub u64);
