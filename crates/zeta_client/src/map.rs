@@ -1,1 +1,382 @@
-//! 2D grid map: squares, entities, and Tag badges drawn from replicated components.
+//! 2D grid map: a camera, the squares of the map area, a colored square for every entity
+//! with a grid position, and a label with its name and Tag badges.
+//!
+//! Rules: `docs/architecture/technical_architecture.md` Section 5 (independent plugin over
+//! replicated components) and `docs/prototypes/realism_prototype.md`. Colors stand in for
+//! sprites until the sprite library exists.
+
+use bevy::prelude::*;
+use bevy::sprite::Anchor;
+use zeta_core::entity::EntityId;
+use zeta_core::grid::GridPos;
+use zeta_core::protocol::{Collider, EntityName, MapArea, PlayerCharacter, Tags};
+
+use crate::layout::{map_center, square_center};
+use crate::player::LocalPlayer;
+use crate::settings::{
+    ClientSettings, GRID_DARK_COLOR, GRID_LIGHT_COLOR, IMPASSABLE_COLOR, LOCAL_PLAYER_COLOR,
+    OTHER_ENTITY_COLOR, PLAYER_CHARACTER_COLOR,
+};
+
+/// Draw order of grid squares.
+const SQUARE_DEPTH: f32 = 0.0;
+/// Draw order of entities, above the squares.
+const ENTITY_DEPTH: f32 = 1.0;
+/// Draw order of a label relative to its entity.
+const LABEL_DEPTH: f32 = 1.0;
+/// Share of a square an entity's colored square covers, so neighbors stay apart.
+const ENTITY_SCALE: f32 = 0.8;
+/// Font size of entity labels relative to the square size.
+const LABEL_FONT_SCALE: f32 = 0.35;
+
+/// Drawn entities whose grid position changed.
+type MovedEntityFilter = (Changed<GridPos>, With<MapLabelEntity>);
+/// What deciding an entity's color reads: id, Player Character marker, collider, and sprite.
+type ColorQueryData = (
+    Option<&'static EntityId>,
+    Has<PlayerCharacter>,
+    Option<&'static Collider>,
+    &'static mut Sprite,
+);
+
+/// Marks the camera that shows the map.
+#[derive(Component, Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct MapCamera;
+
+/// Marks 1 drawn square of the map area.
+#[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MapSquare(pub GridPos);
+
+/// Marks the label below an entity, showing its name and Tag badges.
+#[derive(Component, Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct MapLabel;
+
+/// Added to an entity once the map draws it: the entity of its label.
+#[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MapLabelEntity(pub Entity);
+
+/// Draws the map area, entities with a grid position, and their labels.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct MapPlugin;
+
+impl Plugin for MapPlugin {
+    fn build(&self, app: &mut App) {
+        app.init_resource::<ClientSettings>()
+            .init_resource::<LocalPlayer>()
+            .add_systems(Startup, spawn_camera)
+            .add_systems(
+                Update,
+                (
+                    draw_map_area,
+                    attach_entity_visuals,
+                    move_entity_visuals,
+                    color_entities,
+                    update_labels,
+                )
+                    .chain(),
+            );
+    }
+}
+
+/// The color an entity is drawn in.
+pub fn entity_color(is_player_character: bool, is_local_player: bool, passable: bool) -> Color {
+    if is_local_player {
+        LOCAL_PLAYER_COLOR
+    } else if is_player_character {
+        PLAYER_CHARACTER_COLOR
+    } else if passable {
+        OTHER_ENTITY_COLOR
+    } else {
+        IMPASSABLE_COLOR
+    }
+}
+
+/// The label text of an entity: its name, then its Tags as bracketed badges.
+pub fn label_text(name: Option<&EntityName>, tags: Option<&Tags>) -> String {
+    let name = name.map_or("", |name| name.0.as_str());
+    let badges: Vec<String> = tags.map_or_else(Vec::new, |tags| {
+        tags.0.iter().map(|tag| format!("[{tag}]")).collect()
+    });
+    if badges.is_empty() {
+        name.to_owned()
+    } else {
+        format!("{name}\n{}", badges.join(" "))
+    }
+}
+
+fn spawn_camera(mut commands: Commands) {
+    commands.spawn((MapCamera, Camera2d));
+}
+
+/// Redraws every square when the map area appears or changes, and centers the camera on it.
+#[allow(
+    clippy::needless_pass_by_value,
+    reason = "Bevy system parameters are passed by value"
+)]
+fn draw_map_area(
+    mut commands: Commands,
+    settings: Res<ClientSettings>,
+    areas: Query<&MapArea, Changed<MapArea>>,
+    squares: Query<Entity, With<MapSquare>>,
+    mut cameras: Query<&mut Transform, With<MapCamera>>,
+) {
+    let Some(area) = areas.iter().last() else {
+        return;
+    };
+    for square in &squares {
+        commands.entity(square).despawn();
+    }
+    let bounds = area.0;
+    let tile_size = settings.tile_size;
+    for x in 0..bounds.width {
+        for y in 0..bounds.height {
+            let position = GridPos::new(x, y);
+            let color = if (x + y) % 2 == 0 {
+                GRID_LIGHT_COLOR
+            } else {
+                GRID_DARK_COLOR
+            };
+            commands.spawn((
+                MapSquare(position),
+                Sprite::from_color(color, Vec2::splat(tile_size)),
+                Transform::from_translation(
+                    square_center(position, tile_size).extend(SQUARE_DEPTH),
+                ),
+            ));
+        }
+    }
+    let center = map_center(bounds, tile_size);
+    for mut camera in &mut cameras {
+        camera.translation.x = center.x;
+        camera.translation.y = center.y;
+    }
+}
+
+/// Gives every newly seen entity with a grid position a colored square and a label.
+#[allow(
+    clippy::needless_pass_by_value,
+    reason = "Bevy system parameters are passed by value"
+)]
+fn attach_entity_visuals(
+    mut commands: Commands,
+    settings: Res<ClientSettings>,
+    entities: Query<(Entity, &GridPos), Without<MapLabelEntity>>,
+) {
+    let tile_size = settings.tile_size;
+    for (entity, position) in &entities {
+        let label = commands
+            .spawn((
+                MapLabel,
+                Text2d::new(""),
+                TextFont::from_font_size(tile_size * LABEL_FONT_SCALE),
+                Anchor::TOP_CENTER,
+                Transform::from_xyz(0.0, -tile_size / 2.0, LABEL_DEPTH),
+                ChildOf(entity),
+            ))
+            .id();
+        commands.entity(entity).try_insert((
+            MapLabelEntity(label),
+            Sprite::from_color(OTHER_ENTITY_COLOR, Vec2::splat(tile_size * ENTITY_SCALE)),
+            Transform::from_translation(square_center(*position, tile_size).extend(ENTITY_DEPTH)),
+        ));
+    }
+}
+
+#[allow(
+    clippy::needless_pass_by_value,
+    reason = "Bevy system parameters are passed by value"
+)]
+fn move_entity_visuals(
+    settings: Res<ClientSettings>,
+    mut entities: Query<(&GridPos, &mut Transform), MovedEntityFilter>,
+) {
+    for (position, mut transform) in &mut entities {
+        let center = square_center(*position, settings.tile_size);
+        transform.translation.x = center.x;
+        transform.translation.y = center.y;
+    }
+}
+
+/// Recolors entities every frame, because the local player, Player Character marker, and
+/// collider can each arrive in any order.
+#[allow(
+    clippy::needless_pass_by_value,
+    reason = "Bevy system parameters are passed by value"
+)]
+fn color_entities(
+    local_player: Res<LocalPlayer>,
+    mut entities: Query<ColorQueryData, With<MapLabelEntity>>,
+) {
+    for (id, is_player_character, collider, mut sprite) in &mut entities {
+        let is_local_player = id.is_some_and(|id| local_player.is(*id));
+        let passable = collider.is_none_or(|collider| collider.passable);
+        let color = entity_color(is_player_character, is_local_player, passable);
+        if sprite.color != color {
+            sprite.color = color;
+        }
+    }
+}
+
+fn update_labels(
+    owners: Query<(&MapLabelEntity, Option<&EntityName>, Option<&Tags>)>,
+    mut labels: Query<&mut Text2d, With<MapLabel>>,
+) {
+    for (label, name, tags) in &owners {
+        let Ok(mut text) = labels.get_mut(label.0) else {
+            continue;
+        };
+        let wanted = label_text(name, tags);
+        if text.0 != wanted {
+            text.0 = wanted;
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeSet;
+
+    use zeta_core::grid::MapBounds;
+
+    use super::*;
+
+    fn test_app() -> App {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins).add_plugins(MapPlugin);
+        app
+    }
+
+    fn sprite_color(app: &App, entity: Entity) -> Color {
+        app.world()
+            .get::<Sprite>(entity)
+            .expect("the map gives every grid entity a sprite")
+            .color
+    }
+
+    fn label_of(app: &App, entity: Entity) -> String {
+        let label = app
+            .world()
+            .get::<MapLabelEntity>(entity)
+            .expect("the map gives every grid entity a label");
+        app.world()
+            .get::<Text2d>(label.0)
+            .expect("labels have text")
+            .0
+            .clone()
+    }
+
+    #[test]
+    fn the_map_spawns_1_camera() {
+        let mut app = test_app();
+        app.update();
+        let mut cameras = app.world_mut().query::<&MapCamera>();
+        assert_eq!(cameras.iter(app.world()).count(), 1);
+    }
+
+    #[test]
+    fn map_area_draws_every_square_and_centers_the_camera() {
+        let mut app = test_app();
+        let area = app
+            .world_mut()
+            .spawn(MapArea(MapBounds {
+                width: 4,
+                height: 3,
+            }))
+            .id();
+        app.update();
+        let mut squares = app.world_mut().query::<&MapSquare>();
+        assert_eq!(squares.iter(app.world()).count(), 12);
+        let mut cameras = app
+            .world_mut()
+            .query_filtered::<&Transform, With<MapCamera>>();
+        let camera = cameras.single(app.world()).expect("1 camera");
+        assert_eq!(camera.translation.truncate(), Vec2::new(64.0, -48.0));
+
+        app.world_mut().entity_mut(area).insert(MapArea(MapBounds {
+            width: 2,
+            height: 2,
+        }));
+        app.update();
+        let mut squares = app.world_mut().query::<&MapSquare>();
+        assert_eq!(squares.iter(app.world()).count(), 4);
+    }
+
+    #[test]
+    fn grid_entities_are_drawn_at_their_square_and_follow_moves() {
+        let mut app = test_app();
+        let barrel = app.world_mut().spawn(GridPos::new(2, 1)).id();
+        app.update();
+        let transform = app.world().get::<Transform>(barrel).expect("placed");
+        assert_eq!(transform.translation.truncate(), Vec2::new(80.0, -48.0));
+
+        app.world_mut()
+            .entity_mut(barrel)
+            .insert(GridPos::new(0, 0));
+        app.update();
+        let transform = app.world().get::<Transform>(barrel).expect("placed");
+        assert_eq!(transform.translation.truncate(), Vec2::new(16.0, -16.0));
+    }
+
+    #[test]
+    fn the_local_player_is_highlighted_and_other_players_are_not() {
+        let mut app = test_app();
+        let mine = app
+            .world_mut()
+            .spawn((EntityId(1), GridPos::new(0, 0), PlayerCharacter))
+            .id();
+        let theirs = app
+            .world_mut()
+            .spawn((EntityId(2), GridPos::new(1, 0), PlayerCharacter))
+            .id();
+        app.update();
+        assert_eq!(sprite_color(&app, mine), PLAYER_CHARACTER_COLOR);
+
+        app.world_mut().resource_mut::<LocalPlayer>().character = Some(EntityId(1));
+        app.update();
+        assert_eq!(sprite_color(&app, mine), LOCAL_PLAYER_COLOR);
+        assert_eq!(sprite_color(&app, theirs), PLAYER_CHARACTER_COLOR);
+    }
+
+    #[test]
+    fn impassable_entities_are_drawn_darker_than_passable_ones() {
+        let mut app = test_app();
+        let wall = app
+            .world_mut()
+            .spawn((GridPos::new(0, 0), Collider { passable: false }))
+            .id();
+        let barrel = app
+            .world_mut()
+            .spawn((GridPos::new(1, 0), Collider { passable: true }))
+            .id();
+        app.update();
+        assert_eq!(sprite_color(&app, wall), IMPASSABLE_COLOR);
+        assert_eq!(sprite_color(&app, barrel), OTHER_ENTITY_COLOR);
+    }
+
+    #[test]
+    fn labels_show_the_name_and_tags_as_badges_and_follow_changes() {
+        let mut app = test_app();
+        let barrel = app
+            .world_mut()
+            .spawn((GridPos::new(0, 0), EntityName("Oil barrel".to_owned())))
+            .id();
+        app.update();
+        assert_eq!(label_of(&app, barrel), "Oil barrel");
+
+        let tags = Tags(BTreeSet::from(["burning".to_owned(), "leaking".to_owned()]));
+        app.world_mut().entity_mut(barrel).insert(tags);
+        app.update();
+        assert_eq!(label_of(&app, barrel), "Oil barrel\n[burning] [leaking]");
+    }
+
+    #[test]
+    fn despawning_an_entity_also_removes_its_label() {
+        let mut app = test_app();
+        let goblin = app.world_mut().spawn(GridPos::new(0, 0)).id();
+        app.update();
+        app.world_mut().entity_mut(goblin).despawn();
+        app.update();
+        let mut labels = app.world_mut().query::<&MapLabel>();
+        assert_eq!(labels.iter(app.world()).count(), 0);
+    }
+}
