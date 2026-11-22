@@ -19,10 +19,12 @@ Decisions live in `docs/`; this file only points to them and records working kno
 | Stack: Bevy, bevy_replicon, client modules | `docs/architecture/technical_architecture.md` |
 | AI DM loop, response schema, catalog lookup | `docs/architecture/ai_orchestration.md` |
 | Database (`sqlx`, PostgreSQL + PostGIS) | `docs/architecture/persistence.md` |
+| Looking up third-party crate interfaces | `docs/architecture/library_documentation.md` |
 
 ## Commands
 | Task | Command | Sandbox |
 |---|---|---|
+| Look up a crate at its locked version | `powershell -ExecutionPolicy Bypass -File tools/lib_docs.ps1 -Crate <name> [-Item <Name> \| -Find <regex>]` | sandboxed |
 | All checks (run before every commit) | `powershell -ExecutionPolicy Bypass -File tools/check.ps1 -Offline` | sandboxed |
 | Auto-format, then check | add `-Fix` | sandboxed |
 | Docs only | `powershell -ExecutionPolicy Bypass -File tools/check_docs.ps1` | sandboxed |
@@ -44,6 +46,17 @@ Decisions live in `docs/`; this file only points to them and records working kno
 - A Stop hook runs `tools/check_docs.ps1 -Hook`; a turn cannot end while docs fail.
 - The sandbox denies loopback connects (os error 10013), so socket tests are `#[ignore]` and run bypassed with `cargo test --workspace --offline --all-features -- --ignored`.
 - Server and client addresses come from `ZETA_LISTEN_ADDRESS` and `ZETA_SERVER_ADDRESS` (see `.env.example`).
+
+## Library Rules & Pitfalls (Bevy 0.20, bevy_replicon 0.45)
+- Never write a library call from memory. Check it first with `tools/lib_docs.ps1` and cite file:line. Every brief to a subagent or worker repeats this.
+- Bevy 0.20: a `Resource` is also a `Component`; deriving both on 1 type conflicts. That is why `MapArea(MapBounds)` exists.
+- Bevy 0.20: `Interaction` and `Button` are deprecated; the client hit-tests clicks with `ComputedNode`.
+- Bevy has feature collections (`2d`, `ui`, `2d_api`); enable those, not the default feature set.
+- replicon: `SendMode` is a deprecated alias of `SendTargets` (`All`, `AllExcept`, `Single`). `ClientId` is an enum `{ Client(Entity), Server }`.
+- replicon: `add_client_message` / `add_server_message` take a `Channel` (`Unreliable`, `Unordered`, `Ordered`). Clients are authorized through the protocol check (`AuthorizedClient`).
+- replicon sends with postcard, which cannot decode internally tagged serde enums. Network types are structs and unit-only enums.
+- `bevy_replicon_renet` has no Bevy 0.20 release; Zeta uses its own TCP backend.
+- Network protocol: types live in `crates/zeta_core/src/protocol/` by domain. All registration stays in 1 append-only `register_protocol`, because registration order is each type's network number. Read the `protocol.rs` module docs before adding a type.
 
 ## PowerShell Pitfalls
 - Read `$LASTEXITCODE`, not stderr. cargo and docker write progress to stderr on success.
