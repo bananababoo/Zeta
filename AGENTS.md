@@ -26,6 +26,8 @@ Decisions live in `docs/`; this file only points to them and records working kno
 | Docs only | `powershell -ExecutionPolicy Bypass -File tools/check_docs.ps1` | sandboxed |
 | Start Docker and the database | `powershell -ExecutionPolicy Bypass -File tools/dev_up.ps1` | bypass |
 | Live AI smoke test | `cargo run -p zeta_server --bin ai_check --offline` | bypass (network) |
+| Live DB smoke test | `cargo run -p zeta_server --bin db_check --offline` | bypass (Docker/DB) |
+| Live DB integration tests | `cargo test -p zeta_server --offline -- --ignored` | bypass (Docker/DB) |
 | Commit, push | `git commit`, `git push` | bypass (`.git` writes) |
 
 ## Environment Facts
@@ -51,9 +53,5 @@ Decisions live in `docs/`; this file only points to them and records working kno
 
 ## Open Work
 Update this list when an item is done or added.
-1. Database driver choice and server connection to PostgreSQL.
-2. Structured-output schema in `AiRequest` (`response_format.schema`).
-3. Retry history: the Gemini provider resends only model text. Thinking models may need thought steps resent. Not yet verified live.
-4. Bridge between Bevy systems and the tokio runtime for AI calls.
-5. Add `bevy_replicon` when the prototype needs networking.
-6. Open questions: Tooling Language, snapshot maximum count.
+1. Add `bevy_replicon` when the prototype needs networking.
+2. Open questions: Tooling Language, snapshot maximum count.
