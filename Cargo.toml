@@ -19,6 +19,9 @@ serde_json = "1"
 thiserror = "2"
 # ECS components, resources, and systems without windowing or rendering (optional in zeta_core).
 bevy_ecs = { version = "0.20", default-features = false, features = ["std"] }
+# Server and client. Server-authoritative ECS replication chosen in docs/architecture/technical_architecture.md
+# Section 1. Quarantined in zeta_server::net and zeta_client::net; each crate enables only its own side.
+bevy_replicon = { version = "0.45", default-features = false }
 
 # Server only. zeta_core never depends on these (see docs/architecture/code_style.md Section 3).
 # Headless schedule and plugin runner for the authoritative server.
@@ -29,6 +32,33 @@ tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "time"] }
 reqwest = { version = "0.13", default-features = false, features = ["rustls", "json"] }
 # Async PostgreSQL client, connection pool, and versioned migration runner.
 sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "tls-rustls-aws-lc-rs", "postgres", "migrate", "json"] }
+# Bevy states; bevy_replicon reports server connection status as a state.
+bevy_state = { version = "0.20", default-features = false, features = ["std", "bevy_app"] }
+# Frame time for the headless schedule, read by bevy_replicon's tick.
+bevy_time = { version = "0.20", default-features = false, features = ["std"] }
+# Operating-system randomness for fair, unpredictable d20 rolls. Already in Cargo.lock through reqwest.
+# Pre-1.0: quarantined in zeta_server::dice.
+getrandom = "0.4"
+
+# Client only. Window, input, 2D sprites, text, and UI. Only the 2D and UI subsystems are enabled.
+bevy = { version = "0.20", default-features = false, features = [
+    "std",
+    "multi_threaded",
+    "async_executor",
+    "bevy_asset",
+    "bevy_log",
+    "bevy_state",
+    "bevy_window",
+    "bevy_winit",
+    "bevy_render",
+    "bevy_core_pipeline",
+    "bevy_sprite",
+    "bevy_sprite_render",
+    "bevy_text",
+    "bevy_ui",
+    "bevy_ui_render",
+    "default_font",
+] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

@@ -29,3 +29,8 @@ pub const INSPECT_ROUND_CAP: u32 = 3;
 /// Placeholder: 2026-01-05. The real value is the launch week, and the in-world date it maps
 /// to depends on the calendar, which Lore has not defined yet.
 pub const CALENDAR_EPOCH_UNIX_MILLISECONDS: i64 = 1_767_571_200_000;
+
+/// TCP port the server listens on and clients connect to by default.
+///
+/// Placeholder. Replaced when hosting is set up (`docs/architecture/technical_architecture.md` Section 1).
+pub const DEFAULT_SERVER_PORT: u16 = 7777;

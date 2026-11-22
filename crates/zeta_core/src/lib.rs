@@ -11,12 +11,15 @@ pub mod ai;
 pub mod entity;
 pub mod event_log;
 pub mod grid;
+pub mod movement;
 pub mod pending_resolution;
+pub mod protocol;
 pub mod resolution;
 pub mod settings;
 pub mod snapshot;
 pub mod time;
 pub mod validation;
+pub mod wire;
 
 #[cfg(test)]
 mod test_support;

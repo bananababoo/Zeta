@@ -6,5 +6,12 @@ edition.workspace = true
 rust-version.workspace = true
 publish.workspace = true
 
+[dependencies]
+zeta_core = { workspace = true, features = ["bevy"] }
+bevy.workspace = true
+bevy_replicon = { workspace = true, features = ["client"] }
+serde.workspace = true
+thiserror.workspace = true
+
 [lints]
 workspace = true

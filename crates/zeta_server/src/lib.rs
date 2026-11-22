@@ -8,4 +8,7 @@ pub mod ai;
 pub mod bridge;
 pub mod config;
 pub mod db;
+pub mod dice;
+pub mod net;
 pub mod settings;
+pub mod world;

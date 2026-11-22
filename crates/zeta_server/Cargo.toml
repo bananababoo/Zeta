@@ -16,6 +16,10 @@ thiserror.workspace = true
 tokio.workspace = true
 reqwest.workspace = true
 sqlx.workspace = true
+bevy_replicon = { workspace = true, features = ["server"] }
+bevy_state.workspace = true
+bevy_time.workspace = true
+getrandom.workspace = true
 
 [lints]
 workspace = true
