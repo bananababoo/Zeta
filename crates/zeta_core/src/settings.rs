@@ -34,3 +34,15 @@ pub const CALENDAR_EPOCH_UNIX_MILLISECONDS: i64 = 1_767_571_200_000;
 ///
 /// Placeholder. Replaced when hosting is set up (`docs/architecture/technical_architecture.md` Section 1).
 pub const DEFAULT_SERVER_PORT: u16 = 7777;
+
+/// Largest payload 1 network frame may carry, in bytes.
+///
+/// Placeholder: 1,048,576 bytes, far above any Milestone 1 message. Replaced when hosting is set up
+/// (`docs/architecture/technical_architecture.md` Section 1).
+pub const MAX_PAYLOAD_BYTES: u32 = 1 << 20;
+
+/// Largest number of encoded bytes waiting in 1 `FrameOutbox` before the peer counts as stuck.
+///
+/// Placeholder: 8 times [`MAX_PAYLOAD_BYTES`]. Replaced when hosting is set up
+/// (`docs/architecture/technical_architecture.md` Section 1).
+pub const MAX_OUTBOX_BYTES: usize = 8 << 20;

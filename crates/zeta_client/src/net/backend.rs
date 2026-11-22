@@ -5,7 +5,6 @@
 
 use std::mem;
 use std::net::SocketAddr;
-use std::time::Duration;
 
 use bevy::log::{info, warn};
 use bevy::prelude::{
@@ -16,9 +15,7 @@ use bevy_replicon::prelude::{ClientMessages, ClientState, ClientSystems, Replico
 
 use super::ConnectionStatus;
 use super::transport::{Connection, ConnectionError, PendingConnection};
-
-/// How long a connect may take before the client gives up.
-const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+use crate::settings::CONNECT_TIMEOUT;
 
 /// Address given to [`super::ClientNetPlugin`].
 #[derive(Resource, Clone, Copy, Debug)]
@@ -163,7 +160,7 @@ fn send_packets(mut link: ResMut<ServerLink>, mut messages: ResMut<ClientMessage
 mod tests {
     use std::io::{Read, Write};
     use std::net::{TcpListener, TcpStream};
-    use std::time::Instant;
+    use std::time::{Duration, Instant};
 
     use bevy::app::TaskPoolPlugin;
     use bevy::prelude::{Messages, On};

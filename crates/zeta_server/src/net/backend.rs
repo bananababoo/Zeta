@@ -18,10 +18,7 @@ use bevy_replicon::prelude::{
 use bevy_state::state::NextState;
 
 use super::transport::{Connection, ConnectionError, Listener};
-
-/// Largest message the library should build before splitting component changes, in bytes.
-/// About 1 internet packet, the size the library is designed around.
-const SPLIT_MESSAGE_BYTES: usize = 1200;
+use crate::settings::SPLIT_MESSAGE_BYTES;
 
 /// Address requested by [`super::ServerNetPlugin`].
 #[derive(Resource, Clone, Copy, Debug)]

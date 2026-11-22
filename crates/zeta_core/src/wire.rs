@@ -10,17 +10,8 @@ use thiserror::Error;
 /// Bytes before the payload: 1 channel byte and a 4-byte length.
 pub const HEADER_BYTES: usize = 5;
 
-/// Largest payload 1 frame may carry.
-///
-/// Placeholder: 1,048,576 bytes, far above any Milestone 1 message. Replaced when hosting is set up
-/// (`docs/architecture/technical_architecture.md` Section 1).
-pub const MAX_PAYLOAD_BYTES: u32 = 1 << 20;
-
-/// Largest number of encoded bytes waiting in 1 [`FrameOutbox`] before the peer counts as stuck.
-///
-/// Placeholder: 8 times [`MAX_PAYLOAD_BYTES`]. Replaced when hosting is set up
-/// (`docs/architecture/technical_architecture.md` Section 1).
-pub const MAX_OUTBOX_BYTES: usize = 8 << 20;
+/// Placeholder frame limits, kept in [`crate::settings`] and re-exported for the frame API.
+pub use crate::settings::{MAX_OUTBOX_BYTES, MAX_PAYLOAD_BYTES};
 
 /// 1 decoded frame.
 #[derive(Clone, Debug, PartialEq, Eq)]

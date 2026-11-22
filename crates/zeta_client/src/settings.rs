@@ -5,7 +5,18 @@
 //! `docs/architecture/code_style.md` Section 6 keeps undecided numbers in this module.
 //! Plugins read them through [`ClientSettings`], so tests can use other values.
 
+use std::time::Duration;
+
 use bevy::prelude::{Color, KeyCode, Resource};
+
+/// Placeholder: how long a connect may take before the client gives up. Replaced when hosting
+/// is set up (`docs/architecture/technical_architecture.md` Section 1).
+pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Placeholder: bytes read from the server per update at most, so 1 large burst cannot stall
+/// a frame. Replaced when hosting is set up (`docs/architecture/technical_architecture.md`
+/// Section 1).
+pub const MAX_RECEIVE_BYTES_PER_UPDATE: usize = 4 << 20;
 
 /// Placeholder: color of even grid squares, until map art exists. Replaced when sprites are
 /// decided (`docs/architecture/technical_architecture.md` Section 2).

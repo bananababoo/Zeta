@@ -38,3 +38,14 @@ pub const MAX_PROMPT_CHARACTERS: usize = 500;
 ///
 /// Placeholder until maps are partitioned (`docs/architecture/persistence.md` Section 3).
 pub const TEST_SCENE_MAP_PARTITION_ID: u64 = 0;
+
+/// Largest message the networking library should build before splitting component changes,
+/// in bytes. About 1 internet packet, the size the library is designed around.
+///
+/// Placeholder. Replaced when hosting is set up (`docs/architecture/technical_architecture.md` Section 1).
+pub const SPLIT_MESSAGE_BYTES: usize = 1200;
+
+/// Bytes read from 1 connection per update at most, so 1 flooding peer cannot stall the server.
+///
+/// Placeholder. Replaced when hosting is set up (`docs/architecture/technical_architecture.md` Section 1).
+pub const MAX_RECEIVE_BYTES_PER_UPDATE: usize = 4 << 20;

@@ -30,6 +30,9 @@ Decisions live in `docs/`; this file only points to them and records working kno
 | Live AI smoke test | `cargo run -p zeta_server --bin ai_check --offline` | bypass (network) |
 | Live DB smoke test | `cargo run -p zeta_server --bin db_check --offline` | bypass (Docker/DB) |
 | Live DB integration tests | `cargo test -p zeta_server --offline -- --ignored` | bypass (Docker/DB) |
+| Run the server | `cargo run -p zeta_server --offline` | bypass (sockets) |
+| Run a client (1 per player) | `cargo run -p zeta_client --offline` | bypass (sockets) |
+| Socket tests | `cargo test --workspace --offline --all-features -- --ignored` | bypass (sockets) |
 | Commit, push | `git commit`, `git push` | bypass (`.git` writes) |
 
 ## Environment Facts
@@ -39,6 +42,8 @@ Decisions live in `docs/`; this file only points to them and records working kno
 - The shell cannot elevate to admin. Installers that need admin are run by the Game Director.
 - `gh` is not installed. Remote: https://github.com/bananababoo/Zeta.git, branch `main`.
 - A Stop hook runs `tools/check_docs.ps1 -Hook`; a turn cannot end while docs fail.
+- The sandbox denies loopback connects (os error 10013), so socket tests are `#[ignore]` and run bypassed with `cargo test --workspace --offline --all-features -- --ignored`.
+- Server and client addresses come from `ZETA_LISTEN_ADDRESS` and `ZETA_SERVER_ADDRESS` (see `.env.example`).
 
 ## PowerShell Pitfalls
 - Read `$LASTEXITCODE`, not stderr. cargo and docker write progress to stderr on success.
@@ -56,7 +61,7 @@ Decisions live in `docs/`; this file only points to them and records working kno
 ## Roadmap & Open Work
 Update this list as milestones finish or new work is added. Each milestone builds additively as independent Bevy plugins + replicated ECS components (`docs/architecture/technical_architecture.md` Section 5).
 
-1. **Milestone 1 — Realism Prototype (`docs/prototypes/realism_prototype.md`):**
+1. **Milestone 1 — Realism Prototype (`docs/prototypes/realism_prototype.md`):** built; awaiting a Game Director playtest.
    - Server ECS world, `Snapshot` from live components, d20 roll, `WorldEffect` execution, and `EventLogStore` writes.
    - Add `bevy_replicon` multiplayer state replication between `zeta_server` and 2+ `zeta_client` instances.
    - Core client plugins only: 2D grid + WASD/click movement, Freeform Action Prompt, Turn Bubble banner, visible d20 roll, and shared narration/speech log.

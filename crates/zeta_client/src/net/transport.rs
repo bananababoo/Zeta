@@ -12,8 +12,7 @@ use std::time::Duration;
 use thiserror::Error;
 use zeta_core::wire::{Frame, FrameDecoder, FrameOutbox, WireError};
 
-/// Bytes read from the server per update at most, so 1 large burst cannot stall a frame.
-const MAX_RECEIVE_BYTES_PER_UPDATE: usize = 4 << 20;
+use crate::settings::MAX_RECEIVE_BYTES_PER_UPDATE;
 
 /// Size of 1 socket read.
 const READ_CHUNK_BYTES: usize = 16 * 1024;
