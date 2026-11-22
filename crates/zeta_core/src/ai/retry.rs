@@ -86,6 +86,7 @@ pub async fn resolve_action<P: AiProvider>(
         retries_left -= 1;
         request.messages.push(AiMessage::Assistant {
             text: response.text,
+            provider_turn: response.provider_turn,
         });
         request.messages.push(AiMessage::User {
             text: retry_message(&errors),
@@ -131,6 +132,7 @@ mod tests {
             messages: vec![AiMessage::User {
                 text: "I wave.".into(),
             }],
+            response_schema: None,
         }
     }
 
@@ -143,11 +145,13 @@ mod tests {
                 request: request.clone(),
                 response: AiResponse {
                     text: (*text).into(),
+                    provider_turn: None,
                 },
             });
             if let Err(errors) = parse_and_validate(text, &snapshot(), BOUNDS) {
                 request.messages.push(AiMessage::Assistant {
                     text: (*text).into(),
+                    provider_turn: None,
                 });
                 request.messages.push(AiMessage::User {
                     text: retry_message(&errors),
@@ -225,6 +229,48 @@ mod tests {
                 source: ProviderError::ReplayExhausted { position: 0 },
                 ..
             })
+        ));
+    }
+
+    #[test]
+    fn retry_forwards_provider_turn_into_assistant_message() {
+        let turn = serde_json::json!([
+            {"type": "thought", "signature": "sig-1"},
+            {"type": "model_output", "content": [{"type": "text", "text": INVALID}]}
+        ]);
+        let first_req = first_request();
+        let first_resp = AiResponse {
+            text: INVALID.into(),
+            provider_turn: Some(turn.clone()),
+        };
+        let errors = parse_and_validate(INVALID, &snapshot(), BOUNDS).expect_err("invalid");
+        let mut second_req = first_req.clone();
+        second_req.messages.push(AiMessage::Assistant {
+            text: INVALID.into(),
+            provider_turn: Some(turn.clone()),
+        });
+        second_req.messages.push(AiMessage::User {
+            text: retry_message(&errors),
+        });
+        let replay = ReplayProvider::new(vec![
+            AiExchange {
+                request: first_req.clone(),
+                response: first_resp,
+            },
+            AiExchange {
+                request: second_req,
+                response: AiResponse {
+                    text: VALID.into(),
+                    provider_turn: None,
+                },
+            },
+        ]);
+        let resolved =
+            block_on(resolve_action(&replay, first_req, &snapshot(), BOUNDS, 2)).expect("valid");
+        assert_eq!(resolved.exchanges.len(), 2);
+        assert!(matches!(
+            &resolved.exchanges[1].request.messages[1],
+            AiMessage::Assistant { provider_turn: Some(forwarded), .. } if forwarded == &turn
         ));
     }
 }

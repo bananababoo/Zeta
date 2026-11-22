@@ -59,9 +59,11 @@ mod tests {
                 messages: vec![AiMessage::User {
                     text: question.into(),
                 }],
+                response_schema: None,
             },
             response: AiResponse {
                 text: answer.into(),
+                provider_turn: None,
             },
         }
     }

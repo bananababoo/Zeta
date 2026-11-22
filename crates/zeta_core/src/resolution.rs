@@ -267,6 +267,167 @@ impl AiResolution {
             Branch::Failure => &self.fail,
         }
     }
+
+    /// JSON Schema for [`AiResolution`], matching the AI Resolution Schema wire format.
+    pub fn json_schema() -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "ok": { "type": "boolean" },
+                "chk": {
+                    "anyOf": [
+                        { "$ref": "#/$defs/Check" },
+                        { "type": "null" }
+                    ]
+                },
+                "fx": {
+                    "type": "array",
+                    "items": { "$ref": "#/$defs/WorldEffect" }
+                },
+                "fail": {
+                    "type": "array",
+                    "items": { "$ref": "#/$defs/WorldEffect" }
+                }
+            },
+            "required": ["ok", "chk", "fx", "fail"],
+            "$defs": {
+                "Check": object_schema(
+                    &serde_json::json!({
+                        "dc": { "type": "integer" },
+                        "reason": { "type": "string" }
+                    }),
+                    &["dc", "reason"],
+                ),
+                "Volume": {
+                    "type": "string",
+                    "enum": ["whisper", "normal", "shout"]
+                },
+                "Settle": settle_json_schema(),
+                "WorldEffect": world_effect_json_schema(),
+            }
+        })
+    }
+}
+
+fn object_schema(properties: &serde_json::Value, required: &[&str]) -> serde_json::Value {
+    serde_json::json!({
+        "type": "object",
+        "additionalProperties": false,
+        "properties": properties,
+        "required": required,
+    })
+}
+
+fn settle_json_schema() -> serde_json::Value {
+    object_schema(
+        &serde_json::json!({
+            "minutes": { "type": "integer" },
+            "add": { "type": "array", "items": { "type": "string" } },
+            "remove": { "type": "array", "items": { "type": "string" } },
+            "passable": { "type": ["boolean", "null"] },
+            "visual": { "type": ["string", "null"] }
+        }),
+        &["minutes", "add", "remove", "passable", "visual"],
+    )
+}
+
+fn world_effect_json_schema() -> serde_json::Value {
+    let mut variants = vec![
+        object_schema(
+            &serde_json::json!({
+                "op": { "type": "string", "enum": ["narrate"] },
+                "text": { "type": "string" }
+            }),
+            &["op", "text"],
+        ),
+        object_schema(
+            &serde_json::json!({
+                "op": { "type": "string", "enum": ["speak"] },
+                "id": { "type": "integer" },
+                "text": { "type": "string" },
+                "vol": { "$ref": "#/$defs/Volume" }
+            }),
+            &["op", "id", "text", "vol"],
+        ),
+        object_schema(
+            &serde_json::json!({
+                "op": { "type": "string", "enum": ["move"] },
+                "id": { "type": "integer" },
+                "x": { "type": "integer" },
+                "y": { "type": "integer" },
+                "style": { "type": "string" }
+            }),
+            &["op", "id", "x", "y", "style"],
+        ),
+    ];
+    variants.extend(settling_effect_schemas());
+    variants.extend([
+        object_schema(
+            &serde_json::json!({
+                "op": { "type": "string", "enum": ["destroy"] },
+                "id": { "type": "integer" },
+                "reason": { "type": "string" }
+            }),
+            &["op", "id", "reason"],
+        ),
+        object_schema(
+            &serde_json::json!({
+                "op": { "type": "string", "enum": ["history"] },
+                "ids": { "type": "array", "items": { "type": "integer" } },
+                "summary": { "type": "string" },
+                "preserved": { "type": "boolean" }
+            }),
+            &["op", "ids", "summary", "preserved"],
+        ),
+        object_schema(
+            &serde_json::json!({
+                "op": { "type": "string", "enum": ["bubble"] },
+                "active": { "type": "boolean" },
+                "ids": { "type": "array", "items": { "type": "integer" } }
+            }),
+            &["op", "active", "ids"],
+        ),
+    ]);
+    serde_json::json!({ "anyOf": variants })
+}
+
+fn settling_effect_schemas() -> [serde_json::Value; 2] {
+    let settle_ref = serde_json::json!({
+        "anyOf": [
+            { "$ref": "#/$defs/Settle" },
+            { "type": "null" }
+        ]
+    });
+    [
+        object_schema(
+            &serde_json::json!({
+                "op": { "type": "string", "enum": ["modify"] },
+                "id": { "type": "integer" },
+                "add": { "type": "array", "items": { "type": "string" } },
+                "remove": { "type": "array", "items": { "type": "string" } },
+                "passable": { "type": ["boolean", "null"] },
+                "visual": { "type": ["string", "null"] },
+                "settle": settle_ref.clone()
+            }),
+            &["op", "id", "add", "remove", "passable", "visual", "settle"],
+        ),
+        object_schema(
+            &serde_json::json!({
+                "op": { "type": "string", "enum": ["spawn"] },
+                "name": { "type": "string" },
+                "x": { "type": "integer" },
+                "y": { "type": "integer" },
+                "passable": { "type": "boolean" },
+                "tags": { "type": "array", "items": { "type": "string" } },
+                "visual": { "type": "string" },
+                "settle": settle_ref
+            }),
+            &[
+                "op", "name", "x", "y", "passable", "tags", "visual", "settle",
+            ],
+        ),
+    ]
 }
 
 #[cfg(test)]
@@ -474,5 +635,33 @@ mod tests {
             Err(BranchError::UnexpectedRoll)
         );
         assert_eq!(checked(1).branch(None), Err(BranchError::RollMissing));
+    }
+
+    #[test]
+    fn json_schema_forbids_unknown_properties_and_covers_all_effects() {
+        let schema = AiResolution::json_schema();
+        assert_eq!(schema["type"], "object");
+        assert_eq!(schema["additionalProperties"], false);
+        assert_eq!(
+            schema["required"],
+            serde_json::json!(["ok", "chk", "fx", "fail"])
+        );
+
+        let variants = schema["$defs"]["WorldEffect"]["anyOf"]
+            .as_array()
+            .expect("WorldEffect anyOf array");
+        let ops: Vec<&str> = variants
+            .iter()
+            .filter_map(|variant| variant["properties"]["op"]["enum"][0].as_str())
+            .collect();
+        assert_eq!(
+            ops,
+            [
+                "narrate", "speak", "move", "modify", "spawn", "destroy", "history", "bubble"
+            ]
+        );
+        for variant in variants {
+            assert_eq!(variant["additionalProperties"], false);
+        }
     }
 }

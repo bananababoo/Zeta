@@ -22,6 +22,9 @@ pub enum AiMessage {
     Assistant {
         /// Message text.
         text: String,
+        /// Provider-specific turn steps preserved verbatim for multi-turn retries.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        provider_turn: Option<serde_json::Value>,
     },
 }
 
@@ -32,6 +35,23 @@ pub struct AiRequest {
     pub system_prompt: String,
     /// The conversation so far, oldest first.
     pub messages: Vec<AiMessage>,
+    /// Optional JSON Schema enforcing the shape of the response.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub response_schema: Option<serde_json::Value>,
+}
+
+impl AiRequest {
+    /// Creates an initial request expecting an [`AiResolution`](crate::resolution::AiResolution)
+    /// JSON response.
+    pub fn for_resolution(system_prompt: impl Into<String>, user_text: impl Into<String>) -> Self {
+        Self {
+            system_prompt: system_prompt.into(),
+            messages: vec![AiMessage::User {
+                text: user_text.into(),
+            }],
+            response_schema: Some(crate::resolution::AiResolution::json_schema()),
+        }
+    }
 }
 
 /// 1 response from an AI provider.
@@ -39,6 +59,9 @@ pub struct AiRequest {
 pub struct AiResponse {
     /// The raw text the model returned.
     pub text: String,
+    /// Provider-specific turn steps to resend verbatim on the next turn of this conversation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_turn: Option<serde_json::Value>,
 }
 
 /// A request and the response it received, as recorded for replay and the Event Log.
@@ -142,6 +165,7 @@ mod tests {
         AiRequest {
             system_prompt: "system".into(),
             messages: vec![AiMessage::User { text: text.into() }],
+            response_schema: None,
         }
     }
 
@@ -150,11 +174,17 @@ mod tests {
         let original = vec![
             AiExchange {
                 request: request("a"),
-                response: AiResponse { text: "1".into() },
+                response: AiResponse {
+                    text: "1".into(),
+                    provider_turn: None,
+                },
             },
             AiExchange {
                 request: request("b"),
-                response: AiResponse { text: "2".into() },
+                response: AiResponse {
+                    text: "2".into(),
+                    provider_turn: None,
+                },
             },
         ];
         let recorder = RecordingProvider::new(ReplayProvider::new(original.clone()));
@@ -165,8 +195,52 @@ mod tests {
 
     #[test]
     fn messages_serialize_with_a_role_tag() {
-        let json =
-            serde_json::to_value(AiMessage::Assistant { text: "hi".into() }).expect("serializes");
+        let json = serde_json::to_value(AiMessage::Assistant {
+            text: "hi".into(),
+            provider_turn: None,
+        })
+        .expect("serializes");
         assert_eq!(json, serde_json::json!({"role": "assistant", "text": "hi"}));
+    }
+
+    #[test]
+    fn legacy_json_without_schema_or_provider_turn_deserializes_and_omits_none() {
+        let legacy_request = serde_json::json!({
+            "system_prompt": "sys",
+            "messages": [
+                {"role": "user", "text": "hi"},
+                {"role": "assistant", "text": "hello"}
+            ]
+        });
+        let parsed_request: AiRequest =
+            serde_json::from_value(legacy_request.clone()).expect("parses request");
+        assert_eq!(parsed_request.response_schema, None);
+        assert_eq!(
+            serde_json::to_value(&parsed_request).expect("serializes"),
+            legacy_request
+        );
+
+        let legacy_response = serde_json::json!({"text": "ok"});
+        let parsed_response: AiResponse =
+            serde_json::from_value(legacy_response.clone()).expect("parses response");
+        assert_eq!(parsed_response.provider_turn, None);
+        assert_eq!(
+            serde_json::to_value(&parsed_response).expect("serializes"),
+            legacy_response
+        );
+    }
+
+    #[test]
+    fn for_resolution_populates_resolution_json_schema() {
+        let request = AiRequest::for_resolution("sys", "act");
+        assert_eq!(request.system_prompt, "sys");
+        assert_eq!(
+            request.messages,
+            vec![AiMessage::User { text: "act".into() }]
+        );
+        assert_eq!(
+            request.response_schema,
+            Some(crate::resolution::AiResolution::json_schema())
+        );
     }
 }
