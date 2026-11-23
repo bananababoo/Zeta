@@ -940,20 +940,8 @@ mod tests {
         verb(&mut app, connection, request(ItemVerb::Drop, rope));
         assert_eq!(held(&app, character, "rope"), 0);
 
-        let tool = stack_of(&app, character, "painters_supplies");
-        verb(
-            &mut app,
-            connection,
-            ItemVerbRequest {
-                craft_target: Some(catalog_id("wooden_staff")),
-                ..request(ItemVerb::Craft, tool)
-            },
-        );
-        assert_eq!(held(&app, character, "wooden_staff"), 1);
-        assert_eq!(held(&app, character, "painters_supplies"), 1);
-
         let records = records(&app);
-        assert_eq!(records.len(), 4);
+        assert_eq!(records.len(), 3);
         assert!(records.iter().all(|record| matches!(
             &record.cause,
             zeta_core::event_log::EventCause::ItemVerb(cause) if cause.actor == character
@@ -963,7 +951,7 @@ mod tests {
         assert_eq!(position(&mut app, dropped[0]), start);
         assert_eq!(held(&app, dropped[0], "rope"), 1);
         let changes = item_changes(&app);
-        assert_eq!(changes.len(), 5, "{changes:?}");
+        assert_eq!(changes.len(), 4, "{changes:?}");
         assert_eq!(changes[0].kind, ItemChangeKind::Equipped);
         assert!(
             app.world()
@@ -988,14 +976,8 @@ mod tests {
             },
         );
         verb(&mut app, connection, request(ItemVerb::Consume, sword));
-        verb(
-            &mut app,
-            connection,
-            ItemVerbRequest {
-                craft_target: Some(catalog_id("longsword")),
-                ..request(ItemVerb::Craft, tool)
-            },
-        );
+        // The retired `Craft` is refused like any verb the item does not offer.
+        verb(&mut app, connection, request(ItemVerb::Craft, tool));
         verb(&mut app, connection, request(ItemVerb::Equip, StackId(999)));
 
         assert_eq!(held(&app, character, "longsword"), 1);

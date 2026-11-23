@@ -1,8 +1,7 @@
 //! Carried items: the deterministic item verbs players send, and the item awards and
 //! removals of AI DM effects.
 //!
-//! Rules: `docs/design/game_design.md` Section 5 (generic verbs, deterministic crafting, no
-//! AI call for item use) and `docs/architecture/ai_orchestration.md` Section 1. `Utilize`
+//! Rules: `docs/design/game_design.md` Section 5 (generic verbs, no AI call for item use) and `docs/architecture/ai_orchestration.md` Section 1. `Utilize`
 //! never arrives here: the client sends it as a Freeform Action Prompt with the item
 //! attached. Every verb and effect that moves items is written to the Event Log; items an
 //! entity carries vanish unrecorded when the entity is destroyed or its player leaves.
@@ -12,7 +11,7 @@ use zeta_core::catalog::{Catalog, CatalogId};
 use zeta_core::entity::EntityId;
 use zeta_core::event_log::{AppliedChange, EventCause, ItemChange, ItemChangeKind, ItemVerbCause};
 use zeta_core::grid::GridPos;
-use zeta_core::item_rules::{available_verbs, check_craft, display_name};
+use zeta_core::item_rules::{available_verbs, display_name};
 use zeta_core::pending_resolution::ChangeKind;
 use zeta_core::protocol::{
     Collider, Inventory, InventoryError, Item, ItemStack, ItemVerb, ItemVerbRequest, LogEntryKind,
@@ -149,11 +148,12 @@ fn perform(
         }
         ItemVerb::Drop => drop_stack(world, actor, &stack, request.quantity, &name),
         ItemVerb::Give => give(world, actor, &stack, request, &name),
-        ItemVerb::Craft => craft(world, actor, &stack, request, &name, catalog),
         // `Utilize` travels as a Freeform Action Prompt, never as an item verb.
         ItemVerb::Utilize => Err(format!(
             "Describe how you use the {name} in the action prompt."
         )),
+        // Retired; `available_verbs` never offers it, so the check above already refused it.
+        ItemVerb::Craft => Err(format!("The {name} cannot be used that way.")),
     }
 }
 
@@ -248,36 +248,6 @@ fn give(
         line: format!("Gives {count} {name} to {recipient_name}."),
         spawned: Vec::new(),
         items: vec![lost(actor, removed), gained(recipient, received)],
-    })
-}
-
-/// `Craft`: makes 1 catalog item the tool's catalog entry lists. Free and instant.
-fn craft(
-    world: &mut World,
-    actor: EntityId,
-    stack: &ItemStack,
-    request: &ItemVerbRequest,
-    name: &str,
-    catalog: &Catalog,
-) -> Result<VerbOutcome, String> {
-    let target = read_inventory(world, actor, |inventory| {
-        check_craft(
-            inventory,
-            stack.id(),
-            request.craft_target.as_ref(),
-            catalog,
-        )
-    })
-    .ok_or(NOT_CARRIED)?
-    .map_err(|error| refusal(&error))?;
-    let target_name = display_name(&Item::Catalog(target.clone()), catalog);
-    let made = change_inventory(world, actor, |inventory| {
-        inventory.gain(Item::Catalog(target), 1)
-    })?;
-    Ok(VerbOutcome {
-        line: format!("Crafts a {target_name} with the {name}."),
-        spawned: Vec::new(),
-        items: vec![gained(actor, made)],
     })
 }
 
@@ -387,15 +357,6 @@ fn inventory_refusal(error: &InventoryError) -> String {
     }
 }
 
-/// A refusal sentence from an error message.
-fn refusal(error: &impl std::fmt::Display) -> String {
-    let text = error.to_string();
-    let mut characters = text.chars();
-    characters.next().map_or_else(String::new, |first| {
-        format!("{}{}.", first.to_uppercase(), characters.as_str())
-    })
-}
-
 fn gained(holder: EntityId, stack: ItemStack) -> ItemChange {
     ItemChange {
         holder,
@@ -430,22 +391,7 @@ mod tests {
     }
 
     #[test]
-    fn players_start_with_a_crafting_tool() {
-        let inventory = starting_inventory(PLAYER_STARTING_ITEMS);
-        assert!(
-            inventory
-                .stacks()
-                .iter()
-                .any(|stack| { available_verbs(stack, Catalog::srd()).contains(&ItemVerb::Craft) })
-        );
-    }
-
-    #[test]
     fn refusals_are_sentences() {
-        assert_eq!(
-            refusal(&zeta_core::item_rules::CraftError::NoTarget),
-            "Choose what to craft."
-        );
         assert_eq!(
             inventory_refusal(&InventoryError::NoSuchStack(zeta_core::protocol::StackId(
                 3

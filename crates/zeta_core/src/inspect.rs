@@ -6,17 +6,18 @@
 use serde_json::{Value, json};
 
 use crate::catalog::Catalog;
+use crate::item_rules::entry_for_ai_dm;
 use crate::settings::CATALOG_QUERY_MAX_RESULTS;
 
 /// Looks up item catalog entries by name or identifier through [`Catalog::search`]. Returns
-/// `{"query", "total", "items": [full entries]}`, best matches first, at most
-/// [`CATALOG_QUERY_MAX_RESULTS`] entries.
+/// `{"query", "total", "items": [entries]}` with entries from [`entry_for_ai_dm`], best
+/// matches first, at most [`CATALOG_QUERY_MAX_RESULTS`] entries.
 pub fn catalog_query(catalog: &Catalog, query: &str) -> Value {
     let matches = catalog.search(query);
     let items: Vec<Value> = matches
         .iter()
         .take(CATALOG_QUERY_MAX_RESULTS)
-        .map(|item| json!(item))
+        .map(|item| entry_for_ai_dm(item))
         .collect();
     json!({
         "query": query,
@@ -35,6 +36,9 @@ mod tests {
         assert_eq!(answer["items"][0]["id"], "rope");
         assert_eq!(answer["items"][0]["category"], "adventuring_gear");
         assert_eq!(answer["query"], "rope");
+        let tools = catalog_query(Catalog::srd(), "painter's supplies");
+        assert_eq!(tools["items"][0]["id"], "painters_supplies");
+        assert!(tools["items"][0].get("crafts").is_none());
     }
 
     #[test]

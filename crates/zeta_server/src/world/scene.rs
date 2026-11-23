@@ -31,8 +31,7 @@ const OIL_BARREL_POSITION: GridPos = GridPos::new(8, 9);
 const GOBLIN_POSITION: GridPos = GridPos::new(12, 10);
 /// Where new player characters appear, or the nearest free square to it.
 pub(crate) const PLAYER_SPAWN_POSITION: GridPos = GridPos::new(4, 10);
-/// Catalog items and quantities every new player character carries. Painter's Supplies
-/// make `Craft` testable.
+/// Catalog items and quantities every new player character carries.
 pub(crate) const PLAYER_STARTING_ITEMS: &[(&str, u32)] = &[
     ("longsword", 1),
     ("rope", 1),

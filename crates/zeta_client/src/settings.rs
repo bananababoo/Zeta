@@ -105,6 +105,42 @@ pub const INVENTORY_KEY: KeyCode = KeyCode::KeyI;
 /// the client layout is decided (`docs/architecture/technical_architecture.md` Section 5).
 pub const INVENTORY_SCROLL_PIXELS_PER_LINE: f32 = 20.0;
 
+/// Placeholder: width and height of 1 inventory slot square in logical pixels. Replaced when
+/// the client layout is decided (`docs/architecture/technical_architecture.md` Section 5).
+pub const INVENTORY_SLOT_SIZE_PIXELS: f32 = 40.0;
+
+/// Placeholder: logical pixels between inventory slot squares. Replaced when the client layout
+/// is decided (`docs/architecture/technical_architecture.md` Section 5).
+pub const INVENTORY_SLOT_GAP_PIXELS: f32 = 4.0;
+
+/// Placeholder: logical pixels between a slot and its tooltip or action menu. Replaced when
+/// the client layout is decided (`docs/architecture/technical_architecture.md` Section 5).
+pub const INVENTORY_POPUP_GAP_PIXELS: f32 = 6.0;
+
+/// Placeholder: width of the border that marks an equipped slot, in logical pixels. Replaced
+/// when the client layout is decided (`docs/architecture/technical_architecture.md`
+/// Section 5).
+pub const INVENTORY_EQUIPPED_BORDER_PIXELS: f32 = 3.0;
+
+/// Placeholder: color of the border that marks an equipped slot. Replaced when the client
+/// layout is decided (`docs/architecture/technical_architecture.md` Section 5).
+pub const INVENTORY_EQUIPPED_BORDER_COLOR: Color = Color::srgb(1.0, 0.85, 0.3);
+
+/// Placeholder: color of weapon slots. Replaced when item art is decided
+/// (`docs/architecture/technical_architecture.md` Section 2).
+pub const INVENTORY_WEAPON_COLOR: Color = Color::srgb(0.6, 0.22, 0.2);
+
+/// Placeholder: color of armor and shield slots. Replaced when item art is decided
+/// (`docs/architecture/technical_architecture.md` Section 2).
+pub const INVENTORY_ARMOR_COLOR: Color = Color::srgb(0.25, 0.35, 0.6);
+
+/// Placeholder: color of tool slots. Replaced when item art is decided
+/// (`docs/architecture/technical_architecture.md` Section 2).
+pub const INVENTORY_TOOL_COLOR: Color = Color::srgb(0.55, 0.42, 0.2);
+
+/// Placeholder: color of every other slot, including custom items. Replaced when item art is
+/// decided (`docs/architecture/technical_architecture.md` Section 2).
+pub const INVENTORY_GEAR_COLOR: Color = Color::srgb(0.3, 0.45, 0.3);
 /// Placeholder: longest wait between updates while the window has focus and nothing happens.
 /// Input wakes the client at once; this bounds how late server messages and timers are seen.
 /// Replaced when client performance targets are decided
@@ -144,10 +180,35 @@ pub struct ClientSettings {
     pub inventory_key: KeyCode,
     /// Logical pixels the inventory panel scrolls per mouse wheel line.
     pub inventory_scroll_pixels_per_line: f32,
+    /// Size, spacing, and colors of the inventory slot grid.
+    pub inventory_slots: InventorySlotSettings,
     /// Longest wait between updates while the window has focus.
     pub focused_update_wait: Duration,
     /// Longest wait between updates while the window is out of focus.
     pub unfocused_update_wait: Duration,
+}
+
+/// Size, spacing, and colors of the inventory slot grid, in logical pixels.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct InventorySlotSettings {
+    /// Width and height of 1 slot square.
+    pub size_pixels: f32,
+    /// Space between slot squares.
+    pub gap_pixels: f32,
+    /// Space between a slot and its tooltip or action menu.
+    pub popup_gap_pixels: f32,
+    /// Width of the border that marks an equipped slot.
+    pub equipped_border_pixels: f32,
+    /// Color of the border that marks an equipped slot.
+    pub equipped_border_color: Color,
+    /// Color of weapon slots.
+    pub weapon_color: Color,
+    /// Color of armor and shield slots.
+    pub armor_color: Color,
+    /// Color of tool slots.
+    pub tool_color: Color,
+    /// Color of every other slot, including custom items.
+    pub gear_color: Color,
 }
 
 /// The 4 keys that move the local character 1 square.
@@ -183,6 +244,17 @@ impl Default for ClientSettings {
             end_turn_key: END_TURN_KEY,
             inventory_key: INVENTORY_KEY,
             inventory_scroll_pixels_per_line: INVENTORY_SCROLL_PIXELS_PER_LINE,
+            inventory_slots: InventorySlotSettings {
+                size_pixels: INVENTORY_SLOT_SIZE_PIXELS,
+                gap_pixels: INVENTORY_SLOT_GAP_PIXELS,
+                popup_gap_pixels: INVENTORY_POPUP_GAP_PIXELS,
+                equipped_border_pixels: INVENTORY_EQUIPPED_BORDER_PIXELS,
+                equipped_border_color: INVENTORY_EQUIPPED_BORDER_COLOR,
+                weapon_color: INVENTORY_WEAPON_COLOR,
+                armor_color: INVENTORY_ARMOR_COLOR,
+                tool_color: INVENTORY_TOOL_COLOR,
+                gear_color: INVENTORY_GEAR_COLOR,
+            },
             focused_update_wait: FOCUSED_UPDATE_WAIT,
             unfocused_update_wait: UNFOCUSED_UPDATE_WAIT,
         }

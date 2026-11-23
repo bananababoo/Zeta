@@ -8,6 +8,7 @@ Decisions live in `docs/`; this file only points to them and records working kno
 - The Game Director writes Lore. Agents build Lore-independent code unless asked otherwise.
 - **Longevity Principle:** prefer the choice that stays easy to maintain for years over the quick one.
 - Never write your own ideas into docs without the Game Director's approval.
+- Build only what the Game Director asked for. If a feature depends on rules nobody has decided yet (crafting materials, for example), ask first. Never ship a placeholder version of it.
 
 ## Where Decisions Live
 | Topic | File |
@@ -82,7 +83,8 @@ Update this list as milestones finish or new work is added. Each milestone build
    - Add `bevy_replicon` multiplayer state replication between `zeta_server` and 2+ `zeta_client` instances.
    - Core client plugins only: 2D grid + WASD/click movement, Freeform Action Prompt, Turn Bubble banner, visible d20 roll, and shared narration/speech log.
 2. **Milestone 2 — 2024 5e SRD 5.2.1 Item Catalog & Inventory (`docs/design/game_design.md` Section 5):** built; awaiting a Game Director playtest. Regenerate the catalog with `tools/import_srd_catalog.ps1`.
-   - Follow-ups: native `inspect` tool-calling (only the pure `catalog_query` exists), magic items import, craft materials and time (Craft is free and instant), equip slots, a pick-up verb for dropped piles, and Event Log records when a holder is destroyed or a player disconnects.
+   - Follow-ups: native `inspect` tool-calling (only the pure `catalog_query` exists), magic items import, equip slots, a pick-up verb for dropped piles, and Event Log records when a holder is destroyed or a player disconnects.
+   - Crafting was removed. It waits for a Game Director design of material requirements.
    - Import official CC-BY-4.0 SRD 5.2.1 equipment/tools catalog into `zeta_core` (source: 5e.tools GitHub data filtered to entries flagged `srd52` only, never Basic Rules-only or book-only entries; add CC-BY-4.0 attribution; raw 5e.tools files are never committed).
    - Add replicated `Inventory` + client item cards with generic verbs (`Equip`, `Drop`, `Give`, `Consume`, deterministic `Craft`, and `Utilize` -> pre-attached Freeform Action Prompt).
    - Validate AI-awarded `catalog_id`s in `zeta_core::validation`, add narrative-only custom item escape hatch (no combat stats or crafting recipes), and expose catalog lookup via the AI `inspect` tool.

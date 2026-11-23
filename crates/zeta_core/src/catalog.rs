@@ -110,7 +110,8 @@ pub struct CatalogItem {
     /// Checks attached to the Freeform Action Prompt when the item is used with `Utilize`.
     #[serde(rename = "utilize", default)]
     pub utilize: Vec<UtilizeCheck>,
-    /// Entries this tool can `Craft`; an item group means any of its members.
+    /// Entries the SRD says this tool makes; an item group means any of its members. Source data
+    /// only: nothing uses or shows it until crafting is designed.
     #[serde(rename = "crafts", default)]
     pub crafts: Vec<CatalogId>,
     /// What a pack or bundle holds.
@@ -346,7 +347,7 @@ pub struct ToolData {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ToolKind {
-    /// Artisan's tools, which can `Craft`.
+    /// Artisan's tools.
     Artisans,
     /// Gaming set.
     GamingSet,
@@ -588,22 +589,6 @@ impl Catalog {
         exact.extend(partial);
         exact
     }
-
-    /// Entries that can `Craft` `id`, directly or through an item group that contains it, sorted by
-    /// identifier.
-    pub fn crafted_by(&self, id: &CatalogId) -> Vec<&CatalogItem> {
-        self.items
-            .values()
-            .filter(|crafter| {
-                crafter.crafts.iter().any(|crafted| {
-                    crafted == id
-                        || self
-                            .get(crafted)
-                            .is_some_and(|group| group.group_members.contains(id))
-                })
-            })
-            .collect()
-    }
 }
 
 #[cfg(test)]
@@ -795,23 +780,6 @@ mod tests {
             item: id("torch"),
             quantity: 10
         }));
-    }
-
-    #[test]
-    fn crafted_by_finds_tools_through_item_groups() {
-        let catalog = Catalog::srd();
-        let crafters: Vec<&str> = catalog
-            .crafted_by(&id("amulet"))
-            .iter()
-            .map(|item| item.id.as_str())
-            .collect();
-        assert_eq!(crafters, vec!["jewelers_tools", "painters_supplies"]);
-        let rope_crafters: Vec<&str> = catalog
-            .crafted_by(&id("rope"))
-            .iter()
-            .map(|item| item.id.as_str())
-            .collect();
-        assert_eq!(rope_crafters, vec!["weavers_tools"]);
     }
 
     #[test]

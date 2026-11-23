@@ -1,50 +1,74 @@
-//! Inventory panel: the local character's replicated `Inventory` as item cards with verb
-//! buttons, opened with a key or a button.
+//! Inventory panel: the local character's replicated `Inventory` as a grid of small colored
+//! slots, opened with a key or a button.
 //!
 //! Rules: `docs/design/game_design.md` Section 5 and `docs/architecture/technical_architecture.md`
-//! Section 5. Buttons send `ItemVerbRequest`; the server decides every outcome and refuses
-//! with a log line. `Utilize` sends nothing: it opens the Freeform Action Prompt with the item
-//! attached, and the server attaches the catalog checks to that prompt.
+//! Section 5. Each slot is 1 stack: its color and letter name the item category, a corner
+//! number shows a quantity above 1, and a border marks an equipped item. Hovering a slot shows
+//! a tooltip with the full details; clicking it opens a menu of the item's verbs. Menu entries
+//! send `ItemVerbRequest`; the server decides every outcome and refuses with a log line.
+//! `Utilize` sends nothing: it opens the Freeform Action Prompt with the item attached, and
+//! the server attaches the catalog checks to that prompt. At most 1 popup (tooltip or menu)
+//! exists at a time, and every popup change requests a redraw for reactive frame pacing.
 
 use std::fmt::Debug;
 
 use bevy::input::mouse::{MouseScrollUnit, MouseWheel};
 use bevy::prelude::*;
 use bevy::ui::UiGlobalTransform;
-use bevy::window::PrimaryWindow;
-use zeta_core::catalog::{Ability, Catalog, CatalogId, CatalogItem, Cost, Dice, UtilizeCheck};
+use bevy::window::{PrimaryWindow, RequestRedraw};
+use zeta_core::catalog::{
+    Ability, Catalog, CatalogId, CatalogItem, Cost, Dice, ItemCategory, UtilizeCheck,
+};
 use zeta_core::entity::EntityId;
 use zeta_core::grid::GridPos;
-use zeta_core::item_rules::{
-    available_verbs, catalog_entry, craftable_targets, display_name, utilize_checks,
-};
+use zeta_core::item_rules::{available_verbs, catalog_entry, display_name, utilize_checks};
 use zeta_core::protocol::{
-    Collider, EntityName, Inventory, Item, ItemStack, ItemVerb, ItemVerbRequest,
+    Collider, EntityName, Inventory, Item, ItemStack, ItemVerb, ItemVerbRequest, StackId,
 };
 
-use crate::focus::{TextEntryActive, TextEntryUpdate, UiPanel, cursor_is_over_any, key_label};
+use crate::focus::{
+    TextEntryActive, TextEntryUpdate, UiPanel, cursor_is_over, cursor_is_over_any, key_label,
+};
 use crate::player::LocalPlayer;
 use crate::prompt::{OpenPromptWithItem, PromptAttachment};
-use crate::settings::ClientSettings;
+use crate::settings::{ClientSettings, InventorySlotSettings};
 
 /// Font size of the panel heading.
 const HEADING_FONT_SIZE: f32 = 18.0;
-/// Font size of the card text.
-const CARD_FONT_SIZE: f32 = 14.0;
-/// Font size of the verb buttons and the toggle button.
+/// Font size of the category letter inside a slot.
+const SLOT_LETTER_FONT_SIZE: f32 = 18.0;
+/// Font size of the quantity in a slot's corner.
+const SLOT_QUANTITY_FONT_SIZE: f32 = 11.0;
+/// Font size of the tooltip text.
+const TOOLTIP_FONT_SIZE: f32 = 14.0;
+/// Font size of the menu entries and the toggle button.
 const BUTTON_FONT_SIZE: f32 = 14.0;
 /// Width of the panel in logical pixels.
 const PANEL_WIDTH_PIXELS: f32 = 360.0;
+/// Widest a tooltip grows, in logical pixels, before its text wraps.
+const TOOLTIP_MAX_WIDTH_PIXELS: f32 = 300.0;
+/// Draw order of popups above every other UI node.
+const POPUP_Z_INDEX: i32 = 10;
 /// Shown for a recipient whose name has not replicated yet.
 const UNNAMED_RECIPIENT: &str = "someone";
-/// Card line for a catalog id the client's catalog lacks.
+/// Tooltip line for a catalog id the client's catalog lacks.
 const UNKNOWN_CATALOG_ITEM: &str = "Not in this client's catalog";
 
 /// Whether the inventory panel is open.
 #[derive(Resource, Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct InventoryPanelOpen(pub bool);
 
-/// Marks the inventory panel, the parent of the heading and every card.
+/// Which slot is hovered and which slot's menu is open. The menu wins over the tooltip, so
+/// at most 1 popup shows.
+#[derive(Resource, Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct InventoryPopups {
+    /// The stack under the cursor, which gets the tooltip.
+    pub hovered: Option<StackId>,
+    /// The stack whose action menu is open.
+    pub menu: Option<StackId>,
+}
+
+/// Marks the inventory panel, the parent of the heading and the slot grid.
 #[derive(Component, Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct InventoryPanel;
 
@@ -52,44 +76,77 @@ pub struct InventoryPanel;
 #[derive(Component, Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct InventoryToggleButton;
 
-/// A verb button on a card; clicking it performs the action it carries.
-#[derive(Component, Clone, Debug, PartialEq, Eq)]
-pub struct CardActionButton(pub CardActionKind);
+/// 1 slot in the grid, showing this stack.
+#[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct InventorySlot(pub StackId);
 
-/// What a card button does.
+/// Marks the hover tooltip.
+#[derive(Component, Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct InventoryTooltip;
+
+/// Marks the action menu of a clicked slot.
+#[derive(Component, Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct InventoryMenu;
+
+/// An entry in the action menu; clicking it performs the action it carries.
+#[derive(Component, Clone, Debug, PartialEq, Eq)]
+pub struct MenuEntry(pub MenuActionKind);
+
+/// What a menu entry does.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum CardActionKind {
+pub enum MenuActionKind {
     /// Sends this request to the server.
     Send(ItemVerbRequest),
     /// Opens the Freeform Action Prompt with the item attached.
     Utilize(OpenPromptWithItem),
 }
 
-/// 1 button on a card.
+/// 1 entry in a slot's action menu.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct CardAction {
-    /// Button text, such as `Give to Bram`.
+pub struct MenuAction {
+    /// Entry text, such as `Give to Bram`.
     pub label: String,
-    /// What the button does.
-    pub kind: CardActionKind,
+    /// What the entry does.
+    pub kind: MenuActionKind,
 }
 
-/// 1 item card: its text and its buttons.
+/// The category a slot shows through its color and letter.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SlotCategory {
+    /// A melee or ranged weapon.
+    Weapon,
+    /// Armor or a shield.
+    Armor,
+    /// A tool.
+    Tool,
+    /// Everything else, including custom items.
+    Gear,
+}
+
+/// 1 slot: its look, its tooltip and its menu.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct CardView {
-    /// The lines of the card.
-    pub text: String,
-    /// The buttons, in display order.
-    pub actions: Vec<CardAction>,
+pub struct SlotView {
+    /// The stack the slot shows.
+    pub stack: StackId,
+    /// Decides the color and letter.
+    pub category: SlotCategory,
+    /// The corner number, present above 1.
+    pub quantity: Option<String>,
+    /// Whether the slot gets the equipped border.
+    pub equipped: bool,
+    /// The hover tooltip text.
+    pub tooltip: String,
+    /// The click menu entries, in display order.
+    pub actions: Vec<MenuAction>,
 }
 
 /// Everything the panel shows.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PanelView {
-    /// The line above the cards.
+    /// The line above the slots.
     pub heading: String,
-    /// 1 card per carried stack, in inventory order.
-    pub cards: Vec<CardView>,
+    /// 1 slot per carried stack, in inventory order.
+    pub slots: Vec<SlotView>,
 }
 
 /// An entity next to the local character that can take a `Give`.
@@ -101,7 +158,11 @@ pub struct Recipient {
     pub id: EntityId,
 }
 
-/// The inventory panel, its toggle button, and the verb buttons.
+/// The panel view built last, which the popups read their content from.
+#[derive(Resource, Clone, Debug, Default, PartialEq, Eq)]
+struct ShownInventory(Option<PanelView>);
+
+/// The inventory panel, its toggle button, the slot tooltip, and the slot action menu.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct InventoryPlugin;
 
@@ -111,7 +172,10 @@ impl Plugin for InventoryPlugin {
             .init_resource::<LocalPlayer>()
             .init_resource::<TextEntryActive>()
             .init_resource::<InventoryPanelOpen>()
+            .init_resource::<InventoryPopups>()
+            .init_resource::<ShownInventory>()
             .add_message::<OpenPromptWithItem>()
+            .add_message::<RequestRedraw>()
             .add_systems(Startup, spawn_inventory_ui)
             .add_systems(
                 Update,
@@ -119,9 +183,13 @@ impl Plugin for InventoryPlugin {
                     (
                         toggle_by_key.after(TextEntryUpdate),
                         toggle_by_click,
-                        act_by_click,
+                        close_menu_by_key.after(TextEntryUpdate),
                     ),
+                    click_menu,
+                    click_slot,
                     refresh_panel,
+                    track_hover,
+                    refresh_popups,
                     scroll_panel,
                 )
                     .chain(),
@@ -203,14 +271,7 @@ fn catalog_name(id: &CatalogId, catalog: &Catalog) -> String {
     display_name(&Item::Catalog(id.clone()), catalog)
 }
 
-fn names(ids: &[CatalogId], catalog: &Catalog) -> String {
-    ids.iter()
-        .map(|id| catalog_name(id, catalog))
-        .collect::<Vec<_>>()
-        .join(", ")
-}
-
-/// The card lines below the heading for a catalog entry.
+/// The tooltip lines below the heading for a catalog entry.
 fn catalog_lines(entry: &CatalogItem, catalog: &Catalog) -> Vec<String> {
     let mut summary = vec![words(entry.category)];
     summary.extend(entry.cost.map(cost_text));
@@ -268,9 +329,6 @@ fn catalog_lines(entry: &CatalogItem, catalog: &Catalog) -> Vec<String> {
     for check in &entry.utilize {
         lines.push(format!("Utilize: {}", check_text(check, tool_ability)));
     }
-    if !entry.crafts.is_empty() {
-        lines.push(format!("Crafts: {}", names(&entry.crafts, catalog)));
-    }
     if !entry.contents.is_empty() {
         let contents: Vec<String> = entry
             .contents
@@ -288,9 +346,9 @@ fn catalog_lines(entry: &CatalogItem, catalog: &Catalog) -> Vec<String> {
     lines
 }
 
-/// The text of 1 item card: the name, quantity and equipped state, then the catalog data or
+/// The tooltip of 1 slot: the name, quantity and equipped state, then the catalog data or
 /// the custom item's weight, description and tags.
-pub fn card_text(stack: &ItemStack, catalog: &Catalog) -> String {
+pub fn tooltip_text(stack: &ItemStack, catalog: &Catalog) -> String {
     let mut heading = display_name(stack.item(), catalog);
     if stack.quantity() > 1 {
         heading.push_str(" x");
@@ -322,6 +380,42 @@ pub fn card_text(stack: &ItemStack, catalog: &Catalog) -> String {
     lines.join("\n")
 }
 
+/// The slot category of a stack. Shields are armor in the catalog, so they count as armor.
+/// Custom items and ids the client's catalog lacks are gear.
+pub fn slot_category(stack: &ItemStack, catalog: &Catalog) -> SlotCategory {
+    match catalog_entry(stack, catalog).map(|entry| entry.category) {
+        Some(ItemCategory::Weapon) => SlotCategory::Weapon,
+        Some(ItemCategory::Armor) => SlotCategory::Armor,
+        Some(ItemCategory::Tool) => SlotCategory::Tool,
+        _ => SlotCategory::Gear,
+    }
+}
+
+/// The letter inside a slot: `W`, `A`, `T` or `G`.
+pub fn slot_letter(category: SlotCategory) -> char {
+    match category {
+        SlotCategory::Weapon => 'W',
+        SlotCategory::Armor => 'A',
+        SlotCategory::Tool => 'T',
+        SlotCategory::Gear => 'G',
+    }
+}
+
+/// The fill color of a slot, from the settings.
+pub fn slot_color(category: SlotCategory, settings: &InventorySlotSettings) -> Color {
+    match category {
+        SlotCategory::Weapon => settings.weapon_color,
+        SlotCategory::Armor => settings.armor_color,
+        SlotCategory::Tool => settings.tool_color,
+        SlotCategory::Gear => settings.gear_color,
+    }
+}
+
+/// The corner number of a slot: the quantity when it is above 1.
+pub fn quantity_label(stack: &ItemStack) -> Option<String> {
+    (stack.quantity() > 1).then(|| stack.quantity().to_string())
+}
+
 /// The prompt opening for `Utilize`: the item and its checks attached, and starting text.
 pub fn utilize_opening(stack: &ItemStack, catalog: &Catalog) -> OpenPromptWithItem {
     let name = display_name(stack.item(), catalog);
@@ -341,57 +435,53 @@ pub fn utilize_opening(stack: &ItemStack, catalog: &Catalog) -> OpenPromptWithIt
     }
 }
 
-fn request(
-    verb: ItemVerb,
-    stack: &ItemStack,
-    recipient: Option<EntityId>,
-    craft_target: Option<CatalogId>,
-) -> CardActionKind {
-    CardActionKind::Send(ItemVerbRequest {
+fn request(verb: ItemVerb, stack: &ItemStack, recipient: Option<EntityId>) -> MenuActionKind {
+    MenuActionKind::Send(ItemVerbRequest {
         verb,
         stack: stack.id(),
         quantity: 1,
         recipient,
-        craft_target,
+        craft_target: None,
     })
 }
 
-/// The buttons of 1 card, from the verbs the item offers. Each request moves 1 item. `Give`
-/// becomes 1 button per adjacent recipient and none without one; `Craft` becomes 1 button
-/// per target the item's catalog entry crafts.
-pub fn card_actions(
+/// The action menu of 1 slot, from the verbs the item offers. Each request moves 1 item.
+/// `Give` becomes 1 entry per adjacent recipient and none without one.
+pub fn menu_actions(
     stack: &ItemStack,
     catalog: &Catalog,
     recipients: &[Recipient],
-) -> Vec<CardAction> {
+) -> Vec<MenuAction> {
     let mut actions = Vec::new();
     for verb in available_verbs(stack, catalog) {
         match verb {
             ItemVerb::Give => {
-                actions.extend(recipients.iter().map(|recipient| CardAction {
+                actions.extend(recipients.iter().map(|recipient| MenuAction {
                     label: format!("Give to {}", recipient.name),
-                    kind: request(verb, stack, Some(recipient.id), None),
+                    kind: request(verb, stack, Some(recipient.id)),
                 }));
             }
-            ItemVerb::Craft => {
-                actions.extend(craftable_targets(stack, catalog).into_iter().map(|target| {
-                    CardAction {
-                        label: format!("Craft {}", catalog_name(&target, catalog)),
-                        kind: request(verb, stack, None, Some(target)),
-                    }
-                }));
-            }
-            ItemVerb::Utilize => actions.push(CardAction {
+            ItemVerb::Utilize => actions.push(MenuAction {
                 label: words(verb),
-                kind: CardActionKind::Utilize(utilize_opening(stack, catalog)),
+                kind: MenuActionKind::Utilize(utilize_opening(stack, catalog)),
             }),
-            _ => actions.push(CardAction {
+            _ => actions.push(MenuAction {
                 label: words(verb),
-                kind: request(verb, stack, None, None),
+                kind: request(verb, stack, None),
             }),
         }
     }
     actions
+}
+
+/// The top-left corner, in logical pixels, of a popup placed `gap` logical pixels right of
+/// a slot. `center` and `size` are the slot's in physical pixels, as layout computes them;
+/// `inverse_scale` converts physical pixels to logical ones.
+pub fn popup_position(center: Vec2, size: Vec2, inverse_scale: f32, gap: f32) -> Vec2 {
+    Vec2::new(
+        (center.x + size.x / 2.0) * inverse_scale + gap,
+        (center.y - size.y / 2.0) * inverse_scale,
+    )
 }
 
 /// Entities that can take a `Give` from the character `own` at `own_pos`: inventory holders
@@ -435,13 +525,13 @@ pub fn panel_view(
     let Some(inventory) = inventory else {
         return PanelView {
             heading: "Inventory: waiting for your character".to_owned(),
-            cards: Vec::new(),
+            slots: Vec::new(),
         };
     };
     if inventory.stacks().is_empty() {
         return PanelView {
             heading: "Inventory: nothing carried".to_owned(),
-            cards: Vec::new(),
+            slots: Vec::new(),
         };
     }
     let total: u64 = inventory
@@ -458,15 +548,44 @@ pub fn panel_view(
         .sum();
     PanelView {
         heading: format!("Inventory: {} carried", weight_text(total)),
-        cards: inventory
+        slots: inventory
             .stacks()
             .iter()
-            .map(|stack| CardView {
-                text: card_text(stack, catalog),
-                actions: card_actions(stack, catalog, recipients),
+            .map(|stack| SlotView {
+                stack: stack.id(),
+                category: slot_category(stack, catalog),
+                quantity: quantity_label(stack),
+                equipped: stack.equipped(),
+                tooltip: tooltip_text(stack, catalog),
+                actions: menu_actions(stack, catalog, recipients),
             })
             .collect(),
     }
+}
+
+/// What a popup shows.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum PopupContent {
+    /// A hover tooltip with this text.
+    Tooltip(String),
+    /// An action menu with these entries.
+    Menu(Vec<MenuAction>),
+}
+
+/// The popup `popups` asks for, if its slot is in `view`: the open menu, else the hovered
+/// slot's tooltip.
+fn wanted_popup(
+    popups: InventoryPopups,
+    view: Option<&PanelView>,
+) -> Option<(StackId, PopupContent)> {
+    let slot = |stack: StackId| view.and_then(|view| view.slots.iter().find(|s| s.stack == stack));
+    if let Some(stack) = popups.menu {
+        return slot(stack).map(|slot| (stack, PopupContent::Menu(slot.actions.clone())));
+    }
+    popups
+        .hovered
+        .and_then(slot)
+        .map(|slot| (slot.stack, PopupContent::Tooltip(slot.tooltip.clone())))
 }
 
 #[allow(
@@ -512,52 +631,120 @@ fn spawn_inventory_ui(mut commands: Commands, settings: Res<ClientSettings>) {
     ));
 }
 
-/// Spawns the heading and cards of `view` under the panel.
-fn spawn_view(panel: &mut ChildSpawnerCommands, view: &PanelView) {
+/// Spawns 1 slot square of the grid.
+fn spawn_slot(grid: &mut ChildSpawnerCommands, slot: &SlotView, look: &InventorySlotSettings) {
+    let border = if slot.equipped {
+        UiRect::all(Val::Px(look.equipped_border_pixels))
+    } else {
+        UiRect::default()
+    };
+    grid.spawn((
+        InventorySlot(slot.stack),
+        Node {
+            width: Val::Px(look.size_pixels),
+            height: Val::Px(look.size_pixels),
+            align_items: AlignItems::Center,
+            justify_content: JustifyContent::Center,
+            border,
+            ..default()
+        },
+        BackgroundColor(slot_color(slot.category, look)),
+        BorderColor::all(look.equipped_border_color),
+    ))
+    .with_children(|square| {
+        square.spawn((
+            Text::new(slot_letter(slot.category).to_string()),
+            TextFont::from_font_size(SLOT_LETTER_FONT_SIZE),
+        ));
+        if let Some(quantity) = &slot.quantity {
+            square.spawn((
+                Node {
+                    position_type: PositionType::Absolute,
+                    right: Val::Px(2.0),
+                    bottom: Val::Px(0.0),
+                    ..default()
+                },
+                Text::new(quantity.clone()),
+                TextFont::from_font_size(SLOT_QUANTITY_FONT_SIZE),
+            ));
+        }
+    });
+}
+
+/// Spawns the heading and the slot grid of `view` under the panel.
+fn spawn_view(panel: &mut ChildSpawnerCommands, view: &PanelView, look: &InventorySlotSettings) {
     panel.spawn((
         Text::new(view.heading.clone()),
         TextFont::from_font_size(HEADING_FONT_SIZE),
     ));
-    for card in &view.cards {
-        panel
+    panel
+        .spawn(Node {
+            flex_wrap: FlexWrap::Wrap,
+            column_gap: Val::Px(look.gap_pixels),
+            row_gap: Val::Px(look.gap_pixels),
+            ..default()
+        })
+        .with_children(|grid| {
+            for slot in &view.slots {
+                spawn_slot(grid, slot, look);
+            }
+        });
+}
+
+/// Spawns a popup with its top-left corner at `position` in logical pixels, above every
+/// other node. The menu takes clicks, so it is a `UiPanel`; the tooltip only shows text.
+fn spawn_popup(commands: &mut Commands, content: &PopupContent, position: Vec2) -> Entity {
+    let node = Node {
+        position_type: PositionType::Absolute,
+        left: Val::Px(position.x),
+        top: Val::Px(position.y),
+        flex_direction: FlexDirection::Column,
+        padding: UiRect::all(Val::Px(6.0)),
+        row_gap: Val::Px(4.0),
+        ..default()
+    };
+    let background = BackgroundColor(Color::srgba(0.1, 0.1, 0.15, 0.95));
+    match content {
+        PopupContent::Tooltip(text) => commands
             .spawn((
+                InventoryTooltip,
                 Node {
-                    flex_direction: FlexDirection::Column,
-                    padding: UiRect::all(Val::Px(6.0)),
-                    row_gap: Val::Px(4.0),
-                    ..default()
+                    max_width: Val::Px(TOOLTIP_MAX_WIDTH_PIXELS),
+                    ..node
                 },
-                BackgroundColor(Color::srgba(0.15, 0.15, 0.2, 0.9)),
+                background,
+                GlobalZIndex(POPUP_Z_INDEX),
             ))
-            .with_children(|card_node| {
-                card_node.spawn((
-                    Text::new(card.text.clone()),
-                    TextFont::from_font_size(CARD_FONT_SIZE),
-                ));
-                card_node
-                    .spawn(Node {
-                        flex_wrap: FlexWrap::Wrap,
-                        column_gap: Val::Px(4.0),
-                        row_gap: Val::Px(4.0),
-                        ..default()
-                    })
-                    .with_children(|row| {
-                        for action in &card.actions {
-                            row.spawn((
-                                CardActionButton(action.kind.clone()),
-                                Node {
-                                    padding: UiRect::axes(Val::Px(8.0), Val::Px(3.0)),
-                                    ..default()
-                                },
-                                BackgroundColor(Color::srgb(0.3, 0.3, 0.5)),
-                            ))
-                            .with_child((
-                                Text::new(action.label.clone()),
-                                TextFont::from_font_size(BUTTON_FONT_SIZE),
-                            ));
-                        }
-                    });
-            });
+            .with_child((
+                Text::new(text.clone()),
+                TextFont::from_font_size(TOOLTIP_FONT_SIZE),
+            ))
+            .id(),
+        PopupContent::Menu(actions) => commands
+            .spawn((
+                InventoryMenu,
+                UiPanel,
+                node,
+                background,
+                GlobalZIndex(POPUP_Z_INDEX),
+            ))
+            .with_children(|menu| {
+                for action in actions {
+                    menu.spawn((
+                        MenuEntry(action.kind.clone()),
+                        Node {
+                            padding: UiRect::axes(Val::Px(8.0), Val::Px(3.0)),
+                            ..default()
+                        },
+                        BackgroundColor(Color::srgb(0.3, 0.3, 0.5)),
+                    ))
+                    .with_child((
+                        Text::new(action.label.clone()),
+                        TextFont::from_font_size(BUTTON_FONT_SIZE),
+                    ));
+                }
+            })
+            .id(),
     }
 }
 
@@ -591,38 +778,110 @@ fn toggle_by_click(
     }
 }
 
+/// Escape closes the action menu, unless the player is typing: the prompt uses Escape then.
 #[allow(
     clippy::needless_pass_by_value,
     reason = "Bevy system parameters are passed by value"
 )]
-fn act_by_click(
+fn close_menu_by_key(
+    keys: Res<ButtonInput<KeyCode>>,
+    text_entry: Res<TextEntryActive>,
+    mut popups: ResMut<InventoryPopups>,
+) {
+    if !text_entry.0 && keys.just_pressed(KeyCode::Escape) && popups.menu.is_some() {
+        popups.menu = None;
+    }
+}
+
+/// A click on a menu entry performs it and closes the menu.
+#[allow(
+    clippy::needless_pass_by_value,
+    reason = "Bevy system parameters are passed by value"
+)]
+fn click_menu(
+    buttons: Res<ButtonInput<MouseButton>>,
+    window: Single<&Window, With<PrimaryWindow>>,
+    entries: Query<(&ComputedNode, &UiGlobalTransform, &MenuEntry)>,
+    mut popups: ResMut<InventoryPopups>,
+    mut requests: MessageWriter<ItemVerbRequest>,
+    mut openings: MessageWriter<OpenPromptWithItem>,
+) {
+    if !buttons.just_pressed(MouseButton::Left) {
+        return;
+    }
+    let clicked = entries
+        .iter()
+        .find(|(node, transform, _)| cursor_is_over(&window, node, **transform));
+    let Some((_, _, entry)) = clicked else {
+        return;
+    };
+    match &entry.0 {
+        MenuActionKind::Send(request) => {
+            requests.write(request.clone());
+        }
+        MenuActionKind::Utilize(opening) => {
+            openings.write(opening.clone());
+        }
+    }
+    popups.menu = None;
+}
+
+/// A click on a slot opens its menu, or closes it when it is already open. A click anywhere
+/// else, other than on the menu, closes the menu.
+#[allow(
+    clippy::needless_pass_by_value,
+    reason = "Bevy system parameters are passed by value"
+)]
+fn click_slot(
     buttons: Res<ButtonInput<MouseButton>>,
     window: Single<&Window, With<PrimaryWindow>>,
     open: Res<InventoryPanelOpen>,
     panels: Query<(&ComputedNode, &UiGlobalTransform), With<InventoryPanel>>,
-    actions: Query<(&ComputedNode, &UiGlobalTransform, &CardActionButton)>,
-    mut requests: MessageWriter<ItemVerbRequest>,
-    mut openings: MessageWriter<OpenPromptWithItem>,
+    slots: Query<(&ComputedNode, &UiGlobalTransform, &InventorySlot)>,
+    menus: Query<(&ComputedNode, &UiGlobalTransform), With<InventoryMenu>>,
+    mut popups: ResMut<InventoryPopups>,
 ) {
-    // A button scrolled out of the panel is clipped but keeps its layout, so the cursor must
-    // also be over the panel itself.
-    if !open.0
-        || !buttons.just_pressed(MouseButton::Left)
-        || !cursor_is_over_any(&window, panels.iter())
-    {
+    if !buttons.just_pressed(MouseButton::Left) || cursor_is_over_any(&window, menus.iter()) {
         return;
     }
-    let clicked = actions
+    let clicked = slot_under_cursor(&window, open.0, &panels, &slots);
+    popups.menu = match clicked {
+        Some(stack) if popups.menu != Some(stack) => Some(stack),
+        _ => None,
+    };
+}
+
+/// The slot under the cursor of an open panel. A slot scrolled out of the panel is clipped
+/// but keeps its layout, so the cursor must also be over the panel itself.
+fn slot_under_cursor(
+    window: &Window,
+    open: bool,
+    panels: &Query<(&ComputedNode, &UiGlobalTransform), With<InventoryPanel>>,
+    slots: &Query<(&ComputedNode, &UiGlobalTransform, &InventorySlot)>,
+) -> Option<StackId> {
+    if !open || !cursor_is_over_any(window, panels.iter()) {
+        return None;
+    }
+    slots
         .iter()
-        .find(|(node, transform, _)| cursor_is_over_any(&window, [(*node, *transform)]));
-    match clicked.map(|(_, _, button)| &button.0) {
-        Some(CardActionKind::Send(request)) => {
-            requests.write(request.clone());
-        }
-        Some(CardActionKind::Utilize(opening)) => {
-            openings.write(opening.clone());
-        }
-        None => {}
+        .find(|(node, transform, _)| cursor_is_over(window, node, **transform))
+        .map(|(_, _, slot)| slot.0)
+}
+
+#[allow(
+    clippy::needless_pass_by_value,
+    reason = "Bevy system parameters are passed by value"
+)]
+fn track_hover(
+    window: Single<&Window, With<PrimaryWindow>>,
+    open: Res<InventoryPanelOpen>,
+    panels: Query<(&ComputedNode, &UiGlobalTransform), With<InventoryPanel>>,
+    slots: Query<(&ComputedNode, &UiGlobalTransform, &InventorySlot)>,
+    mut popups: ResMut<InventoryPopups>,
+) {
+    let hovered = slot_under_cursor(&window, open.0, &panels, &slots);
+    if popups.hovered != hovered {
+        popups.hovered = hovered;
     }
 }
 
@@ -663,10 +922,11 @@ fn current_view(local_player: LocalPlayer, holders: &Holders) -> PanelView {
 fn refresh_panel(
     mut commands: Commands,
     open: Res<InventoryPanelOpen>,
+    settings: Res<ClientSettings>,
     local_player: Res<LocalPlayer>,
     holders: Holders,
     mut panels: Query<(Entity, &mut Node), With<InventoryPanel>>,
-    mut shown: Local<Option<PanelView>>,
+    mut shown: ResMut<ShownInventory>,
 ) {
     let display = if open.0 { Display::Flex } else { Display::None };
     for (_, mut node) in &mut panels {
@@ -678,16 +938,94 @@ fn refresh_panel(
         return;
     }
     let view = current_view(*local_player, &holders);
-    if shown.as_ref() == Some(&view) {
+    if shown.0.as_ref() == Some(&view) {
         return;
     }
     for (panel, _) in &panels {
         commands
             .entity(panel)
             .despawn_children()
-            .with_children(|children| spawn_view(children, &view));
+            .with_children(|children| spawn_view(children, &view, &settings.inventory_slots));
     }
-    *shown = Some(view);
+    shown.0 = Some(view);
+}
+
+/// The popup on screen and where it was placed.
+#[derive(Debug)]
+struct ShownPopup {
+    content: PopupContent,
+    position: Vec2,
+    entity: Entity,
+}
+
+/// Keeps the 1 popup in step with `InventoryPopups`: closes popups of a closed panel or a
+/// stack that is gone, and respawns the popup only when its content or place changes. Each
+/// change requests a redraw, so the reactive frame pacing shows it.
+#[allow(
+    clippy::needless_pass_by_value,
+    clippy::too_many_arguments,
+    reason = "Bevy system parameters are passed by value, 1 per resource and query"
+)]
+fn refresh_popups(
+    mut commands: Commands,
+    open: Res<InventoryPanelOpen>,
+    settings: Res<ClientSettings>,
+    view: Res<ShownInventory>,
+    mut popups: ResMut<InventoryPopups>,
+    slots: Query<(&ComputedNode, &UiGlobalTransform, &InventorySlot)>,
+    mut shown: Local<Option<ShownPopup>>,
+    mut redraws: MessageWriter<RequestRedraw>,
+) {
+    let carried = |stack: StackId| {
+        open.0
+            && view
+                .0
+                .as_ref()
+                .is_some_and(|view| view.slots.iter().any(|slot| slot.stack == stack))
+    };
+    if popups.menu.is_some_and(|stack| !carried(stack)) {
+        popups.menu = None;
+    }
+    if popups.hovered.is_some_and(|stack| !carried(stack)) {
+        popups.hovered = None;
+    }
+    let Some((stack, content)) = wanted_popup(*popups, view.0.as_ref()) else {
+        if let Some(old) = shown.take() {
+            commands.entity(old.entity).despawn();
+            redraws.write(RequestRedraw);
+        }
+        return;
+    };
+    let laid_out = slots
+        .iter()
+        .find(|(node, _, slot)| slot.0 == stack && node.size() != Vec2::ZERO);
+    let Some((node, transform, _)) = laid_out else {
+        // A rebuilt slot has no size until layout runs; place the popup next frame.
+        redraws.write(RequestRedraw);
+        return;
+    };
+    let position = popup_position(
+        transform.translation,
+        node.size(),
+        node.inverse_scale_factor(),
+        settings.inventory_slots.popup_gap_pixels,
+    );
+    if shown
+        .as_ref()
+        .is_some_and(|old| old.content == content && old.position == position)
+    {
+        return;
+    }
+    if let Some(old) = shown.take() {
+        commands.entity(old.entity).despawn();
+    }
+    let entity = spawn_popup(&mut commands, &content, position);
+    *shown = Some(ShownPopup {
+        content,
+        position,
+        entity,
+    });
+    redraws.write(RequestRedraw);
 }
 
 type ScrollPanel<'w, 's> = Query<
@@ -747,7 +1085,7 @@ mod tests {
         CatalogId::new(text).expect("valid id")
     }
 
-    /// An inventory holding `items` and the stack ids they got, in order.
+    /// An inventory holding `items` and the stacks they got, in order.
     fn inventory(items: Vec<(Item, u32)>) -> (Inventory, Vec<ItemStack>) {
         let mut inventory = Inventory::default();
         let ids: Vec<_> = items
@@ -769,6 +1107,18 @@ mod tests {
         single(Item::Catalog(id(text)), 1)
     }
 
+    fn sealed_letter() -> ItemStack {
+        single(
+            Item::Custom(CustomItem {
+                name: "Sealed Letter".to_owned(),
+                weight_thousandths_of_pound: 0,
+                description: "Wax seal of House Vell.".to_owned(),
+                tags: BTreeSet::from(["quest".to_owned()]),
+            }),
+            1,
+        )
+    }
+
     fn bram() -> Recipient {
         Recipient {
             name: "Bram".to_owned(),
@@ -776,7 +1126,7 @@ mod tests {
         }
     }
 
-    fn labels(actions: &[CardAction]) -> Vec<&str> {
+    fn labels(actions: &[MenuAction]) -> Vec<&str> {
         actions.iter().map(|action| action.label.as_str()).collect()
     }
 
@@ -797,27 +1147,64 @@ mod tests {
     }
 
     #[test]
-    fn a_weapon_card_shows_damage_properties_and_mastery() {
+    fn slots_show_the_category_by_letter_and_color() {
+        let look = ClientSettings::default().inventory_slots;
+        let cases = [
+            ("longsword", SlotCategory::Weapon, 'W', look.weapon_color),
+            ("chain_mail", SlotCategory::Armor, 'A', look.armor_color),
+            ("shield", SlotCategory::Armor, 'A', look.armor_color),
+            (
+                "painters_supplies",
+                SlotCategory::Tool,
+                'T',
+                look.tool_color,
+            ),
+            ("rope", SlotCategory::Gear, 'G', look.gear_color),
+            ("rations", SlotCategory::Gear, 'G', look.gear_color),
+        ];
+        for (item, category, letter, color) in cases {
+            let found = slot_category(&catalog_stack(item), catalog());
+            assert_eq!(found, category, "{item}");
+            assert_eq!(slot_letter(found), letter, "{item}");
+            assert_eq!(slot_color(found, &look), color, "{item}");
+        }
         assert_eq!(
-            card_text(&catalog_stack("longsword"), catalog()),
+            slot_category(&sealed_letter(), catalog()),
+            SlotCategory::Gear
+        );
+    }
+
+    #[test]
+    fn the_corner_number_shows_only_above_1() {
+        assert_eq!(quantity_label(&catalog_stack("rope")), None);
+        assert_eq!(
+            quantity_label(&single(Item::Catalog(id("rations")), 3)),
+            Some("3".to_owned())
+        );
+    }
+
+    #[test]
+    fn a_weapon_tooltip_shows_damage_properties_and_mastery() {
+        assert_eq!(
+            tooltip_text(&catalog_stack("longsword"), catalog()),
             "Longsword\nWeapon - 15 gp - 3 lb\nMartial Melee weapon: 1d8 Slashing, versatile \
              1d10\nProperties: Versatile\nMastery: Sap"
         );
     }
 
     #[test]
-    fn armor_cards_show_armor_class_and_drawbacks() {
+    fn armor_tooltips_show_armor_class_and_drawbacks() {
         assert_eq!(
-            card_text(&catalog_stack("chain_mail"), catalog()),
+            tooltip_text(&catalog_stack("chain_mail"), catalog()),
             "Chain Mail\nArmor - 75 gp - 55 lb\nHeavy armor: AC 16\nNeeds Strength 13\n\
              Disadvantage on Dexterity (Stealth) checks"
         );
-        assert!(card_text(&catalog_stack("shield"), catalog()).contains("Shield: +2 AC"));
+        assert!(tooltip_text(&catalog_stack("shield"), catalog()).contains("Shield: +2 AC"));
     }
 
     #[test]
-    fn a_tool_card_shows_its_ability_check_and_craft_targets() {
-        let text = card_text(&catalog_stack("painters_supplies"), catalog());
+    fn a_tool_tooltip_shows_its_ability_and_check_but_no_crafting() {
+        let text = tooltip_text(&catalog_stack("painters_supplies"), catalog());
         assert!(text.contains("Tool ability: Wisdom"), "{text}");
         assert!(
             text.contains(
@@ -825,54 +1212,43 @@ mod tests {
             ),
             "{text}"
         );
-        assert!(
-            text.contains("Crafts: Druidic Focus, Holy Symbol"),
-            "{text}"
-        );
+        assert!(!text.contains("Craft"), "{text}");
     }
 
     #[test]
-    fn a_card_heading_shows_quantity_and_equipped_state() {
+    fn a_tooltip_heading_shows_quantity_and_equipped_state() {
         let rations = single(Item::Catalog(id("rations")), 2);
-        assert!(card_text(&rations, catalog()).starts_with("Rations x2\n"));
+        assert!(tooltip_text(&rations, catalog()).starts_with("Rations x2\n"));
         let mut inventory = Inventory::default();
         let sword = inventory
             .add(Item::Catalog(id("longsword")), 1)
             .expect("added");
         inventory.set_equipped(sword, true).expect("equipped");
         let stack = inventory.stack(sword).expect("stack");
-        assert!(card_text(stack, catalog()).starts_with("Longsword (equipped)\n"));
+        assert!(tooltip_text(stack, catalog()).starts_with("Longsword (equipped)\n"));
     }
 
     #[test]
-    fn a_custom_card_shows_its_description_and_tags() {
-        let letter = single(
-            Item::Custom(CustomItem {
-                name: "Sealed Letter".to_owned(),
-                weight_thousandths_of_pound: 0,
-                description: "Wax seal of House Vell.".to_owned(),
-                tags: BTreeSet::from(["quest".to_owned()]),
-            }),
-            1,
-        );
+    fn a_custom_tooltip_shows_its_description_and_tags() {
+        let letter = sealed_letter();
         assert_eq!(
-            card_text(&letter, catalog()),
+            tooltip_text(&letter, catalog()),
             "Sealed Letter\nCustom item - 0 lb\nWax seal of House Vell.\nTags: quest"
         );
         assert_eq!(
-            labels(&card_actions(&letter, catalog(), &[bram()])),
+            labels(&menu_actions(&letter, catalog(), &[bram()])),
             ["Drop", "Give to Bram"]
         );
     }
 
     #[test]
-    fn verbs_follow_the_item_and_send_1_item() {
+    fn menu_verbs_follow_the_item_and_send_1_item() {
         let sword = catalog_stack("longsword");
-        let actions = card_actions(&sword, catalog(), &[]);
+        let actions = menu_actions(&sword, catalog(), &[]);
         assert_eq!(labels(&actions), ["Equip", "Drop"]);
         assert_eq!(
             actions[0].kind,
-            CardActionKind::Send(ItemVerbRequest {
+            MenuActionKind::Send(ItemVerbRequest {
                 verb: ItemVerb::Equip,
                 stack: sword.id(),
                 quantity: 1,
@@ -882,20 +1258,25 @@ mod tests {
         );
         let rations = catalog_stack("rations");
         assert_eq!(
-            labels(&card_actions(&rations, catalog(), &[])),
+            labels(&menu_actions(&rations, catalog(), &[])),
             ["Consume", "Drop"]
+        );
+        let supplies = catalog_stack("painters_supplies");
+        assert_eq!(
+            labels(&menu_actions(&supplies, catalog(), &[])),
+            ["Utilize", "Drop"]
         );
     }
 
     #[test]
     fn give_names_each_adjacent_recipient() {
         let rope = catalog_stack("rope");
-        let actions = card_actions(&rope, catalog(), &[bram()]);
+        let actions = menu_actions(&rope, catalog(), &[bram()]);
         let give = actions.last().expect("give");
         assert_eq!(give.label, "Give to Bram");
         assert_eq!(
             give.kind,
-            CardActionKind::Send(ItemVerbRequest {
+            MenuActionKind::Send(ItemVerbRequest {
                 verb: ItemVerb::Give,
                 stack: rope.id(),
                 quantity: 1,
@@ -906,37 +1287,15 @@ mod tests {
     }
 
     #[test]
-    fn craft_offers_only_targets_the_catalog_lists() {
-        let supplies = catalog_stack("painters_supplies");
-        let targets = craftable_targets(&supplies, catalog());
-        assert_ne!(targets, Vec::<CatalogId>::new());
-        let crafts: Vec<CardActionKind> = card_actions(&supplies, catalog(), &[])
-            .into_iter()
-            .filter(|action| action.label.starts_with("Craft "))
-            .map(|action| action.kind)
-            .collect();
-        let expected: Vec<CardActionKind> = targets
-            .into_iter()
-            .map(|target| request(ItemVerb::Craft, &supplies, None, Some(target)))
-            .collect();
-        assert_eq!(crafts, expected);
-        assert!(
-            !labels(&card_actions(&catalog_stack("rope"), catalog(), &[]))
-                .iter()
-                .any(|label| label.starts_with("Craft"))
-        );
-    }
-
-    #[test]
     fn utilize_opens_the_prompt_with_the_check_attached() {
         let rope = catalog_stack("rope");
-        let utilize = card_actions(&rope, catalog(), &[])
+        let utilize = menu_actions(&rope, catalog(), &[])
             .into_iter()
             .find(|action| action.label == "Utilize")
             .expect("rope offers Utilize");
         assert_eq!(
             utilize.kind,
-            CardActionKind::Utilize(OpenPromptWithItem {
+            MenuActionKind::Utilize(OpenPromptWithItem {
                 attachment: PromptAttachment {
                     stack: rope.id(),
                     label: "Rope: Tie a knot with Rope (DC 10, Dexterity (Sleight Of Hand))"
@@ -945,6 +1304,35 @@ mod tests {
                 text: "I use my Rope to ".to_owned(),
             })
         );
+    }
+
+    #[test]
+    fn popups_sit_right_of_the_slot_in_logical_pixels() {
+        let position = popup_position(Vec2::new(100.0, 200.0), Vec2::new(80.0, 80.0), 0.5, 6.0);
+        assert_eq!(position, Vec2::new(76.0, 80.0));
+    }
+
+    #[test]
+    fn the_menu_wins_over_the_tooltip() {
+        let (carried, stacks) = inventory(vec![
+            (Item::Catalog(id("longsword")), 1),
+            (Item::Catalog(id("rope")), 1),
+        ]);
+        let view = panel_view(Some(&carried), catalog(), &[]);
+        let both = InventoryPopups {
+            hovered: Some(stacks[0].id()),
+            menu: Some(stacks[1].id()),
+        };
+        assert!(matches!(
+            wanted_popup(both, Some(&view)),
+            Some((stack, PopupContent::Menu(_))) if stack == stacks[1].id()
+        ));
+        let hover_only = InventoryPopups { menu: None, ..both };
+        assert!(matches!(
+            wanted_popup(hover_only, Some(&view)),
+            Some((_, PopupContent::Tooltip(text))) if text.starts_with("Longsword\n")
+        ));
+        assert_eq!(wanted_popup(hover_only, None), None);
     }
 
     #[test]
@@ -1017,7 +1405,8 @@ mod tests {
         ]);
         let view = panel_view(Some(&carried), catalog(), &[]);
         assert_eq!(view.heading, "Inventory: 7 lb carried");
-        assert_eq!(view.cards.len(), 2);
+        assert_eq!(view.slots.len(), 2);
+        assert_eq!(view.slots[1].quantity.as_deref(), Some("2"));
     }
 
     fn test_app() -> App {
@@ -1031,10 +1420,20 @@ mod tests {
         app
     }
 
+    /// Updates once with only `key` just pressed. Without the input plugin `just_pressed` is
+    /// never cleared, so every update resets the keys first.
     fn tap(app: &mut App, key: KeyCode) {
         let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
         keys.reset_all();
         keys.press(key);
+        app.update();
+    }
+
+    /// Updates once with no key just pressed.
+    fn step(app: &mut App) {
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .reset_all();
         app.update();
     }
 
@@ -1045,30 +1444,97 @@ mod tests {
         panels.single(app.world()).expect("1 panel").display
     }
 
-    #[test]
-    fn the_key_toggles_a_panel_of_the_local_characters_items() {
+    fn count<C: Component>(app: &mut App) -> usize {
+        let mut query = app.world_mut().query_filtered::<(), With<C>>();
+        query.iter(app.world()).count()
+    }
+
+    /// Gives every slot a size, as layout would.
+    fn lay_out_slots(app: &mut App) {
+        let mut slots = app
+            .world_mut()
+            .query_filtered::<&mut ComputedNode, With<InventorySlot>>();
+        for mut node in slots.iter_mut(app.world_mut()) {
+            node.size = Vec2::splat(40.0);
+        }
+    }
+
+    /// An app with the local character carrying a longsword and a rope.
+    fn app_with_items() -> (App, Vec<ItemStack>) {
         let mut app = test_app();
-        let (carried, _) = inventory(vec![(Item::Catalog(id("longsword")), 1)]);
+        let (carried, stacks) = inventory(vec![
+            (Item::Catalog(id("longsword")), 1),
+            (Item::Catalog(id("rope")), 1),
+        ]);
         app.world_mut()
             .spawn((EntityId(1), GridPos::new(2, 2), carried));
         app.world_mut().resource_mut::<LocalPlayer>().character = Some(EntityId(1));
         app.update();
+        (app, stacks)
+    }
+
+    #[test]
+    fn the_key_toggles_a_panel_of_slots() {
+        let (mut app, _) = app_with_items();
         assert_eq!(panel_display(&mut app), Display::None);
 
-        // Without the input plugin `just_pressed` is never cleared, so update only once.
         tap(&mut app, crate::settings::INVENTORY_KEY);
         assert_eq!(panel_display(&mut app), Display::Flex);
+        assert_eq!(count::<InventorySlot>(&mut app), 2);
+        let mut texts = app.world_mut().query::<&Text>();
+        let letters: Vec<String> = texts.iter(app.world()).map(|text| text.0.clone()).collect();
+        assert!(letters.contains(&"W".to_owned()), "{letters:?}");
+        assert!(letters.contains(&"G".to_owned()), "{letters:?}");
+
+        tap(&mut app, crate::settings::INVENTORY_KEY);
+        assert_eq!(panel_display(&mut app), Display::None);
+    }
+
+    #[test]
+    fn hover_shows_1_tooltip_and_requests_a_redraw() {
+        let (mut app, stacks) = app_with_items();
+        tap(&mut app, crate::settings::INVENTORY_KEY);
+        lay_out_slots(&mut app);
+        app.world_mut().resource_mut::<InventoryPopups>().hovered = Some(stacks[0].id());
+        step(&mut app);
+        assert_eq!(count::<InventoryTooltip>(&mut app), 1);
         let mut texts = app.world_mut().query::<&Text>();
         assert!(
             texts
                 .iter(app.world())
                 .any(|text| text.0.starts_with("Longsword\n"))
         );
-        let mut buttons = app.world_mut().query::<&CardActionButton>();
-        assert_eq!(buttons.iter(app.world()).count(), 2);
+        assert!(!app.world().resource::<Messages<RequestRedraw>>().is_empty());
+
+        app.world_mut().resource_mut::<InventoryPopups>().hovered = None;
+        step(&mut app);
+        assert_eq!(count::<InventoryTooltip>(&mut app), 0);
+    }
+
+    #[test]
+    fn the_menu_replaces_the_tooltip_and_escape_closes_it() {
+        let (mut app, stacks) = app_with_items();
+        tap(&mut app, crate::settings::INVENTORY_KEY);
+        lay_out_slots(&mut app);
+        let mut popups = app.world_mut().resource_mut::<InventoryPopups>();
+        popups.hovered = Some(stacks[0].id());
+        popups.menu = Some(stacks[1].id());
+        step(&mut app);
+        assert_eq!(count::<InventoryMenu>(&mut app), 1);
+        assert_eq!(count::<InventoryTooltip>(&mut app), 0);
+        assert_eq!(count::<MenuEntry>(&mut app), 2);
+
+        tap(&mut app, KeyCode::Escape);
+        assert_eq!(app.world().resource::<InventoryPopups>().menu, None);
+        assert_eq!(count::<InventoryMenu>(&mut app), 0);
+        assert_eq!(count::<InventoryTooltip>(&mut app), 1);
 
         tap(&mut app, crate::settings::INVENTORY_KEY);
-        assert_eq!(panel_display(&mut app), Display::None);
+        assert_eq!(count::<InventoryTooltip>(&mut app), 0);
+        assert_eq!(
+            *app.world().resource::<InventoryPopups>(),
+            InventoryPopups::default()
+        );
     }
 
     #[test]

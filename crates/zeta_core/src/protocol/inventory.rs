@@ -331,7 +331,9 @@ pub enum ItemVerb {
     Give,
     /// Eat or drink 1 item.
     Consume,
-    /// Make a catalog item with a tool, without the AI DM.
+    /// Retired: crafting was removed until its material rules are designed. Kept because
+    /// network variants are never removed (`protocol` module docs) and old Event Log records
+    /// may hold it; no stack offers it and the server refuses it.
     Craft,
     /// Use a tool through a Freeform Action Prompt. The client sends a
     /// `FreeformActionPrompt` with `utilize` set instead of this verb.
@@ -350,7 +352,7 @@ pub struct ItemVerbRequest {
     pub quantity: u32,
     /// Who receives the items, for `Give`.
     pub recipient: Option<EntityId>,
-    /// What to make, for `Craft`.
+    /// Retired with `Craft`; kept because network fields are never removed. Clients send `None`.
     pub craft_target: Option<CatalogId>,
 }
 
@@ -385,6 +387,7 @@ mod tests {
             recipient: Some(EntityId(4)),
             craft_target: None,
         });
+        // The retired `Craft` stays readable, because old Event Log records may hold it.
         assert_json_round_trip(&ItemVerbRequest {
             verb: ItemVerb::Craft,
             stack: StackId(0),
