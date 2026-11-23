@@ -8,6 +8,7 @@ Decisions live in `docs/`; this file only points to them and records working kno
 - The Game Director writes Lore. Agents build Lore-independent code unless asked otherwise.
 - **Longevity Principle:** prefer the choice that stays easy to maintain for years over the quick one.
 - Never write your own ideas into docs without the Game Director's approval.
+- Push to `origin main` after every commit that passes checks; no need to ask first.
 - Build only what the Game Director asked for. If a feature depends on rules nobody has decided yet (crafting materials, for example), ask first. Never ship a placeholder version of it.
 
 ## Where Decisions Live
