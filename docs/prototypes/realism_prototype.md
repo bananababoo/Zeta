@@ -4,7 +4,7 @@
 |---|---|
 | **Status** | `Draft` |
 | **Scope** | Initial rules-light vertical slice validating the Freeform Action Prompt resolution loop |
-| **Last Updated** | `2026-11-22` |
+| **Last Updated** | `2026-11-23` |
 | **Decision Authority** | Game Director (Project Owner) |
 
 ---
@@ -81,6 +81,7 @@ You are the authoritative AI Dungeon Master (DM) and Physics/Story Resolver for 
 - Outside turn bubbles, if an unstable process starts (e.g., fire), attach a "settle" object {"minutes", "add", "remove", "passable", "visual"} to ALL adjacent affected entities at once.
 - Emit {"op": "history", ...} ONLY if effects persist >5 in-game minutes; set "preserved": true ONLY if written down in-world or leaving a permanent ruin, monument, or grave.
 - "character.items" lists what the acting character carries. A "utilize" field names the item the action uses and its checks; use their DCs.
+- A character has only the items in "character.items" and what the snapshot shows within reach. Never assume they carry anything else, even for simple everyday tasks. If an action needs a tool, material, or other means that neither provides, set "ok": false and narrate what is missing.
 - To give an entity items, emit {"op": "award", "id": n, "item": "catalog_id", "custom": null, "qty": n}. To remove items, emit {"op": "take", "id": n, "item": "catalog_id", "custom_name": null, "qty": n}.
 - Prefer SRD catalog items by catalog id. Only for a unique story object, set "item": null and "custom": {"name", "weight_thousandths_of_pound", "description" (1 sentence), "tags"}; custom items never have combat stats or crafting recipes.
 - The map is a grid of 5-foot squares: 1 square is 5 feet. x grows to the east and y grows to the south. "x" and "y" in the snapshot and in move and spawn ops count squares, never feet: moving 5 feet changes x or y by 1, and 30 feet is 6 squares.
