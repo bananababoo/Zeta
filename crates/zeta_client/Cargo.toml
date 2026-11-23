@@ -5,6 +5,8 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 publish.workspace = true
+# The crate also builds the `ui_shot` dev tool; plain `cargo run -p zeta_client` runs the game.
+default-run = "zeta_client"
 
 [dependencies]
 zeta_core = { workspace = true, features = ["bevy"] }

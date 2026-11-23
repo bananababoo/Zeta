@@ -8,7 +8,8 @@
 //! send `ItemVerbRequest`; the server decides every outcome and refuses with a log line.
 //! `Utilize` sends nothing: it opens the Freeform Action Prompt with the item attached, and
 //! the server attaches the catalog checks to that prompt. At most 1 popup (tooltip or menu)
-//! exists at a time, and every popup change requests a redraw for reactive frame pacing.
+//! exists at a time, a popup moves back inside the window when it would cross an edge, and
+//! every popup change requests a redraw for reactive frame pacing.
 
 use std::fmt::Debug;
 
@@ -45,8 +46,13 @@ const TOOLTIP_FONT_SIZE: f32 = 14.0;
 const BUTTON_FONT_SIZE: f32 = 14.0;
 /// Width of the panel in logical pixels.
 const PANEL_WIDTH_PIXELS: f32 = 360.0;
-/// Widest a tooltip grows, in logical pixels, before its text wraps.
-const TOOLTIP_MAX_WIDTH_PIXELS: f32 = 300.0;
+/// Widest a tooltip's text grows, in logical pixels, before it wraps. The limit sits on the
+/// text node, not on the tooltip: layout measures the text's height before it knows a
+/// parent's width limit, so a limit on the parent wrapped the text into more lines than the
+/// background was sized for.
+const TOOLTIP_TEXT_MAX_WIDTH_PIXELS: f32 = 288.0;
+/// Space between a popup's edge and its content, in logical pixels.
+const POPUP_PADDING_PIXELS: f32 = 6.0;
 /// Draw order of popups above every other UI node.
 const POPUP_Z_INDEX: i32 = 10;
 /// Shown for a recipient whose name has not replicated yet.
@@ -87,6 +93,10 @@ pub struct InventoryTooltip;
 /// Marks the action menu of a clicked slot.
 #[derive(Component, Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct InventoryMenu;
+
+/// Where a popup's top-left corner goes, in logical pixels, before it is kept on screen.
+#[derive(Component, Clone, Copy, Debug, PartialEq)]
+struct PopupAnchor(Vec2);
 
 /// An entry in the action menu; clicking it performs the action it carries.
 #[derive(Component, Clone, Debug, PartialEq, Eq)]
@@ -190,6 +200,7 @@ impl Plugin for InventoryPlugin {
                     refresh_panel,
                     track_hover,
                     refresh_popups,
+                    keep_popups_on_screen,
                     scroll_panel,
                 )
                     .chain(),
@@ -484,6 +495,12 @@ pub fn popup_position(center: Vec2, size: Vec2, inverse_scale: f32, gap: f32) ->
     )
 }
 
+/// The top-left corner, in logical pixels, that keeps a popup of `size` inside a screen of
+/// `screen`: `position` moved left and up just enough, but never past the top-left corner.
+pub fn keep_on_screen(position: Vec2, size: Vec2, screen: Vec2) -> Vec2 {
+    position.min(screen - size).max(Vec2::ZERO)
+}
+
 /// Entities that can take a `Give` from the character `own` at `own_pos`: inventory holders
 /// within 1 square, other than the character, with a `Collider` that blocks movement, as the
 /// server requires. Passable holders are dropped item piles, not creatures. Sorted by name.
@@ -693,29 +710,33 @@ fn spawn_view(panel: &mut ChildSpawnerCommands, view: &PanelView, look: &Invento
 
 /// Spawns a popup with its top-left corner at `position` in logical pixels, above every
 /// other node. The menu takes clicks, so it is a `UiPanel`; the tooltip only shows text.
+/// `keep_popups_on_screen` moves it once layout knows its size.
 fn spawn_popup(commands: &mut Commands, content: &PopupContent, position: Vec2) -> Entity {
     let node = Node {
         position_type: PositionType::Absolute,
         left: Val::Px(position.x),
         top: Val::Px(position.y),
         flex_direction: FlexDirection::Column,
-        padding: UiRect::all(Val::Px(6.0)),
+        padding: UiRect::all(Val::Px(POPUP_PADDING_PIXELS)),
         row_gap: Val::Px(4.0),
         ..default()
     };
     let background = BackgroundColor(Color::srgba(0.1, 0.1, 0.15, 0.95));
+    let anchor = PopupAnchor(position);
     match content {
         PopupContent::Tooltip(text) => commands
             .spawn((
                 InventoryTooltip,
-                Node {
-                    max_width: Val::Px(TOOLTIP_MAX_WIDTH_PIXELS),
-                    ..node
-                },
+                anchor,
+                node,
                 background,
                 GlobalZIndex(POPUP_Z_INDEX),
             ))
             .with_child((
+                Node {
+                    max_width: Val::Px(TOOLTIP_TEXT_MAX_WIDTH_PIXELS),
+                    ..default()
+                },
                 Text::new(text.clone()),
                 TextFont::from_font_size(TOOLTIP_FONT_SIZE),
             ))
@@ -724,6 +745,7 @@ fn spawn_popup(commands: &mut Commands, content: &PopupContent, position: Vec2) 
             .spawn((
                 InventoryMenu,
                 UiPanel,
+                anchor,
                 node,
                 background,
                 GlobalZIndex(POPUP_Z_INDEX),
@@ -1026,6 +1048,35 @@ fn refresh_popups(
         entity,
     });
     redraws.write(RequestRedraw);
+}
+
+/// Moves each laid-out popup back inside the window when its size would push it past the
+/// right or bottom edge. Each move requests a redraw, so the next frame shows it.
+#[allow(
+    clippy::needless_pass_by_value,
+    reason = "Bevy system parameters are passed by value"
+)]
+fn keep_popups_on_screen(
+    window: Single<&Window, With<PrimaryWindow>>,
+    mut popups: Query<(&PopupAnchor, &ComputedNode, &mut Node)>,
+    mut redraws: MessageWriter<RequestRedraw>,
+) {
+    // `Window::width` and `Window::height` are logical: bevy_window-0.20.1/src/window.rs:562
+    // and :570.
+    let screen = Vec2::new(window.width(), window.height());
+    for (anchor, computed, mut node) in &mut popups {
+        if computed.size() == Vec2::ZERO {
+            continue;
+        }
+        let size = computed.size() * computed.inverse_scale_factor();
+        let position = keep_on_screen(anchor.0, size, screen);
+        let (left, top) = (Val::Px(position.x), Val::Px(position.y));
+        if node.left != left || node.top != top {
+            node.left = left;
+            node.top = top;
+            redraws.write(RequestRedraw);
+        }
+    }
 }
 
 type ScrollPanel<'w, 's> = Query<
@@ -1509,6 +1560,75 @@ mod tests {
         app.world_mut().resource_mut::<InventoryPopups>().hovered = None;
         step(&mut app);
         assert_eq!(count::<InventoryTooltip>(&mut app), 0);
+    }
+
+    /// The width limit sits on the text, so layout measures the wrapped text's height and
+    /// the background covers every line. On the tooltip itself the text overflowed it.
+    #[test]
+    fn the_tooltip_limits_its_text_width_so_the_background_fits() {
+        let (mut app, stacks) = app_with_items();
+        tap(&mut app, crate::settings::INVENTORY_KEY);
+        lay_out_slots(&mut app);
+        app.world_mut().resource_mut::<InventoryPopups>().hovered = Some(stacks[0].id());
+        step(&mut app);
+        let mut tooltips = app
+            .world_mut()
+            .query_filtered::<(&Node, &Children), With<InventoryTooltip>>();
+        let (tooltip, children) = tooltips.single(app.world()).expect("1 tooltip");
+        assert_eq!(tooltip.max_width, Val::Auto);
+        let text = children.first().copied().expect("the tooltip has its text");
+        let text_node = app.world().get::<Node>(text).expect("the text is a node");
+        assert_eq!(text_node.max_width, Val::Px(TOOLTIP_TEXT_MAX_WIDTH_PIXELS));
+    }
+
+    #[test]
+    fn keep_on_screen_moves_an_overflowing_popup_back_inside() {
+        let screen = Vec2::new(800.0, 600.0);
+        let size = Vec2::new(200.0, 100.0);
+        let inside = Vec2::new(100.0, 100.0);
+        assert_eq!(keep_on_screen(inside, size, screen), inside);
+        assert_eq!(
+            keep_on_screen(Vec2::new(700.0, 550.0), size, screen),
+            Vec2::new(600.0, 500.0)
+        );
+        assert_eq!(
+            keep_on_screen(Vec2::new(-5.0, 10.0), size, screen),
+            Vec2::new(0.0, 10.0)
+        );
+        assert_eq!(
+            keep_on_screen(inside, Vec2::new(900.0, 700.0), screen),
+            Vec2::ZERO
+        );
+    }
+
+    #[test]
+    fn a_popup_past_the_window_edge_moves_back_on_screen() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_message::<RequestRedraw>()
+            .add_systems(Update, keep_popups_on_screen);
+        app.world_mut().spawn((
+            Window {
+                resolution: bevy::window::WindowResolution::new(400, 300),
+                ..default()
+            },
+            PrimaryWindow,
+        ));
+        let popup = app
+            .world_mut()
+            .spawn((
+                PopupAnchor(Vec2::new(350.0, 280.0)),
+                ComputedNode {
+                    size: Vec2::new(120.0, 90.0),
+                    ..default()
+                },
+                Node::default(),
+            ))
+            .id();
+        app.update();
+        let node = app.world().get::<Node>(popup).expect("the popup is a node");
+        assert_eq!((node.left, node.top), (Val::Px(280.0), Val::Px(210.0)));
+        assert!(!app.world().resource::<Messages<RequestRedraw>>().is_empty());
     }
 
     #[test]

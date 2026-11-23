@@ -62,6 +62,8 @@ bevy = { version = "0.20", default-features = false, features = [
     "bevy_ui",
     "bevy_ui_render",
     "default_font",
+    # PNG encoding for `save_to_disk` in the `ui_shot` screenshot tool, and PNG decoding for sprites.
+    "png",
 ] }
 
 [workspace.lints.rust]

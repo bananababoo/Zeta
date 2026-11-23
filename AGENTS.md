@@ -36,6 +36,7 @@ Decisions live in `docs/`; this file only points to them and records working kno
 | Run the server | `cargo run -p zeta_server --offline` | bypass (sockets) |
 | Run a client (1 per player) | `cargo run -p zeta_client --offline` | bypass (sockets) |
 | Socket tests | `cargo test --workspace --offline --all-features -- --ignored` | bypass (sockets) |
+| UI screenshots of every scene (PNG per scene) | `powershell -ExecutionPolicy Bypass -File tools/ui_shots.ps1 -OutDir target/ui_shots -Offline` | sandboxed |
 | Commit, push | `git commit`, `git push` | bypass (`.git` writes) |
 
 ## Environment Facts
@@ -68,6 +69,10 @@ Decisions live in `docs/`; this file only points to them and records working kno
 - Scripted file writes must use UTF-8 without BOM and LF: `[IO.File]::WriteAllText(path, text, [Text.UTF8Encoding]::new($false))`.
 - Nested quotes in `sh -c` arguments get mangled. Pipe SQL or scripts through stdin.
 - `Select-String` has no `-Recurse`. Use `Get-ChildItem -Recurse | Select-String`.
+
+## UI Verification
+- Every client UI change gets a screenshot check before handoff: add or update a scene in `crates/zeta_client/src/bin/ui_shot.rs`, run `tools/ui_shots.ps1`, and look at the PNGs. Text must fit its box, popups stay on screen, nothing overlaps by accident.
+- Bevy measures text with the Text node's own width limits; put `max_width` on the Text node, not only its container.
 
 ## Doc Writing Checklist
 - Update **Last Updated** on every edit. Digits for numbers. At most 300 lines.
