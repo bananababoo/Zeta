@@ -1,0 +1,6 @@
+# Build settings shared by every cargo command in this repository.
+
+# Link with rust-lld, the LLVM linker shipped with the Rust toolchain. It links Bevy-sized
+# binaries much faster than the default MSVC link.exe, which shortens every rebuild.
+[target.x86_64-pc-windows-msvc]
+linker = "rust-lld.exe"

@@ -43,6 +43,9 @@ Decisions live in `docs/`; this file only points to them and records working kno
 - The sandbox has no network. `cargo` needs `--offline` there; adding a dependency needs a bypassed `cargo fetch`.
 - The shell cannot elevate to admin. Installers that need admin are run by the Game Director.
 - `gh` is not installed. Remote: https://github.com/bananababoo/Zeta.git, branch `main`.
+- Builds link with `rust-lld` (`.cargo/config.toml`), and TLS uses `ring`, not `aws-lc-rs` (installed in `GeminiProvider::new`). Changing the linker or build flags rebuilds every dependency (about 12 minutes).
+- Never pipe long cargo commands through `Select-String` or `Select-Object -Last`; that hides all progress until the end. Run them unfiltered and read the task log. Check on long builds every 1-2 minutes.
+- A full build loads every CPU core; the Game Director's PC once powered off during one. If it happens again, add `-j 4`.
 - A Stop hook runs `tools/check_docs.ps1 -Hook`; a turn cannot end while docs fail.
 - The sandbox denies loopback connects (os error 10013), so socket tests are `#[ignore]` and run bypassed with `cargo test --workspace --offline --all-features -- --ignored`.
 - Server and client addresses come from `ZETA_LISTEN_ADDRESS` and `ZETA_SERVER_ADDRESS` (see `.env.example`).

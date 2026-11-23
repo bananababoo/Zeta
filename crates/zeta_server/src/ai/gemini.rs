@@ -47,6 +47,11 @@ impl GeminiProvider {
     /// # Errors
     /// [`GeminiSetupError::Client`] if the HTTP client cannot be built.
     pub fn new(config: GeminiConfig) -> Result<Self, GeminiSetupError> {
+        // reqwest is built without a crypto provider (`rustls-no-provider`), so `ring` is
+        // installed as the process default before the first client is built (reqwest
+        // async_impl/client.rs:721, rustls crypto/mod.rs:227). An error only means a provider
+        // is already installed, which is the goal.
+        let _already_installed = rustls::crypto::ring::default_provider().install_default();
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(AI_REQUEST_TIMEOUT_SECONDS))
             .build()?;

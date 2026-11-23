@@ -29,9 +29,13 @@ bevy_app = { version = "0.20", default-features = false, features = ["std"] }
 # Async runtime for HTTP calls, PostgreSQL queries, and Bevy-to-tokio bridging.
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "time"] }
 # HTTP client for AI provider calls. The most used Rust HTTP client, built on tokio and rustls.
-reqwest = { version = "0.13", default-features = false, features = ["rustls", "json"] }
+# `rustls-no-provider` plus the `rustls` entry below select the `ring` crypto provider instead
+# of `aws-lc-rs`, whose C library is one of the slowest crates to compile.
+reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider", "json"] }
+# TLS for reqwest and sqlx, with `ring` as its crypto provider. Installed in `GeminiProvider::new`.
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
 # Async PostgreSQL client, connection pool, and versioned migration runner.
-sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "tls-rustls-aws-lc-rs", "postgres", "migrate", "json"] }
+sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "tls-rustls-ring", "postgres", "migrate", "json"] }
 # Bevy states; bevy_replicon reports server connection status as a state.
 bevy_state = { version = "0.20", default-features = false, features = ["std", "bevy_app"] }
 # Frame time for the headless schedule, read by bevy_replicon's tick.
