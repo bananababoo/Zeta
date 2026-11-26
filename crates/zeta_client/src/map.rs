@@ -9,7 +9,7 @@ use bevy::prelude::*;
 use bevy::sprite::Anchor;
 use bevy::sprite_render::{Material2dPlugin, MeshMaterial2d};
 use zeta_core::entity::EntityId;
-use zeta_core::grid::{GridPos, MapBounds};
+use zeta_core::grid::GridPos;
 use zeta_core::protocol::{Collider, EntityName, MapArea, PlayerCharacter, Tags};
 
 use crate::layout::{map_center, square_center};
@@ -19,14 +19,13 @@ use crate::settings::{
     OTHER_ENTITY_COLOR, PLAYER_CHARACTER_COLOR,
 };
 use crate::terrain::{
-    TerrainSplatMaterial, build_splatmap_image, load_repeating_texture, terrain_params,
+    DEFAULT_MAP_CONFIG, LoadedMapConfig, TerrainSplatMaterial, build_splatmap_from_config,
+    load_map_config, terrain_params,
 };
 
 /// Draw order of grid squares and the GPU terrain splatmap.
 const SQUARE_DEPTH: f32 = 0.0;
-/// Draw order of passable surface props like bridges, above terrain and below characters.
-const SURFACE_DEPTH: f32 = 0.5;
-/// Draw order of entities, above the squares and bridges.
+/// Draw order of entities, above the squares.
 const ENTITY_DEPTH: f32 = 1.0;
 /// Draw order of a label relative to its entity.
 const LABEL_DEPTH: f32 = 1.0;
@@ -48,29 +47,9 @@ type VisualQueryData = (
     &'static mut Transform,
 );
 
-/// Loaded terrain and object texture handles, present when the asset plugin is enabled.
-#[derive(Resource, Clone, Debug)]
-struct MapTextures {
-    grass: Handle<Image>,
-    dirt: Handle<Image>,
-    rock: Handle<Image>,
-    water: Handle<Image>,
-    wooden_bridge: Handle<Image>,
-    oil_barrel: Handle<Image>,
-    oil_barrel_broken: Handle<Image>,
-}
-
 /// Marks the GPU terrain splatmap quad.
 #[derive(Component, Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct TerrainMesh;
-
-/// Snapshot of the inputs used to build the current GPU splatmap, so it rebuilds only on change.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-struct TerrainFingerprint {
-    bounds: Option<MapBounds>,
-    water: Vec<GridPos>,
-    bridges: Vec<GridPos>,
-}
 
 /// Marks the camera that shows the map.
 #[derive(Component, Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -97,7 +76,7 @@ impl Plugin for MapPlugin {
         // `App::is_plugin_added`: bevy_app-0.20.1/src/app.rs:570.
         if app.is_plugin_added::<AssetPlugin>() {
             app.add_plugins(Material2dPlugin::<TerrainSplatMaterial>::default())
-                .add_systems(Startup, load_map_textures);
+                .add_systems(Startup, load_default_map_config);
         }
         app.init_resource::<ClientSettings>()
             .init_resource::<LocalPlayer>()
@@ -106,7 +85,6 @@ impl Plugin for MapPlugin {
                 Update,
                 (
                     draw_map_area,
-                    sync_terrain_splatmap,
                     attach_entity_visuals,
                     move_entity_visuals,
                     style_entities,
@@ -151,41 +129,19 @@ fn spawn_camera(mut commands: Commands) {
     clippy::needless_pass_by_value,
     reason = "Bevy system parameters are passed by value"
 )]
-fn load_map_textures(mut commands: Commands, asset_server: Res<AssetServer>) {
-    commands.insert_resource(MapTextures {
-        grass: load_repeating_texture(&asset_server, "terrain/grass.png"),
-        dirt: load_repeating_texture(&asset_server, "terrain/dirt.png"),
-        rock: load_repeating_texture(&asset_server, "terrain/rock.png"),
-        water: load_repeating_texture(&asset_server, "terrain/water.png"),
-        wooden_bridge: asset_server.load("objects/wooden_bridge.png"),
-        oil_barrel: asset_server.load("objects/oil_barrel.png"),
-        oil_barrel_broken: asset_server.load("objects/oil_barrel_broken.png"),
-    });
+fn load_default_map_config(mut commands: Commands, asset_server: Res<AssetServer>) {
+    match load_map_config(&asset_server, DEFAULT_MAP_CONFIG) {
+        Ok(loaded) => commands.insert_resource(loaded),
+        Err(error) => warn!("map visual config not loaded ({error}); using fallback grid"),
+    }
 }
 
-fn is_water_entity(name: Option<&EntityName>, tags: Option<&Tags>) -> bool {
-    tags.is_some_and(|tags| tags.0.iter().any(|tag| tag.eq_ignore_ascii_case("water")))
-        || name.is_some_and(|name| name.0.eq_ignore_ascii_case("river"))
-}
-
-fn is_bridge_entity(name: Option<&EntityName>) -> bool {
-    name.is_some_and(|name| name.0.to_ascii_lowercase().contains("bridge"))
-}
-
-fn is_barrel_entity(name: Option<&EntityName>) -> bool {
-    name.is_some_and(|name| name.0.to_ascii_lowercase().contains("barrel"))
-}
-
-fn is_broken(tags: Option<&Tags>) -> bool {
-    tags.is_some_and(|tags| {
-        tags.0
-            .iter()
-            .any(|tag| tag.eq_ignore_ascii_case("broken") || tag.eq_ignore_ascii_case("destroyed"))
-    })
-}
-
-/// Redraws every fallback square when the map area appears or changes (when running without
-/// the GPU terrain renderer) and centers the camera on it.
+/// Redraws the map terrain (GPU splatmap from `LoadedMapConfig` when present, or fallback
+/// grid squares in headless tests) whenever `MapArea` changes, and centers the camera.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "a Bevy system lists every resource and query it reads as a parameter"
+)]
 #[allow(
     clippy::needless_pass_by_value,
     reason = "Bevy system parameters are passed by value"
@@ -193,9 +149,13 @@ fn is_broken(tags: Option<&Tags>) -> bool {
 fn draw_map_area(
     mut commands: Commands,
     settings: Res<ClientSettings>,
-    textures: Option<Res<MapTextures>>,
+    map_config: Option<Res<LoadedMapConfig>>,
+    meshes: Option<ResMut<Assets<Mesh>>>,
+    materials: Option<ResMut<Assets<TerrainSplatMaterial>>>,
+    images: Option<ResMut<Assets<Image>>>,
     areas: Query<&MapArea, Changed<MapArea>>,
     squares: Query<Entity, With<MapSquare>>,
+    terrains: Query<Entity, With<TerrainMesh>>,
     mut cameras: Query<&mut Transform, With<MapCamera>>,
 ) {
     let Some(area) = areas.iter().last() else {
@@ -204,9 +164,40 @@ fn draw_map_area(
     for square in &squares {
         commands.entity(square).despawn();
     }
+    for terrain in &terrains {
+        commands.entity(terrain).despawn();
+    }
     let bounds = area.0;
     let tile_size = settings.tile_size;
-    if textures.is_none() {
+    let center = map_center(bounds, tile_size);
+
+    if let (Some(loaded), Some(mut meshes), Some(mut materials), Some(mut images)) =
+        (map_config, meshes, materials, images)
+    {
+        let splat = images.add(build_splatmap_from_config(bounds, &loaded.config));
+        #[expect(
+            clippy::cast_precision_loss,
+            reason = "map dimensions are small grid counts well within f32 precision"
+        )]
+        let (width, height) = (
+            bounds.width as f32 * tile_size,
+            bounds.height as f32 * tile_size,
+        );
+        commands.spawn((
+            TerrainMesh,
+            Mesh2d(meshes.add(Rectangle::new(width, height))),
+            MeshMaterial2d(materials.add(TerrainSplatMaterial {
+                params: terrain_params(bounds, &loaded.config),
+                scales: loaded.material_scales,
+                splat,
+                layer0: loaded.material_textures[0].clone(),
+                layer1: loaded.material_textures[1].clone(),
+                layer2: loaded.material_textures[2].clone(),
+                layer3: loaded.material_textures[3].clone(),
+            })),
+            Transform::from_translation(center.extend(SQUARE_DEPTH)),
+        ));
+    } else {
         for x in 0..bounds.width {
             for y in 0..bounds.height {
                 let position = GridPos::new(x, y);
@@ -225,94 +216,11 @@ fn draw_map_area(
             }
         }
     }
-    let center = map_center(bounds, tile_size);
+
     for mut camera in &mut cameras {
         camera.translation.x = center.x;
         camera.translation.y = center.y;
     }
-}
-
-/// Builds or updates the GPU splatmap terrain mesh whenever the map bounds or its water and
-/// bridge squares change.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "a Bevy system lists every resource and query it reads as a parameter"
-)]
-#[allow(
-    clippy::needless_pass_by_value,
-    reason = "Bevy system parameters are passed by value"
-)]
-fn sync_terrain_splatmap(
-    mut commands: Commands,
-    settings: Res<ClientSettings>,
-    textures: Option<Res<MapTextures>>,
-    meshes: Option<ResMut<Assets<Mesh>>>,
-    materials: Option<ResMut<Assets<TerrainSplatMaterial>>>,
-    images: Option<ResMut<Assets<Image>>>,
-    areas: Query<&MapArea>,
-    entities: Query<(&GridPos, Option<&EntityName>, Option<&Tags>)>,
-    existing: Query<Entity, With<TerrainMesh>>,
-    mut last: Local<TerrainFingerprint>,
-) {
-    let (Some(textures), Some(mut meshes), Some(mut materials), Some(mut images)) =
-        (textures, meshes, materials, images)
-    else {
-        return;
-    };
-    let Some(area) = areas.iter().last() else {
-        return;
-    };
-    let bounds = area.0;
-    let mut water = Vec::new();
-    let mut bridges = Vec::new();
-    for (pos, name, tags) in &entities {
-        if is_water_entity(name, tags) {
-            water.push(*pos);
-        } else if is_bridge_entity(name) {
-            bridges.push(*pos);
-        }
-    }
-    water.sort_by_key(|pos| (pos.x, pos.y));
-    bridges.sort_by_key(|pos| (pos.x, pos.y));
-    let current = TerrainFingerprint {
-        bounds: Some(bounds),
-        water,
-        bridges,
-    };
-    if *last == current {
-        return;
-    }
-    for entity in &existing {
-        commands.entity(entity).despawn();
-    }
-    let splat = images.add(build_splatmap_image(
-        bounds,
-        &current.water,
-        &current.bridges,
-    ));
-    #[expect(
-        clippy::cast_precision_loss,
-        reason = "map dimensions are small grid counts well within f32 precision"
-    )]
-    let (width, height) = (
-        bounds.width as f32 * settings.tile_size,
-        bounds.height as f32 * settings.tile_size,
-    );
-    let center = map_center(bounds, settings.tile_size);
-    commands.spawn((
-        TerrainMesh,
-        Mesh2d(meshes.add(Rectangle::new(width, height))),
-        MeshMaterial2d(materials.add(TerrainSplatMaterial {
-            params: terrain_params(bounds),
-            splat,
-            grass: textures.grass.clone(),
-            dirt: textures.dirt.clone(),
-            rock: textures.rock.clone(),
-            water: textures.water.clone(),
-        })),
-        Transform::from_translation(center.extend(SQUARE_DEPTH)),
-    ));
-    *last = current;
 }
 
 /// Gives every newly seen entity with a grid position a colored square and a label.
@@ -360,9 +268,8 @@ fn move_entity_visuals(
     }
 }
 
-/// Styles entities every frame (sprites for known world props, transparent for water drawn
-/// into the GPU terrain splatmap, and colored tokens for everything else), because the local
-/// player, markers, names, and colliders can arrive in any order.
+/// Styles entities from the loaded external map config (or colored fallback tokens when no
+/// style rule matches).
 #[allow(
     clippy::needless_pass_by_value,
     reason = "Bevy system parameters are passed by value"
@@ -370,50 +277,39 @@ fn move_entity_visuals(
 fn style_entities(
     settings: Res<ClientSettings>,
     local_player: Res<LocalPlayer>,
-    textures: Option<Res<MapTextures>>,
+    map_config: Option<Res<LoadedMapConfig>>,
     mut entities: Query<VisualQueryData, With<MapLabelEntity>>,
 ) {
     let tile_size = settings.tile_size;
     for (id, is_player_character, collider, name, tags, mut sprite, mut transform) in &mut entities
     {
-        if let Some(textures) = textures.as_deref() {
-            if is_water_entity(name, tags) {
+        if let Some((rule, sprite_handle)) = map_config
+            .as_deref()
+            .and_then(|loaded| loaded.style_for(name, tags))
+        {
+            if rule.hide_sprite {
                 if sprite.color != Color::NONE {
                     sprite.color = Color::NONE;
                 }
                 continue;
             }
-            if is_bridge_entity(name) {
-                let wanted_size = Some(Vec2::new(tile_size * 1.45, tile_size * 1.15));
-                if sprite.image != textures.wooden_bridge {
-                    sprite.image = textures.wooden_bridge.clone();
-                }
-                if sprite.color != Color::WHITE {
-                    sprite.color = Color::WHITE;
-                }
-                if sprite.custom_size != wanted_size {
-                    sprite.custom_size = wanted_size;
-                }
-                transform.translation.z = SURFACE_DEPTH;
-                continue;
-            }
-            if is_barrel_entity(name) {
-                let handle = if is_broken(tags) {
-                    &textures.oil_barrel_broken
-                } else {
-                    &textures.oil_barrel
-                };
-                let wanted_size = Some(Vec2::new(tile_size * 0.9, tile_size * 0.65));
+            if let Some(handle) = sprite_handle {
                 if sprite.image != *handle {
                     sprite.image = handle.clone();
                 }
                 if sprite.color != Color::WHITE {
                     sprite.color = Color::WHITE;
                 }
+                let wanted_size = rule
+                    .size
+                    .map(|[w, h]| Vec2::new(tile_size * w, tile_size * h))
+                    .or_else(|| Some(Vec2::splat(tile_size * ENTITY_SCALE)));
                 if sprite.custom_size != wanted_size {
                     sprite.custom_size = wanted_size;
                 }
-                transform.translation.z = ENTITY_DEPTH;
+                if let Some(depth) = rule.depth {
+                    transform.translation.z = depth;
+                }
                 continue;
             }
         }
@@ -431,16 +327,19 @@ fn style_entities(
     reason = "Bevy system parameters are passed by value"
 )]
 fn update_labels(
-    textures: Option<Res<MapTextures>>,
+    map_config: Option<Res<LoadedMapConfig>>,
     owners: Query<(&MapLabelEntity, Option<&EntityName>, Option<&Tags>)>,
     mut labels: Query<&mut Text2d, With<MapLabel>>,
 ) {
-    let has_gpu_terrain = textures.is_some();
     for (label, name, tags) in &owners {
         let Ok(mut text) = labels.get_mut(label.0) else {
             continue;
         };
-        let wanted = if has_gpu_terrain && is_water_entity(name, tags) {
+        let hide = map_config
+            .as_deref()
+            .and_then(|loaded| loaded.style_for(name, tags))
+            .is_some_and(|(rule, _)| rule.hide_label);
+        let wanted = if hide {
             String::new()
         } else {
             label_text(name, tags)

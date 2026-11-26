@@ -1,0 +1,70 @@
+{
+  "tiles_per_repeat": 4.5,
+  "grid_alpha": 0.12,
+  "materials": [
+    { "id": "land", "texture": "terrain/grass.png", "scale": 1.0 },
+    { "id": "path", "texture": "terrain/dirt.png", "scale": 1.15 },
+    { "id": "bank", "texture": "terrain/rock.png", "scale": 1.05 },
+    { "id": "water", "texture": "terrain/water.png", "scale": 0.95 }
+  ],
+  "layers": [
+    {
+      "material": "path",
+      "shape": {
+        "kind": "polyline",
+        "points": [[0.0, 0.5], [1.0, 0.5]],
+        "width": 0.8,
+        "feather": 0.55,
+        "wobble": 0.22
+      }
+    },
+    {
+      "material": "bank",
+      "shape": {
+        "kind": "polyline",
+        "points": [[0.535, 0.0], [0.535, 1.0]],
+        "width": 1.45,
+        "feather": 0.65,
+        "wobble": 0.25
+      },
+      "blend": 0.7
+    },
+    {
+      "material": "water",
+      "shape": {
+        "kind": "polyline",
+        "points": [[0.535, 0.0], [0.535, 1.0]],
+        "width": 0.85,
+        "feather": 0.35,
+        "wobble": 0.14
+      },
+      "edge_darken": { "width": 0.45, "strength": 0.32 }
+    }
+  ],
+  "entity_styles": [
+    {
+      "match_tag": "water",
+      "hide_sprite": true,
+      "hide_label": true
+    },
+    {
+      "match_name": "Wooden Bridge",
+      "sprite": "objects/wooden_bridge.png",
+      "size": [1.45, 1.15],
+      "depth": 0.5
+    },
+    {
+      "match_name": "Oil Barrel",
+      "match_tag": "broken",
+      "sprite": "objects/oil_barrel_broken.png",
+      "size": [0.9, 0.65],
+      "depth": 1.0
+    },
+    {
+      "match_name": "Oil Barrel",
+      "sprite": "objects/oil_barrel.png",
+      "size": [0.9, 0.65],
+      "depth": 1.0
+    }
+  ]
+}
