@@ -28,7 +28,8 @@ use zeta_core::protocol::{
 };
 
 use crate::focus::{
-    TextEntryActive, TextEntryUpdate, UiPanel, cursor_is_over, cursor_is_over_any, key_label,
+    TextEntryActive, TextEntryUpdate, UiClickConsumed, UiClickUpdate, UiPanel,
+    clear_ui_click_consumed, cursor_is_over, cursor_is_over_any, key_label,
 };
 use crate::player::LocalPlayer;
 use crate::prompt::{OpenPromptWithItem, PromptAttachment};
@@ -181,12 +182,14 @@ impl Plugin for InventoryPlugin {
         app.init_resource::<ClientSettings>()
             .init_resource::<LocalPlayer>()
             .init_resource::<TextEntryActive>()
+            .init_resource::<UiClickConsumed>()
             .init_resource::<InventoryPanelOpen>()
             .init_resource::<InventoryPopups>()
             .init_resource::<ShownInventory>()
             .add_message::<OpenPromptWithItem>()
             .add_message::<RequestRedraw>()
             .add_systems(Startup, spawn_inventory_ui)
+            .add_systems(First, clear_ui_click_consumed)
             .add_systems(
                 Update,
                 (
@@ -195,8 +198,8 @@ impl Plugin for InventoryPlugin {
                         toggle_by_click,
                         close_menu_by_key.after(TextEntryUpdate),
                     ),
-                    click_menu,
-                    click_slot,
+                    click_menu.in_set(UiClickUpdate),
+                    click_slot.in_set(UiClickUpdate),
                     refresh_panel,
                     track_hover,
                     refresh_popups,
@@ -486,12 +489,20 @@ pub fn menu_actions(
 }
 
 /// The top-left corner, in logical pixels, of a popup placed `gap` logical pixels right of
-/// a slot. `center` and `size` are the slot's in physical pixels, as layout computes them;
+/// the inventory panel, aligned with the slot's top edge. `panel_center`, `panel_size`,
+/// `slot_center`, and `slot_size` are in physical pixels, as layout computes them;
 /// `inverse_scale` converts physical pixels to logical ones.
-pub fn popup_position(center: Vec2, size: Vec2, inverse_scale: f32, gap: f32) -> Vec2 {
+pub fn popup_position(
+    panel_center: Vec2,
+    panel_size: Vec2,
+    slot_center: Vec2,
+    slot_size: Vec2,
+    inverse_scale: f32,
+    gap: f32,
+) -> Vec2 {
     Vec2::new(
-        (center.x + size.x / 2.0) * inverse_scale + gap,
-        (center.y - size.y / 2.0) * inverse_scale,
+        (panel_center.x + panel_size.x / 2.0) * inverse_scale + gap,
+        (slot_center.y - slot_size.y / 2.0) * inverse_scale,
     )
 }
 
@@ -825,6 +836,7 @@ fn click_menu(
     window: Single<&Window, With<PrimaryWindow>>,
     entries: Query<(&ComputedNode, &UiGlobalTransform, &MenuEntry)>,
     mut popups: ResMut<InventoryPopups>,
+    mut click_consumed: ResMut<UiClickConsumed>,
     mut requests: MessageWriter<ItemVerbRequest>,
     mut openings: MessageWriter<OpenPromptWithItem>,
 ) {
@@ -846,13 +858,16 @@ fn click_menu(
         }
     }
     popups.menu = None;
+    click_consumed.0 = true;
 }
 
 /// A click on a slot opens its menu, or closes it when it is already open. A click anywhere
-/// else, other than on the menu, closes the menu.
+/// else, other than on the menu, closes the menu and consumes the click so the map does not
+/// also move the character.
 #[allow(
     clippy::needless_pass_by_value,
-    reason = "Bevy system parameters are passed by value"
+    clippy::too_many_arguments,
+    reason = "Bevy system parameters are passed by value, 1 per resource and query"
 )]
 fn click_slot(
     buttons: Res<ButtonInput<MouseButton>>,
@@ -862,15 +877,20 @@ fn click_slot(
     slots: Query<(&ComputedNode, &UiGlobalTransform, &InventorySlot)>,
     menus: Query<(&ComputedNode, &UiGlobalTransform), With<InventoryMenu>>,
     mut popups: ResMut<InventoryPopups>,
+    mut click_consumed: ResMut<UiClickConsumed>,
 ) {
     if !buttons.just_pressed(MouseButton::Left) || cursor_is_over_any(&window, menus.iter()) {
         return;
     }
+    let had_menu = popups.menu.is_some();
     let clicked = slot_under_cursor(&window, open.0, &panels, &slots);
     popups.menu = match clicked {
         Some(stack) if popups.menu != Some(stack) => Some(stack),
         _ => None,
     };
+    if had_menu && popups.menu.is_none() {
+        click_consumed.0 = true;
+    }
 }
 
 /// The slot under the cursor of an open panel. A slot scrolled out of the panel is clipped
@@ -994,6 +1014,7 @@ fn refresh_popups(
     settings: Res<ClientSettings>,
     view: Res<ShownInventory>,
     mut popups: ResMut<InventoryPopups>,
+    panels: Query<(&ComputedNode, &UiGlobalTransform), With<InventoryPanel>>,
     slots: Query<(&ComputedNode, &UiGlobalTransform, &InventorySlot)>,
     mut shown: Local<Option<ShownPopup>>,
     mut redraws: MessageWriter<RequestRedraw>,
@@ -1018,15 +1039,20 @@ fn refresh_popups(
         }
         return;
     };
-    let laid_out = slots
+    let laid_out_panel = panels.iter().find(|(node, _)| node.size() != Vec2::ZERO);
+    let laid_out_slot = slots
         .iter()
         .find(|(node, _, slot)| slot.0 == stack && node.size() != Vec2::ZERO);
-    let Some((node, transform, _)) = laid_out else {
-        // A rebuilt slot has no size until layout runs; place the popup next frame.
+    let (Some((panel_node, panel_transform)), Some((node, transform, _))) =
+        (laid_out_panel, laid_out_slot)
+    else {
+        // A rebuilt panel or slot has no size until layout runs; place the popup next frame.
         redraws.write(RequestRedraw);
         return;
     };
     let position = popup_position(
+        panel_transform.translation,
+        panel_node.size(),
         transform.translation,
         node.size(),
         node.inverse_scale_factor(),
@@ -1358,9 +1384,16 @@ mod tests {
     }
 
     #[test]
-    fn popups_sit_right_of_the_slot_in_logical_pixels() {
-        let position = popup_position(Vec2::new(100.0, 200.0), Vec2::new(80.0, 80.0), 0.5, 6.0);
-        assert_eq!(position, Vec2::new(76.0, 80.0));
+    fn popups_sit_right_of_the_panel_aligned_with_the_slot() {
+        let position = popup_position(
+            Vec2::new(200.0, 200.0),
+            Vec2::new(300.0, 400.0),
+            Vec2::new(100.0, 200.0),
+            Vec2::new(80.0, 80.0),
+            0.5,
+            6.0,
+        );
+        assert_eq!(position, Vec2::new(181.0, 80.0));
     }
 
     #[test]
@@ -1500,8 +1533,14 @@ mod tests {
         query.iter(app.world()).count()
     }
 
-    /// Gives every slot a size, as layout would.
+    /// Gives the panel and every slot a size, as layout would.
     fn lay_out_slots(app: &mut App) {
+        let mut panels = app
+            .world_mut()
+            .query_filtered::<&mut ComputedNode, With<InventoryPanel>>();
+        for mut node in panels.iter_mut(app.world_mut()) {
+            node.size = Vec2::new(360.0, 200.0);
+        }
         let mut slots = app
             .world_mut()
             .query_filtered::<&mut ComputedNode, With<InventorySlot>>();
@@ -1663,5 +1702,29 @@ mod tests {
         app.world_mut().resource_mut::<TextEntryActive>().0 = true;
         tap(&mut app, crate::settings::INVENTORY_KEY);
         assert!(!app.world().resource::<InventoryPanelOpen>().0);
+    }
+
+    #[test]
+    fn clicking_outside_an_open_menu_closes_it_and_consumes_the_click() {
+        let (mut app, stacks) = app_with_items();
+        app.world_mut().spawn((Window::default(), PrimaryWindow));
+        tap(&mut app, crate::settings::INVENTORY_KEY);
+        lay_out_slots(&mut app);
+        app.world_mut().resource_mut::<InventoryPopups>().menu = Some(stacks[0].id());
+        step(&mut app);
+        assert_eq!(count::<InventoryMenu>(&mut app), 1);
+
+        let mut buttons = app.world_mut().resource_mut::<ButtonInput<MouseButton>>();
+        buttons.reset_all();
+        buttons.press(MouseButton::Left);
+        step(&mut app);
+        assert_eq!(app.world().resource::<InventoryPopups>().menu, None);
+        assert!(app.world().resource::<UiClickConsumed>().0);
+
+        app.world_mut()
+            .resource_mut::<ButtonInput<MouseButton>>()
+            .reset_all();
+        step(&mut app);
+        assert!(!app.world().resource::<UiClickConsumed>().0);
     }
 }

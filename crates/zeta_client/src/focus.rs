@@ -17,6 +17,25 @@ pub struct TextEntryActive(pub bool);
 #[derive(SystemSet, Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct TextEntryUpdate;
 
+/// True while a UI click on this frame (such as closing an open menu) has already been
+/// handled, so map click handlers ignore the same click. Reset in `First` each frame.
+#[derive(Resource, Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct UiClickConsumed(pub bool);
+
+/// Systems that handle UI clicks and may set [`UiClickConsumed`]. Map click handlers run
+/// after this set.
+#[derive(SystemSet, Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct UiClickUpdate;
+
+/// Clears [`UiClickConsumed`] at the start of each frame.
+#[allow(
+    clippy::needless_pass_by_value,
+    reason = "Bevy system parameters are passed by value"
+)]
+pub fn clear_ui_click_consumed(mut consumed: ResMut<UiClickConsumed>) {
+    consumed.0 = false;
+}
+
 /// Marks a screen panel that takes mouse clicks, so clicks on it never reach the map.
 #[derive(Component, Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct UiPanel;

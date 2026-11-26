@@ -11,7 +11,10 @@ use zeta_core::entity::EntityId;
 use zeta_core::grid::{GridPos, MapBounds};
 use zeta_core::protocol::{MapArea, MoveRequest};
 
-use crate::focus::{TextEntryActive, TextEntryUpdate, UiPanel, cursor_is_over_any};
+use crate::focus::{
+    TextEntryActive, TextEntryUpdate, UiClickConsumed, UiClickUpdate, UiPanel,
+    clear_ui_click_consumed, cursor_is_over_any,
+};
 use crate::layout::square_at;
 use crate::player::LocalPlayer;
 use crate::settings::{ClientSettings, MovementKeys};
@@ -38,9 +41,14 @@ impl Plugin for MovementInputPlugin {
         app.init_resource::<ClientSettings>()
             .init_resource::<LocalPlayer>()
             .init_resource::<TextEntryActive>()
+            .init_resource::<UiClickConsumed>()
+            .add_systems(First, clear_ui_click_consumed)
             .add_systems(
                 Update,
-                (keyboard_movement.after(TextEntryUpdate), click_movement),
+                (
+                    keyboard_movement.after(TextEntryUpdate),
+                    click_movement.after(UiClickUpdate),
+                ),
             );
     }
 }
@@ -116,6 +124,7 @@ fn click_movement(
     buttons: Res<ButtonInput<MouseButton>>,
     settings: Res<ClientSettings>,
     text_entry: Res<TextEntryActive>,
+    click_consumed: Res<UiClickConsumed>,
     local_player: Res<LocalPlayer>,
     window: Single<&Window, With<PrimaryWindow>>,
     camera: Single<(&Camera, &GlobalTransform), With<Camera2d>>,
@@ -123,7 +132,10 @@ fn click_movement(
     areas: Query<&MapArea>,
     mut requests: MessageWriter<MoveRequest>,
 ) {
-    if text_entry.0 || local_player.character.is_none() || !buttons.just_pressed(MouseButton::Left)
+    if text_entry.0
+        || click_consumed.0
+        || local_player.character.is_none()
+        || !buttons.just_pressed(MouseButton::Left)
     {
         return;
     }
