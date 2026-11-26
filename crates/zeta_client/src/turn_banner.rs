@@ -13,6 +13,7 @@ use zeta_core::protocol::{EndTurnRequest, EntityName, TurnBubble};
 use crate::focus::{TextEntryActive, TextEntryUpdate, UiPanel, cursor_is_over, key_label};
 use crate::player::LocalPlayer;
 use crate::settings::ClientSettings;
+use crate::theme::{TEXT_ON_WOOD, UiTheme};
 
 /// Font size of the banner text.
 const BANNER_FONT_SIZE: f32 = 20.0;
@@ -42,6 +43,7 @@ impl Plugin for TurnBubbleBannerPlugin {
         app.init_resource::<ClientSettings>()
             .init_resource::<LocalPlayer>()
             .init_resource::<TextEntryActive>()
+            .init_resource::<UiTheme>()
             .add_systems(Startup, spawn_banner)
             .add_systems(
                 Update,
@@ -114,7 +116,7 @@ pub fn banner_text(
     clippy::needless_pass_by_value,
     reason = "Bevy system parameters are passed by value"
 )]
-fn spawn_banner(mut commands: Commands, settings: Res<ClientSettings>) {
+fn spawn_banner(mut commands: Commands, settings: Res<ClientSettings>, theme: Res<UiTheme>) {
     let key_name = format!("End turn ({})", key_label(settings.end_turn_key));
     commands
         .spawn((
@@ -123,22 +125,23 @@ fn spawn_banner(mut commands: Commands, settings: Res<ClientSettings>) {
             Node {
                 display: Display::None,
                 position_type: PositionType::Absolute,
-                top: Val::Px(8.0),
+                top: Val::Px(10.0),
                 left: Val::Percent(30.0),
                 right: Val::Percent(30.0),
                 flex_direction: FlexDirection::Column,
                 align_items: AlignItems::Center,
-                padding: UiRect::all(Val::Px(8.0)),
-                row_gap: Val::Px(6.0),
+                padding: UiRect::axes(Val::Px(18.0), Val::Px(12.0)),
+                row_gap: Val::Px(8.0),
                 ..default()
             },
-            BackgroundColor(Color::srgba(0.1, 0.1, 0.2, 0.85)),
+            theme.wood_panel(),
         ))
         .with_children(|banner| {
             banner.spawn((
                 TurnBannerText,
                 Text::new(""),
-                TextFont::from_font_size(BANNER_FONT_SIZE),
+                theme.heading_font(BANNER_FONT_SIZE),
+                TextColor(TEXT_ON_WOOD),
                 TextLayout::justify(Justify::Center),
             ));
             banner
@@ -146,14 +149,15 @@ fn spawn_banner(mut commands: Commands, settings: Res<ClientSettings>) {
                     EndTurnButton,
                     Node {
                         display: Display::None,
-                        padding: UiRect::axes(Val::Px(12.0), Val::Px(4.0)),
+                        padding: UiRect::axes(Val::Px(16.0), Val::Px(7.0)),
                         ..default()
                     },
-                    BackgroundColor(Color::srgb(0.3, 0.3, 0.5)),
+                    theme.parchment_button(),
                 ))
                 .with_child((
                     Text::new(key_name),
-                    TextFont::from_font_size(BUTTON_FONT_SIZE),
+                    theme.ui_font(BUTTON_FONT_SIZE),
+                    TextColor(crate::theme::TEXT_ON_PARCHMENT),
                 ));
         });
 }

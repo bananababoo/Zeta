@@ -36,9 +36,11 @@ use zeta_core::catalog::CatalogId;
 use zeta_core::entity::EntityId;
 use zeta_core::grid::{GridPos, MapBounds};
 use zeta_core::protocol::{
-    Collider, Delivery, EntityName, Inventory, Item, MapArea, PlayerAssigned, PlayerCharacter,
-    ProtocolRegistrar, Tags, register_protocol,
+    Collider, Delivery, DiceRollShown, EntityName, Inventory, Item, LogEntryKind, MapArea,
+    NarrationLogEntry, PlayerAssigned, PlayerCharacter, ProtocolRegistrar, Tags, TurnBubble,
+    register_protocol,
 };
+use zeta_core::resolution::{D20, Volume};
 
 /// Width of the rendered image in pixels, at a scale factor of 1.
 const IMAGE_WIDTH: u32 = 1280;
@@ -85,6 +87,8 @@ enum Scene {
     InventoryMenu,
     /// The river, wooden bridge, oil barrel, goblin, and players rendered with GPU terrain.
     RiverScene,
+    /// All HUD panels visible together: Turn Banner, settled Dice Roll, Narration Log, and Prompt.
+    CombatHud,
 }
 
 /// What the fake cursor points at.
@@ -107,11 +111,12 @@ enum Step {
 
 impl Scene {
     /// Every scene, in the order `tools/ui_shots.ps1` lists them.
-    const ALL: [Self; 4] = [
+    const ALL: [Self; 5] = [
         Self::InventoryOpen,
         Self::InventoryHover,
         Self::InventoryMenu,
         Self::RiverScene,
+        Self::CombatHud,
     ];
 
     /// The name given on the command line, which is also the PNG file name.
@@ -121,6 +126,7 @@ impl Scene {
             Self::InventoryHover => "inventory_hover",
             Self::InventoryMenu => "inventory_menu",
             Self::RiverScene => "river_scene",
+            Self::CombatHud => "combat_hud",
         }
     }
 
@@ -135,7 +141,7 @@ impl Scene {
             Self::InventoryOpen => vec![open],
             Self::InventoryHover => vec![open, Step::Hover(Target::Slot("painters_supplies"))],
             Self::InventoryMenu => vec![open, Step::Click(Target::Slot("longsword"))],
-            Self::RiverScene => Vec::new(),
+            Self::RiverScene | Self::CombatHud => Vec::new(),
         }
     }
 }
@@ -225,10 +231,24 @@ fn carried_inventory() -> Inventory {
     inventory
 }
 
+/// Which scene is currently being rendered.
+#[derive(Resource, Clone, Copy, Debug)]
+struct ActiveScene(Scene);
+
 /// Spawns what the server would replicate: the map area, river, wooden bridge, oil barrel,
 /// goblin, the local character, and a second Player Character beside it so `Give` has a
 /// recipient. Then assigns the local character.
-fn spawn_fake_world(mut commands: Commands, mut assignments: MessageWriter<PlayerAssigned>) {
+#[allow(
+    clippy::needless_pass_by_value,
+    reason = "Bevy system parameters are passed by value"
+)]
+fn spawn_fake_world(
+    mut commands: Commands,
+    scene: Res<ActiveScene>,
+    mut assignments: MessageWriter<PlayerAssigned>,
+    mut logs: MessageWriter<NarrationLogEntry>,
+    mut rolls: MessageWriter<DiceRollShown>,
+) {
     commands.spawn(MapArea(MapBounds {
         width: 14,
         height: 9,
@@ -294,6 +314,50 @@ fn spawn_fake_world(mut commands: Commands, mut assignments: MessageWriter<Playe
     ));
     assignments.write(PlayerAssigned {
         character: LOCAL_CHARACTER,
+    });
+    if scene.0 == Scene::CombatHud {
+        spawn_combat_hud_state(&mut commands, EntityId(next_id + 2), &mut logs, &mut rolls);
+    }
+}
+
+fn spawn_combat_hud_state(
+    commands: &mut Commands,
+    goblin: EntityId,
+    logs: &mut MessageWriter<NarrationLogEntry>,
+    rolls: &mut MessageWriter<DiceRollShown>,
+) {
+    commands.spawn(TurnBubble {
+        order: vec![LOCAL_CHARACTER, goblin],
+        current: 0,
+        completed_rounds: 0,
+        movement_used: false,
+        prompt_used: false,
+    });
+    logs.write(NarrationLogEntry {
+        sequence: 1,
+        kind: LogEntryKind::Narration,
+        speaker: None,
+        speaker_name: None,
+        text: "Cold river mist drifts over the timber bridge as the goblin eyes the barrel."
+            .to_owned(),
+        vol: None,
+    });
+    logs.write(NarrationLogEntry {
+        sequence: 2,
+        kind: LogEntryKind::Speech,
+        speaker: Some(EntityId(2)),
+        speaker_name: Some("Bram".to_owned()),
+        text: "Hold the bridge - I'll flank left!".to_owned(),
+        vol: Some(Volume::Normal),
+    });
+    rolls.write(DiceRollShown {
+        sequence: 3,
+        actor: LOCAL_CHARACTER,
+        natural: D20::new(16).expect("16 is a valid d20 face"),
+        modifier: 3,
+        dc: 14,
+        reason: "Athletics: shove the oil barrel".to_owned(),
+        success: true,
     });
 }
 
@@ -497,6 +561,7 @@ fn main() -> AppExit {
     .add_plugins(ScheduleRunnerPlugin::run_loop(FRAME_WAIT));
     register_protocol(&mut OfflineProtocol(&mut app));
     app.add_plugins(ClientPlugins)
+        .insert_resource(ActiveScene(scene))
         .insert_resource(Driver {
             steps: scene.steps(),
             next_step: 0,

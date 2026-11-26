@@ -12,6 +12,7 @@ use zeta_core::protocol::{FreeformActionPrompt, PromptState, PromptStatusUpdate,
 
 use crate::focus::{TextEntryActive, TextEntryUpdate, UiPanel};
 use crate::settings::ClientSettings;
+use crate::theme::{STATUS_TEXT_COLOR, TEXT_ON_WOOD, UiTheme};
 
 /// Shown in the text box while it is not focused.
 const PROMPT_HINT: &str = "Press Enter to describe an action";
@@ -160,6 +161,7 @@ impl Plugin for FreeformActionPromptPlugin {
             .init_resource::<TextEntryActive>()
             .init_resource::<PromptEditor>()
             .init_resource::<LatestPromptStatus>()
+            .init_resource::<UiTheme>()
             .add_message::<OpenPromptWithItem>()
             .add_systems(Startup, spawn_prompt_panel)
             .add_systems(
@@ -199,33 +201,38 @@ pub fn prompt_status_text(status: Option<&PromptStatusUpdate>) -> String {
     }
 }
 
-fn spawn_prompt_panel(mut commands: Commands) {
+#[allow(
+    clippy::needless_pass_by_value,
+    reason = "Bevy system parameters are passed by value"
+)]
+fn spawn_prompt_panel(mut commands: Commands, theme: Res<UiTheme>) {
     commands
         .spawn((
             UiPanel,
             Node {
                 position_type: PositionType::Absolute,
-                left: Val::Px(0.0),
-                right: Val::Px(0.0),
-                bottom: Val::Px(0.0),
+                left: Val::Px(8.0),
+                right: Val::Px(8.0),
+                bottom: Val::Px(8.0),
                 flex_direction: FlexDirection::Column,
-                padding: UiRect::all(Val::Px(8.0)),
+                padding: UiRect::axes(Val::Px(16.0), Val::Px(12.0)),
                 row_gap: Val::Px(4.0),
                 ..default()
             },
-            BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.75)),
+            theme.wood_panel(),
         ))
         .with_children(|panel| {
             panel.spawn((
                 PromptStatusText,
                 Text::new(""),
-                TextFont::from_font_size(STATUS_FONT_SIZE),
-                TextColor(Color::srgb(0.8, 0.8, 0.6)),
+                theme.ui_font(STATUS_FONT_SIZE),
+                TextColor(STATUS_TEXT_COLOR),
             ));
             panel.spawn((
                 PromptInputText,
                 Text::new(PROMPT_HINT),
-                TextFont::from_font_size(PROMPT_FONT_SIZE),
+                theme.ui_font(PROMPT_FONT_SIZE),
+                TextColor(TEXT_ON_WOOD),
             ));
         });
 }

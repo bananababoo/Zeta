@@ -13,6 +13,7 @@ use zeta_core::protocol::{DiceRollShown, EntityName};
 
 use crate::focus::UiPanel;
 use crate::settings::ClientSettings;
+use crate::theme::{FAILURE_COLOR, SUCCESS_COLOR, TEXT_ON_WOOD, UiTheme};
 
 /// Font size of the die face.
 const FACE_FONT_SIZE: f32 = 64.0;
@@ -23,11 +24,7 @@ const D20_FACES: u64 = 20;
 /// Step between tumbling faces, coprime with 20 so every face appears.
 const TUMBLE_STEP: u64 = 7;
 /// Face color while tumbling.
-const TUMBLING_COLOR: Color = Color::WHITE;
-/// Face color of a successful check.
-const SUCCESS_COLOR: Color = Color::srgb(0.4, 0.9, 0.4);
-/// Face color of a failed check.
-const FAILURE_COLOR: Color = Color::srgb(0.95, 0.4, 0.35);
+const TUMBLING_COLOR: Color = TEXT_ON_WOOD;
 
 /// How long each part of the dice animation lasts.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -195,6 +192,7 @@ impl Plugin for DiceRollPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<ClientSettings>()
             .init_resource::<DiceDisplay>()
+            .init_resource::<UiTheme>()
             // Registers only if no window plugin did (bevy_app-0.20.1/src/sub_app.rs:395).
             .add_message::<RequestRedraw>()
             .add_systems(Startup, spawn_dice_panel)
@@ -224,7 +222,11 @@ fn redraw_while_tumbling(
     }
 }
 
-fn spawn_dice_panel(mut commands: Commands) {
+#[allow(
+    clippy::needless_pass_by_value,
+    reason = "Bevy system parameters are passed by value"
+)]
+fn spawn_dice_panel(mut commands: Commands, theme: Res<UiTheme>) {
     commands
         .spawn((
             DicePanel,
@@ -237,22 +239,24 @@ fn spawn_dice_panel(mut commands: Commands) {
                 right: Val::Percent(35.0),
                 flex_direction: FlexDirection::Column,
                 align_items: AlignItems::Center,
-                padding: UiRect::all(Val::Px(12.0)),
+                padding: UiRect::axes(Val::Px(20.0), Val::Px(16.0)),
+                row_gap: Val::Px(6.0),
                 ..default()
             },
-            BackgroundColor(Color::srgba(0.05, 0.05, 0.05, 0.85)),
+            theme.wood_panel(),
         ))
         .with_children(|panel| {
             panel.spawn((
                 DiceFaceText,
                 Text::new(""),
-                TextFont::from_font_size(FACE_FONT_SIZE),
+                theme.heading_font(FACE_FONT_SIZE),
                 TextColor(TUMBLING_COLOR),
             ));
             panel.spawn((
                 DiceDetailText,
                 Text::new(""),
-                TextFont::from_font_size(DETAIL_FONT_SIZE),
+                theme.ui_font(DETAIL_FONT_SIZE),
+                TextColor(TEXT_ON_WOOD),
                 TextLayout::justify(Justify::Center),
             ));
         });

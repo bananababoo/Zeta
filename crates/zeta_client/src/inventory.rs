@@ -34,6 +34,7 @@ use crate::focus::{
 use crate::player::LocalPlayer;
 use crate::prompt::{OpenPromptWithItem, PromptAttachment};
 use crate::settings::{ClientSettings, InventorySlotSettings};
+use crate::theme::{SLOT_CORNER_RADIUS_PIXELS, TEXT_ON_PARCHMENT, TEXT_ON_WOOD, UiTheme};
 
 /// Font size of the panel heading.
 const HEADING_FONT_SIZE: f32 = 18.0;
@@ -186,6 +187,7 @@ impl Plugin for InventoryPlugin {
             .init_resource::<InventoryPanelOpen>()
             .init_resource::<InventoryPopups>()
             .init_resource::<ShownInventory>()
+            .init_resource::<UiTheme>()
             .add_message::<OpenPromptWithItem>()
             .add_message::<RequestRedraw>()
             .add_systems(Startup, spawn_inventory_ui)
@@ -620,7 +622,7 @@ fn wanted_popup(
     clippy::needless_pass_by_value,
     reason = "Bevy system parameters are passed by value"
 )]
-fn spawn_inventory_ui(mut commands: Commands, settings: Res<ClientSettings>) {
+fn spawn_inventory_ui(mut commands: Commands, settings: Res<ClientSettings>, theme: Res<UiTheme>) {
     commands
         .spawn((
             InventoryToggleButton,
@@ -629,14 +631,15 @@ fn spawn_inventory_ui(mut commands: Commands, settings: Res<ClientSettings>) {
                 position_type: PositionType::Absolute,
                 top: Val::Px(8.0),
                 left: Val::Px(8.0),
-                padding: UiRect::axes(Val::Px(12.0), Val::Px(4.0)),
+                padding: UiRect::axes(Val::Px(16.0), Val::Px(8.0)),
                 ..default()
             },
-            BackgroundColor(Color::srgb(0.3, 0.3, 0.5)),
+            theme.wood_button(),
         ))
         .with_child((
             Text::new(format!("Inventory ({})", key_label(settings.inventory_key))),
-            TextFont::from_font_size(BUTTON_FONT_SIZE),
+            theme.ui_font(BUTTON_FONT_SIZE),
+            TextColor(TEXT_ON_WOOD),
         ));
     commands.spawn((
         InventoryPanel,
@@ -644,23 +647,28 @@ fn spawn_inventory_ui(mut commands: Commands, settings: Res<ClientSettings>) {
         Node {
             display: Display::None,
             position_type: PositionType::Absolute,
-            top: Val::Px(44.0),
+            top: Val::Px(50.0),
             left: Val::Px(8.0),
             width: Val::Px(PANEL_WIDTH_PIXELS),
             max_height: Val::Percent(70.0),
             flex_direction: FlexDirection::Column,
-            padding: UiRect::all(Val::Px(8.0)),
-            row_gap: Val::Px(6.0),
+            padding: UiRect::all(Val::Px(14.0)),
+            row_gap: Val::Px(8.0),
             overflow: Overflow::scroll_y(),
             ..default()
         },
         ScrollPosition::default(),
-        BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.8)),
+        theme.wood_panel(),
     ));
 }
 
 /// Spawns 1 slot square of the grid.
-fn spawn_slot(grid: &mut ChildSpawnerCommands, slot: &SlotView, look: &InventorySlotSettings) {
+fn spawn_slot(
+    grid: &mut ChildSpawnerCommands,
+    slot: &SlotView,
+    look: &InventorySlotSettings,
+    theme: &UiTheme,
+) {
     let border = if slot.equipped {
         UiRect::all(Val::Px(look.equipped_border_pixels))
     } else {
@@ -674,6 +682,7 @@ fn spawn_slot(grid: &mut ChildSpawnerCommands, slot: &SlotView, look: &Inventory
             align_items: AlignItems::Center,
             justify_content: JustifyContent::Center,
             border,
+            border_radius: BorderRadius::all(Val::Px(SLOT_CORNER_RADIUS_PIXELS)),
             ..default()
         },
         BackgroundColor(slot_color(slot.category, look)),
@@ -682,28 +691,36 @@ fn spawn_slot(grid: &mut ChildSpawnerCommands, slot: &SlotView, look: &Inventory
     .with_children(|square| {
         square.spawn((
             Text::new(slot_letter(slot.category).to_string()),
-            TextFont::from_font_size(SLOT_LETTER_FONT_SIZE),
+            theme.ui_font(SLOT_LETTER_FONT_SIZE),
+            TextColor(TEXT_ON_WOOD),
         ));
         if let Some(quantity) = &slot.quantity {
             square.spawn((
                 Node {
                     position_type: PositionType::Absolute,
-                    right: Val::Px(2.0),
-                    bottom: Val::Px(0.0),
+                    right: Val::Px(3.0),
+                    bottom: Val::Px(1.0),
                     ..default()
                 },
                 Text::new(quantity.clone()),
-                TextFont::from_font_size(SLOT_QUANTITY_FONT_SIZE),
+                theme.ui_font(SLOT_QUANTITY_FONT_SIZE),
+                TextColor(TEXT_ON_WOOD),
             ));
         }
     });
 }
 
 /// Spawns the heading and the slot grid of `view` under the panel.
-fn spawn_view(panel: &mut ChildSpawnerCommands, view: &PanelView, look: &InventorySlotSettings) {
+fn spawn_view(
+    panel: &mut ChildSpawnerCommands,
+    view: &PanelView,
+    look: &InventorySlotSettings,
+    theme: &UiTheme,
+) {
     panel.spawn((
         Text::new(view.heading.clone()),
-        TextFont::from_font_size(HEADING_FONT_SIZE),
+        theme.heading_font(HEADING_FONT_SIZE),
+        TextColor(TEXT_ON_WOOD),
     ));
     panel
         .spawn(Node {
@@ -714,7 +731,7 @@ fn spawn_view(panel: &mut ChildSpawnerCommands, view: &PanelView, look: &Invento
         })
         .with_children(|grid| {
             for slot in &view.slots {
-                spawn_slot(grid, slot, look);
+                spawn_slot(grid, slot, look, theme);
             }
         });
 }
@@ -722,25 +739,28 @@ fn spawn_view(panel: &mut ChildSpawnerCommands, view: &PanelView, look: &Invento
 /// Spawns a popup with its top-left corner at `position` in logical pixels, above every
 /// other node. The menu takes clicks, so it is a `UiPanel`; the tooltip only shows text.
 /// `keep_popups_on_screen` moves it once layout knows its size.
-fn spawn_popup(commands: &mut Commands, content: &PopupContent, position: Vec2) -> Entity {
-    let node = Node {
-        position_type: PositionType::Absolute,
-        left: Val::Px(position.x),
-        top: Val::Px(position.y),
-        flex_direction: FlexDirection::Column,
-        padding: UiRect::all(Val::Px(POPUP_PADDING_PIXELS)),
-        row_gap: Val::Px(4.0),
-        ..default()
-    };
-    let background = BackgroundColor(Color::srgba(0.1, 0.1, 0.15, 0.95));
+fn spawn_popup(
+    commands: &mut Commands,
+    content: &PopupContent,
+    position: Vec2,
+    theme: &UiTheme,
+) -> Entity {
     let anchor = PopupAnchor(position);
     match content {
         PopupContent::Tooltip(text) => commands
             .spawn((
                 InventoryTooltip,
                 anchor,
-                node,
-                background,
+                Node {
+                    position_type: PositionType::Absolute,
+                    left: Val::Px(position.x),
+                    top: Val::Px(position.y),
+                    flex_direction: FlexDirection::Column,
+                    padding: UiRect::all(Val::Px(POPUP_PADDING_PIXELS + 6.0)),
+                    row_gap: Val::Px(4.0),
+                    ..default()
+                },
+                theme.parchment_panel(),
                 GlobalZIndex(POPUP_Z_INDEX),
             ))
             .with_child((
@@ -749,7 +769,8 @@ fn spawn_popup(commands: &mut Commands, content: &PopupContent, position: Vec2) 
                     ..default()
                 },
                 Text::new(text.clone()),
-                TextFont::from_font_size(TOOLTIP_FONT_SIZE),
+                theme.narration_font(TOOLTIP_FONT_SIZE + 1.0),
+                TextColor(TEXT_ON_PARCHMENT),
             ))
             .id(),
         PopupContent::Menu(actions) => commands
@@ -757,8 +778,16 @@ fn spawn_popup(commands: &mut Commands, content: &PopupContent, position: Vec2) 
                 InventoryMenu,
                 UiPanel,
                 anchor,
-                node,
-                background,
+                Node {
+                    position_type: PositionType::Absolute,
+                    left: Val::Px(position.x),
+                    top: Val::Px(position.y),
+                    flex_direction: FlexDirection::Column,
+                    padding: UiRect::all(Val::Px(POPUP_PADDING_PIXELS + 4.0)),
+                    row_gap: Val::Px(6.0),
+                    ..default()
+                },
+                theme.wood_panel(),
                 GlobalZIndex(POPUP_Z_INDEX),
             ))
             .with_children(|menu| {
@@ -766,14 +795,15 @@ fn spawn_popup(commands: &mut Commands, content: &PopupContent, position: Vec2) 
                     menu.spawn((
                         MenuEntry(action.kind.clone()),
                         Node {
-                            padding: UiRect::axes(Val::Px(8.0), Val::Px(3.0)),
+                            padding: UiRect::axes(Val::Px(12.0), Val::Px(6.0)),
                             ..default()
                         },
-                        BackgroundColor(Color::srgb(0.3, 0.3, 0.5)),
+                        theme.parchment_button(),
                     ))
                     .with_child((
                         Text::new(action.label.clone()),
-                        TextFont::from_font_size(BUTTON_FONT_SIZE),
+                        theme.ui_font(BUTTON_FONT_SIZE),
+                        TextColor(TEXT_ON_PARCHMENT),
                     ));
                 }
             })
@@ -959,12 +989,14 @@ fn current_view(local_player: LocalPlayer, holders: &Holders) -> PanelView {
 
 #[allow(
     clippy::needless_pass_by_value,
-    reason = "Bevy system parameters are passed by value"
+    clippy::too_many_arguments,
+    reason = "Bevy system parameters are passed by value, 1 per resource and query"
 )]
 fn refresh_panel(
     mut commands: Commands,
     open: Res<InventoryPanelOpen>,
     settings: Res<ClientSettings>,
+    theme: Res<UiTheme>,
     local_player: Res<LocalPlayer>,
     holders: Holders,
     mut panels: Query<(Entity, &mut Node), With<InventoryPanel>>,
@@ -987,7 +1019,9 @@ fn refresh_panel(
         commands
             .entity(panel)
             .despawn_children()
-            .with_children(|children| spawn_view(children, &view, &settings.inventory_slots));
+            .with_children(|children| {
+                spawn_view(children, &view, &settings.inventory_slots, &theme);
+            });
     }
     shown.0 = Some(view);
 }
@@ -1012,6 +1046,7 @@ fn refresh_popups(
     mut commands: Commands,
     open: Res<InventoryPanelOpen>,
     settings: Res<ClientSettings>,
+    theme: Res<UiTheme>,
     view: Res<ShownInventory>,
     mut popups: ResMut<InventoryPopups>,
     panels: Query<(&ComputedNode, &UiGlobalTransform), With<InventoryPanel>>,
@@ -1067,7 +1102,7 @@ fn refresh_popups(
     if let Some(old) = shown.take() {
         commands.entity(old.entity).despawn();
     }
-    let entity = spawn_popup(&mut commands, &content, position);
+    let entity = spawn_popup(&mut commands, &content, position, &theme);
     *shown = Some(ShownPopup {
         content,
         position,

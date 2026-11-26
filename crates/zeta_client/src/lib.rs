@@ -16,6 +16,7 @@ pub mod player;
 pub mod prompt;
 pub mod settings;
 pub mod terrain;
+pub mod theme;
 pub mod turn_banner;
 
 use bevy::app::{PluginGroup, PluginGroupBuilder};
@@ -29,6 +30,7 @@ impl PluginGroup for ClientPlugins {
     fn build(self) -> PluginGroupBuilder {
         PluginGroupBuilder::start::<Self>()
             .add(frame_pacing::FramePacingPlugin)
+            .add(theme::ThemePlugin)
             .add(player::LocalPlayerPlugin)
             .add(map::MapPlugin)
             .add(movement_input::MovementInputPlugin)

@@ -18,9 +18,10 @@ use zeta_core::resolution::Volume;
 use crate::focus::{UiPanel, cursor_is_over_any};
 use crate::layout::square_center;
 use crate::settings::ClientSettings;
+use crate::theme::{SPEECH_BUBBLE_COLOR, TEXT_ON_PARCHMENT, UiTheme};
 
 /// Font size of log lines.
-const LOG_FONT_SIZE: f32 = 15.0;
+const LOG_FONT_SIZE: f32 = 16.0;
 /// Font size of speech bubbles relative to the square size.
 const BUBBLE_FONT_SCALE: f32 = 0.45;
 /// Width of a speech bubble in squares, before it wraps.
@@ -137,6 +138,7 @@ impl Plugin for NarrationLogPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<ClientSettings>()
             .init_resource::<NarrationLog>()
+            .init_resource::<UiTheme>()
             .add_systems(Startup, spawn_log_panel)
             .add_systems(
                 Update,
@@ -152,7 +154,11 @@ impl Plugin for NarrationLogPlugin {
     }
 }
 
-fn spawn_log_panel(mut commands: Commands) {
+#[allow(
+    clippy::needless_pass_by_value,
+    reason = "Bevy system parameters are passed by value"
+)]
+fn spawn_log_panel(mut commands: Commands, theme: Res<UiTheme>) {
     commands
         .spawn((
             NarrationLogPanel,
@@ -161,20 +167,21 @@ fn spawn_log_panel(mut commands: Commands) {
                 position_type: PositionType::Absolute,
                 top: Val::Px(8.0),
                 right: Val::Px(8.0),
-                bottom: Val::Px(96.0),
+                bottom: Val::Px(104.0),
                 width: Val::Percent(28.0),
                 flex_direction: FlexDirection::Column,
-                padding: UiRect::all(Val::Px(8.0)),
+                padding: UiRect::all(Val::Px(14.0)),
                 overflow: Overflow::scroll_y(),
                 ..default()
             },
             ScrollPosition::default(),
-            BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.6)),
+            theme.parchment_panel(),
         ))
         .with_child((
             NarrationLogText,
             Text::new(""),
-            TextFont::from_font_size(LOG_FONT_SIZE),
+            theme.narration_font(LOG_FONT_SIZE),
+            TextColor(TEXT_ON_PARCHMENT),
         ));
 }
 
@@ -291,6 +298,7 @@ fn spawn_speech_bubbles(
     mut commands: Commands,
     mut entries: MessageReader<NarrationLogEntry>,
     settings: Res<ClientSettings>,
+    theme: Res<UiTheme>,
     speakers: Query<(&EntityId, &GridPos)>,
     bubbles: Query<(Entity, &SpeechBubble)>,
 ) {
@@ -316,8 +324,8 @@ fn spawn_speech_bubbles(
                 remaining_seconds: settings.speech_bubble_seconds,
             },
             Text2d::new(entry.text.clone()),
-            TextFont::from_font_size(tile_size * BUBBLE_FONT_SCALE),
-            TextColor(Color::srgb(1.0, 0.95, 0.7)),
+            theme.narration_font(tile_size * BUBBLE_FONT_SCALE),
+            TextColor(SPEECH_BUBBLE_COLOR),
             TextLayout::justify(Justify::Center),
             TextBounds {
                 width: Some(tile_size * BUBBLE_WIDTH_SQUARES),

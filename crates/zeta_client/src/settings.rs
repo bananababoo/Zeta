@@ -122,25 +122,20 @@ pub const INVENTORY_POPUP_GAP_PIXELS: f32 = 6.0;
 /// Section 5).
 pub const INVENTORY_EQUIPPED_BORDER_PIXELS: f32 = 3.0;
 
-/// Placeholder: color of the border that marks an equipped slot. Replaced when the client
-/// layout is decided (`docs/architecture/technical_architecture.md` Section 5).
-pub const INVENTORY_EQUIPPED_BORDER_COLOR: Color = Color::srgb(1.0, 0.85, 0.3);
+/// Color of the border that marks an equipped slot: warm cream linen (no gold/metal).
+pub const INVENTORY_EQUIPPED_BORDER_COLOR: Color = Color::srgb(0.97, 0.92, 0.82);
 
-/// Placeholder: color of weapon slots. Replaced when item art is decided
-/// (`docs/architecture/technical_architecture.md` Section 2).
-pub const INVENTORY_WEAPON_COLOR: Color = Color::srgb(0.6, 0.22, 0.2);
+/// Color of weapon slots: warm terracotta clay.
+pub const INVENTORY_WEAPON_COLOR: Color = Color::srgb(0.68, 0.30, 0.24);
 
-/// Placeholder: color of armor and shield slots. Replaced when item art is decided
-/// (`docs/architecture/technical_architecture.md` Section 2).
-pub const INVENTORY_ARMOR_COLOR: Color = Color::srgb(0.25, 0.35, 0.6);
+/// Color of armor and shield slots: muted indigo slate.
+pub const INVENTORY_ARMOR_COLOR: Color = Color::srgb(0.32, 0.44, 0.56);
 
-/// Placeholder: color of tool slots. Replaced when item art is decided
-/// (`docs/architecture/technical_architecture.md` Section 2).
-pub const INVENTORY_TOOL_COLOR: Color = Color::srgb(0.55, 0.42, 0.2);
+/// Color of tool slots: warm tan ochre leather.
+pub const INVENTORY_TOOL_COLOR: Color = Color::srgb(0.64, 0.46, 0.26);
 
-/// Placeholder: color of every other slot, including custom items. Replaced when item art is
-/// decided (`docs/architecture/technical_architecture.md` Section 2).
-pub const INVENTORY_GEAR_COLOR: Color = Color::srgb(0.3, 0.45, 0.3);
+/// Color of every other slot, including custom items: mossy sage green.
+pub const INVENTORY_GEAR_COLOR: Color = Color::srgb(0.35, 0.52, 0.34);
 /// Placeholder: longest wait between updates while the window has focus and nothing happens.
 /// Input wakes the client at once; this bounds how late server messages and timers are seen.
 /// Replaced when client performance targets are decided
