@@ -17,11 +17,19 @@ use std::collections::{HashMap, HashSet};
 use std::f32::consts::{FRAC_PI_2, PI};
 use std::f64::consts::FRAC_1_SQRT_2;
 use std::path::Path;
+use std::sync::Arc;
 
 use bevy::asset::RenderAssetUsages;
 use bevy::image::{Image, ImageSampler};
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
+// `bevy::tasks`: bevy_internal-0.20.1/src/lib.rs:100.
+// `AsyncComputeTaskPool`: bevy_tasks-0.20.1/src/lib.rs:82 -> bevy_tasks-0.20.1/src/usages.rs:67.
+// `Task`: bevy_tasks-0.20.1/src/lib.rs:79 -> async-task-4.7.1/src/task.rs:49.
+// `block_on`: bevy_tasks-0.20.1/src/lib.rs:107 -> bevy_platform-0.20.1/src/future.rs:14.
+// `poll_once`: bevy_tasks-0.20.1/src/lib.rs:85 -> futures-lite-2.6.1/src/future.rs:116.
+use bevy::tasks::{AsyncComputeTaskPool, Task, block_on, poll_once};
+use bevy::window::RequestRedraw;
 use zeta_core::world::{
     CHUNK_SIZE, ChunkCoord, ChunkTerrain, CubeFace, ELEVATION_STEP_FT, FACE_TILES, FaceRotation,
     PlanetHeightmaps, PlanetTile, RegionFootprint, RegionOverlap, TileSample, face_uv_to_unit_vec,
@@ -37,8 +45,18 @@ pub const DEFAULT_STREAM_RADIUS_CHUNKS: i32 = 4;
 /// Default rendered screen pixels per 5-foot tactical square.
 pub const DEFAULT_TILE_PIXEL_SIZE: f32 = 3.0;
 
-/// Draw depth of streamed planetary terrain sprites.
-const CHUNK_Z_DEPTH: f32 = 0.0;
+/// Extra chunk rings retained outside [`PlanetCameraFocus::stream_radius_chunks`] before
+/// despawning, preventing texture thrashing when oscillating across chunk edges.
+pub const KEEP_RADIUS_MARGIN: i32 = 1;
+
+/// Maximum concurrent background chunk generation tasks dispatched on [`AsyncComputeTaskPool`].
+pub const MAX_IN_FLIGHT_CHUNK_TASKS: usize = 16;
+
+/// Maximum completed chunk textures uploaded to `Assets<Image>` in a single frame.
+pub const MAX_CHUNK_UPLOADS_PER_FRAME: usize = 4;
+
+/// Draw depth of streamed planetary terrain sprites (behind `MapPlugin` splatmaps at `z = 0.0`).
+pub const CHUNK_Z_DEPTH: f32 = -1.0;
 
 /// Side length of 1 streaming chunk in floating-point tiles (`64.0`).
 #[expect(
@@ -53,14 +71,16 @@ const MAX_LOCAL_OFFSET_F32: f32 = f32::from_bits(CHUNK_SIZE_F32.to_bits() - 1);
 /// Loaded 6-face Layer 0 planetary elevation dataset stored as a Bevy resource.
 #[derive(Resource, Clone, Debug)]
 pub struct PlanetWorld {
-    maps: PlanetHeightmaps,
+    maps: Arc<PlanetHeightmaps>,
 }
 
 impl PlanetWorld {
     /// Wraps an already-constructed [`PlanetHeightmaps`] dataset.
     #[must_use]
     pub fn new(maps: PlanetHeightmaps) -> Self {
-        Self { maps }
+        Self {
+            maps: Arc::new(maps),
+        }
     }
 
     /// Loads all 6 Layer 0 face heightmaps from `dir`.
@@ -84,6 +104,38 @@ impl PlanetWorld {
     pub fn maps(&self) -> &PlanetHeightmaps {
         &self.maps
     }
+
+    /// Returns an `O(1)` cloned [`Arc`] handle to the underlying [`PlanetHeightmaps`] for
+    /// background chunk generation tasks.
+    #[must_use]
+    pub fn maps_arc(&self) -> Arc<PlanetHeightmaps> {
+        Arc::clone(&self.maps)
+    }
+}
+
+/// Controls whether streamed `64x64` chunk sampling and RGBA8 texture generation execute
+/// asynchronously on [`AsyncComputeTaskPool`] or synchronously on the main thread.
+#[derive(Resource, Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum PlanetStreamSyncMode {
+    /// Offloads chunk sampling and rasterization to [`AsyncComputeTaskPool`] with a per-frame
+    /// GPU upload budget (`MAX_CHUNK_UPLOADS_PER_FRAME`), falling back to synchronous generation
+    /// if no task pool is initialized.
+    #[default]
+    Async,
+    /// Generates missing chunks synchronously during the current update tick (for deterministic
+    /// screenshots and headless tests).
+    Blocking,
+}
+
+/// Live streaming counters exposed for viewer HUD overlays and diagnostics.
+#[derive(Resource, Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PlanetStreamStats {
+    /// Number of currently spawned chunk sprite entities (including hysteresis keep-margin).
+    pub active_chunks: usize,
+    /// Number of chunks still awaiting generation or upload in the active streaming ring.
+    pub pending_chunks: usize,
+    /// Number of background chunk generation tasks currently in flight.
+    pub in_flight_tasks: usize,
 }
 
 /// Visual shading mode used to rasterize streamed `64x64` chunk textures.
@@ -253,11 +305,27 @@ struct ActiveChunk {
     rendered_mode: PlanetRenderMode,
 }
 
-/// Internal cache of currently spawned chunk sprites keyed by [`ChunkCoord`].
-#[derive(Resource, Default, Debug)]
+struct GeneratedChunk {
+    image: Image,
+    mode: PlanetRenderMode,
+}
+
+struct PendingChunkTask {
+    mode: PlanetRenderMode,
+    task: Task<GeneratedChunk>,
+}
+
+/// Internal cache of currently spawned chunk sprites and in-flight async tasks keyed by [`ChunkCoord`].
+#[derive(Resource, Default)]
 struct PlanetStreamCache {
     active: HashMap<ChunkCoord, ActiveChunk>,
+    pending: HashMap<ChunkCoord, PendingChunkTask>,
 }
+
+/// System set in which gameplay plugins update [`PlanetCameraFocus`] before chunk transforms
+/// and streaming run in the same frame.
+#[derive(SystemSet, Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct PlanetFocusSync;
 
 /// Streams a `(2*R + 1) x (2*R + 1)` ring of `64x64` cube-sphere chunks around
 /// [`PlanetCameraFocus`] with a floating visual origin near `(0.0, 0.0)`.
@@ -267,14 +335,24 @@ pub struct PlanetStreamPlugin;
 impl Plugin for PlanetStreamPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<PlanetRenderMode>()
+            .init_resource::<PlanetStreamSyncMode>()
             .init_resource::<PlanetCameraFocus>()
             .init_resource::<PlanetRegions>()
+            .init_resource::<PlanetStreamStats>()
             .init_resource::<PlanetStreamCache>()
-            .add_systems(Startup, (ensure_planet_world, ensure_planet_camera))
+            .add_message::<RequestRedraw>()
+            .add_systems(Startup, ensure_planet_world)
             .add_systems(
                 Update,
-                (recenter_focus_system, sync_streamed_chunks).chain(),
+                (recenter_focus_system, sync_streamed_chunks)
+                    .chain()
+                    .after(PlanetFocusSync),
             );
+        // `App::is_plugin_added`: bevy_app-0.20.1/src/app.rs:570.
+        // Avoid spawning a second `Camera2d` when `MapPlugin` already provides `MapCamera`.
+        if !app.is_plugin_added::<crate::map::MapPlugin>() {
+            app.add_systems(Startup, ensure_planet_camera);
+        }
     }
 }
 
@@ -396,6 +474,52 @@ pub const fn face_rotation_to_bevy_z_radians(chunk_to_view_rot: FaceRotation) ->
     }
 }
 
+const fn slot_sort_key(slot: &StreamedChunkSlot) -> (i32, i32, i32) {
+    (
+        slot.view_offset.x.abs() + slot.view_offset.y.abs(),
+        slot.view_offset.y,
+        slot.view_offset.x,
+    )
+}
+
+fn resolve_chunk_slot(
+    focus: &PlanetCameraFocus,
+    focus_in_view: Vec2,
+    tile_px: f32,
+    view_col: i32,
+    view_row: i32,
+) -> StreamedChunkSlot {
+    let half_chunk = CHUNK_SIZE_F32 * 0.5;
+    let (anchor_col_i64, anchor_row_i64) = focus
+        .view_rotation
+        .rotate_delta(i64::from(view_col), i64::from(view_row));
+    let anchor_col = i32::try_from(anchor_col_i64).unwrap_or(0);
+    let anchor_row = i32::try_from(anchor_row_i64).unwrap_or(0);
+
+    let (coord, step_rot) = step_chunk(focus.anchor, anchor_col, anchor_row);
+    let view_to_chunk_rot = focus.view_rotation.compose(step_rot);
+    let chunk_to_view_rot = view_to_chunk_rot.inverse();
+
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "view chunk offsets are small streaming ring integers"
+    )]
+    let world_x = (view_col as f32 * CHUNK_SIZE_F32 + half_chunk - focus_in_view.x) * tile_px;
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "view chunk offsets are small streaming ring integers"
+    )]
+    let world_y = (-view_row as f32 * CHUNK_SIZE_F32 - half_chunk + focus_in_view.y) * tile_px;
+
+    StreamedChunkSlot {
+        coord,
+        view_offset: IVec2::new(view_col, view_row),
+        view_to_chunk_rot,
+        chunk_to_view_rot,
+        world_center: Vec2::new(world_x, world_y),
+    }
+}
+
 /// Resolves the `(2*R + 1) x (2*R + 1)` streamed chunk ring around `focus.anchor`.
 ///
 /// Each slot computes its cube-sphere [`ChunkCoord`] via [`step_chunk`], its orientation in
@@ -405,7 +529,6 @@ pub fn streamed_ring(focus: &PlanetCameraFocus) -> Vec<StreamedChunkSlot> {
     let radius = focus.stream_radius_chunks.max(0);
     let anchor_to_view = focus.view_rotation.inverse();
     let focus_in_view = rotate_local_tiles(anchor_to_view, focus.local_offset_tiles);
-    let half_chunk = CHUNK_SIZE_F32 * 0.5;
     let tile_px = focus.tile_pixel_size.max(0.1);
 
     let side = usize::try_from(radius.saturating_mul(2).saturating_add(1)).unwrap_or(1);
@@ -413,54 +536,70 @@ pub fn streamed_ring(focus: &PlanetCameraFocus) -> Vec<StreamedChunkSlot> {
 
     for view_row in -radius..=radius {
         for view_col in -radius..=radius {
-            let (anchor_col_i64, anchor_row_i64) = focus
-                .view_rotation
-                .rotate_delta(i64::from(view_col), i64::from(view_row));
-            let anchor_col = i32::try_from(anchor_col_i64).unwrap_or(0);
-            let anchor_row = i32::try_from(anchor_row_i64).unwrap_or(0);
-
-            let (coord, step_rot) = step_chunk(focus.anchor, anchor_col, anchor_row);
-            let view_to_chunk_rot = focus.view_rotation.compose(step_rot);
-            let chunk_to_view_rot = view_to_chunk_rot.inverse();
-
-            #[expect(
-                clippy::cast_precision_loss,
-                reason = "view chunk offsets are small streaming ring integers"
-            )]
-            let world_x =
-                (view_col as f32 * CHUNK_SIZE_F32 + half_chunk - focus_in_view.x) * tile_px;
-            #[expect(
-                clippy::cast_precision_loss,
-                reason = "view chunk offsets are small streaming ring integers"
-            )]
-            let world_y =
-                (-view_row as f32 * CHUNK_SIZE_F32 - half_chunk + focus_in_view.y) * tile_px;
-
-            candidates.push(StreamedChunkSlot {
-                coord,
-                view_offset: IVec2::new(view_col, view_row),
-                view_to_chunk_rot,
-                chunk_to_view_rot,
-                world_center: Vec2::new(world_x, world_y),
-            });
+            candidates.push(resolve_chunk_slot(
+                focus,
+                focus_in_view,
+                tile_px,
+                view_col,
+                view_row,
+            ));
         }
     }
 
     // Near the 8 cube corners (3 faces meeting instead of 4), sort closest-first so any
     // corner-aliased ChunkCoord keeps its primary slot without spawning duplicate sprites.
-    candidates.sort_by_key(|slot| {
-        (
-            slot.view_offset.x.abs() + slot.view_offset.y.abs(),
-            slot.view_offset.y,
-            slot.view_offset.x,
-        )
-    });
+    candidates.sort_by_key(slot_sort_key);
 
     let mut seen = HashSet::with_capacity(candidates.len());
     candidates
         .into_iter()
         .filter(|slot| seen.insert(slot.coord))
         .collect()
+}
+
+/// Resolves the active streaming ring together with the wider hysteresis keep-margin slot map
+/// (`keep_radius = stream_radius_chunks + KEEP_RADIUS_MARGIN`).
+fn streamed_ring_with_keep(
+    focus: &PlanetCameraFocus,
+) -> (
+    Vec<StreamedChunkSlot>,
+    HashMap<ChunkCoord, StreamedChunkSlot>,
+) {
+    let stream_radius = focus.stream_radius_chunks.max(0);
+    let keep_radius = stream_radius.saturating_add(KEEP_RADIUS_MARGIN);
+    let stream_ring = streamed_ring(focus);
+
+    let keep_side = usize::try_from(keep_radius.saturating_mul(2).saturating_add(1)).unwrap_or(1);
+    let mut keep_slots = HashMap::with_capacity(keep_side.saturating_mul(keep_side));
+    for &slot in &stream_ring {
+        keep_slots.insert(slot.coord, slot);
+    }
+
+    let anchor_to_view = focus.view_rotation.inverse();
+    let focus_in_view = rotate_local_tiles(anchor_to_view, focus.local_offset_tiles);
+    let tile_px = focus.tile_pixel_size.max(0.1);
+    let mut margin_candidates = Vec::new();
+
+    for view_row in -keep_radius..=keep_radius {
+        for view_col in -keep_radius..=keep_radius {
+            if view_col.abs() <= stream_radius && view_row.abs() <= stream_radius {
+                continue;
+            }
+            margin_candidates.push(resolve_chunk_slot(
+                focus,
+                focus_in_view,
+                tile_px,
+                view_col,
+                view_row,
+            ));
+        }
+    }
+    margin_candidates.sort_by_key(slot_sort_key);
+    for slot in margin_candidates {
+        keep_slots.entry(slot.coord).or_insert(slot);
+    }
+
+    (stream_ring, keep_slots)
 }
 
 /// Samples a `(CHUNK_SIZE + 2) x (CHUNK_SIZE + 2)` elevation and 5-ft step halo across chunk
@@ -831,8 +970,196 @@ fn recenter_focus_system(mut focus: ResMut<PlanetCameraFocus>) {
     }
 }
 
+fn chunk_transform(slot: &StreamedChunkSlot) -> Transform {
+    let angle = face_rotation_to_bevy_z_radians(slot.chunk_to_view_rot);
+    // `Transform::from_xyz`: bevy_transform-0.20.1/src/components/transform.rs:119.
+    // `Transform::with_rotation`: bevy_transform-0.20.1/src/components/transform.rs:250.
+    // `Quat::from_rotation_z`: glam-0.33.12/src/f32/coresimd/quat.rs:182.
+    Transform::from_xyz(slot.world_center.x, slot.world_center.y, CHUNK_Z_DEPTH)
+        .with_rotation(Quat::from_rotation_z(angle))
+}
+
+fn apply_chunk_image(
+    slot: &StreamedChunkSlot,
+    generated: GeneratedChunk,
+    chunk_world_size: Vec2,
+    commands: &mut Commands,
+    images: Option<&mut Assets<Image>>,
+    active: &mut HashMap<ChunkCoord, ActiveChunk>,
+    chunk_transforms: &mut Query<(&mut Transform, &mut Sprite), With<StreamedChunk>>,
+) {
+    let desired_transform = chunk_transform(slot);
+    if let Some(entry) = active.get_mut(&slot.coord) {
+        let new_image = if let Some(images) = images {
+            let old_handle = entry.image.clone();
+            // `Assets::add`: bevy_asset-0.20.1/src/assets.rs:401.
+            let handle = images.add(generated.image);
+            // `Assets::remove`: bevy_asset-0.20.1/src/assets.rs:470.
+            images.remove(&old_handle);
+            handle
+        } else {
+            Handle::default()
+        };
+        entry.image = new_image.clone();
+        entry.rendered_mode = generated.mode;
+        if let Ok((mut transform, mut sprite)) = chunk_transforms.get_mut(entry.entity) {
+            *transform = desired_transform;
+            sprite.image = new_image;
+            sprite.custom_size = Some(chunk_world_size);
+        }
+        return;
+    }
+
+    let handle = if let Some(images) = images {
+        images.add(generated.image)
+    } else {
+        Handle::default()
+    };
+
+    // `Sprite::from_image`: bevy_sprite-0.20.1/src/sprite.rs:56.
+    // `Sprite::custom_size`: bevy_sprite-0.20.1/src/sprite.rs:31.
+    let mut sprite = Sprite::from_image(handle.clone());
+    sprite.custom_size = Some(chunk_world_size);
+
+    let entity = commands
+        .spawn((
+            StreamedChunk { coord: slot.coord },
+            sprite,
+            desired_transform,
+        ))
+        .id();
+
+    active.insert(
+        slot.coord,
+        ActiveChunk {
+            entity,
+            image: handle,
+            rendered_mode: generated.mode,
+        },
+    );
+}
+
+fn dispatch_async_chunks(
+    pool: &AsyncComputeTaskPool,
+    world: &PlanetWorld,
+    stream_ring: &[StreamedChunkSlot],
+    mode: PlanetRenderMode,
+    cache: &mut PlanetStreamCache,
+) {
+    // Dispatch missing or stale-mode chunks closest-to-camera first up to `MAX_IN_FLIGHT_CHUNK_TASKS`.
+    for slot in stream_ring {
+        if cache.pending.len() >= MAX_IN_FLIGHT_CHUNK_TASKS {
+            break;
+        }
+        let up_to_date = cache
+            .active
+            .get(&slot.coord)
+            .is_some_and(|entry| entry.rendered_mode == mode);
+        if up_to_date || cache.pending.contains_key(&slot.coord) {
+            continue;
+        }
+        let maps = world.maps_arc();
+        let coord = slot.coord;
+        // `TaskPool::spawn`: bevy_tasks-0.20.1/src/task_pool.rs:566.
+        let task = pool.spawn(async move {
+            let terrain = sample_chunk(&maps, coord);
+            let image = build_chunk_image(&maps, &terrain, mode);
+            GeneratedChunk { image, mode }
+        });
+        cache.pending.insert(coord, PendingChunkTask { mode, task });
+    }
+}
+
+fn poll_completed_async_chunks(
+    keep_slots: &HashMap<ChunkCoord, StreamedChunkSlot>,
+    chunk_world_size: Vec2,
+    commands: &mut Commands,
+    mut images: Option<&mut Assets<Image>>,
+    cache: &mut PlanetStreamCache,
+    chunk_transforms: &mut Query<(&mut Transform, &mut Sprite), With<StreamedChunk>>,
+) {
+    // Poll completed tasks closest-to-camera first, uploading at most
+    // `MAX_CHUNK_UPLOADS_PER_FRAME` textures so the main thread never stutters.
+    let mut pending_order: Vec<ChunkCoord> = cache.pending.keys().copied().collect();
+    pending_order.sort_by_key(|coord| {
+        keep_slots
+            .get(coord)
+            .map_or((i32::MAX, i32::MAX, i32::MAX), slot_sort_key)
+    });
+
+    let mut uploads_this_frame = 0_usize;
+    for coord in pending_order {
+        if uploads_this_frame >= MAX_CHUNK_UPLOADS_PER_FRAME {
+            break;
+        }
+        let finished = cache.pending.get_mut(&coord).and_then(|pending| {
+            // `block_on`: bevy_platform-0.20.1/src/future.rs:14.
+            // `poll_once`: futures-lite-2.6.1/src/future.rs:116.
+            // `Task: Unpin + Future`: async-task-4.7.1/src/task.rs:60,447.
+            block_on(poll_once(&mut pending.task))
+        });
+        if let Some(generated) = finished {
+            cache.pending.remove(&coord);
+            if let Some(slot) = keep_slots.get(&coord) {
+                apply_chunk_image(
+                    slot,
+                    generated,
+                    chunk_world_size,
+                    commands,
+                    images.as_deref_mut(),
+                    &mut cache.active,
+                    chunk_transforms,
+                );
+                uploads_this_frame += 1;
+            }
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct ChunkRenderConfig {
+    mode: PlanetRenderMode,
+    world_size: Vec2,
+}
+
+fn sync_chunks_blocking(
+    world: &PlanetWorld,
+    stream_ring: &[StreamedChunkSlot],
+    config: ChunkRenderConfig,
+    commands: &mut Commands,
+    mut images: Option<&mut Assets<Image>>,
+    cache: &mut PlanetStreamCache,
+    chunk_transforms: &mut Query<(&mut Transform, &mut Sprite), With<StreamedChunk>>,
+) {
+    cache.pending.clear();
+    for slot in stream_ring {
+        let up_to_date = cache
+            .active
+            .get(&slot.coord)
+            .is_some_and(|entry| entry.rendered_mode == config.mode);
+        if up_to_date {
+            continue;
+        }
+        let terrain = sample_chunk(world.maps(), slot.coord);
+        let generated = GeneratedChunk {
+            image: build_chunk_image(world.maps(), &terrain, config.mode),
+            mode: config.mode,
+        };
+        apply_chunk_image(
+            slot,
+            generated,
+            config.world_size,
+            commands,
+            images.as_deref_mut(),
+            &mut cache.active,
+            chunk_transforms,
+        );
+    }
+}
+
 #[expect(
     clippy::needless_pass_by_value,
+    clippy::too_many_arguments,
     reason = "Bevy system parameters are passed by value"
 )]
 fn sync_streamed_chunks(
@@ -840,23 +1167,26 @@ fn sync_streamed_chunks(
     world: Option<Res<PlanetWorld>>,
     focus: Res<PlanetCameraFocus>,
     mode: Res<PlanetRenderMode>,
+    sync_mode: Res<PlanetStreamSyncMode>,
     mut images: Option<ResMut<Assets<Image>>>,
     mut cache: ResMut<PlanetStreamCache>,
+    mut stats: ResMut<PlanetStreamStats>,
     mut chunk_transforms: Query<(&mut Transform, &mut Sprite), With<StreamedChunk>>,
+    mut redraws: MessageWriter<RequestRedraw>,
 ) {
     let Some(world) = world else {
         return;
     };
 
-    let ring = streamed_ring(&focus);
-    let desired: HashSet<ChunkCoord> = ring.iter().map(|slot| slot.coord).collect();
+    let (stream_ring, keep_slots) = streamed_ring_with_keep(&focus);
 
-    // Despawn chunks outside the active streaming ring and release their GPU textures.
+    // Despawn chunks outside the hysteresis keep-margin (`keep_radius = stream_radius + 1`)
+    // and release their GPU textures.
     let stale: Vec<ChunkCoord> = cache
         .active
         .keys()
         .copied()
-        .filter(|coord| !desired.contains(coord))
+        .filter(|coord| !keep_slots.contains_key(coord))
         .collect();
     for coord in stale {
         if let Some(entry) = cache.active.remove(&coord) {
@@ -868,71 +1198,71 @@ fn sync_streamed_chunks(
         }
     }
 
+    // Cancel pending background tasks outside `keep_radius` or rendered for a stale mode.
+    // Dropping a `Task` cancels it: async-task-4.7.1/src/task.rs:49,440.
+    cache
+        .pending
+        .retain(|coord, pending| keep_slots.contains_key(coord) && pending.mode == *mode);
+
     let chunk_world_size = Vec2::splat(CHUNK_SIZE_F32 * focus.tile_pixel_size.max(0.1));
 
-    for slot in ring {
-        let angle = face_rotation_to_bevy_z_radians(slot.chunk_to_view_rot);
-        // `Transform::from_xyz`: bevy_transform-0.20.1/src/components/transform.rs:119.
-        // `Transform::with_rotation`: bevy_transform-0.20.1/src/components/transform.rs:250.
-        // `Quat::from_rotation_z`: glam-0.33.12/src/f32/coresimd/quat.rs:182.
-        let desired_transform =
-            Transform::from_xyz(slot.world_center.x, slot.world_center.y, CHUNK_Z_DEPTH)
-                .with_rotation(Quat::from_rotation_z(angle));
-
-        if let Some(entry) = cache.active.get_mut(&slot.coord) {
-            if entry.rendered_mode != *mode {
-                let terrain = sample_chunk(world.maps(), slot.coord);
-                let new_image = if let Some(images) = images.as_deref_mut() {
-                    let old_handle = entry.image.clone();
-                    // `Assets::add`: bevy_asset-0.20.1/src/assets.rs:401.
-                    let handle = images.add(build_chunk_image(world.maps(), &terrain, *mode));
-                    images.remove(&old_handle);
-                    handle
-                } else {
-                    Handle::default()
-                };
-                entry.image = new_image.clone();
-                entry.rendered_mode = *mode;
-                if let Ok((mut transform, mut sprite)) = chunk_transforms.get_mut(entry.entity) {
-                    *transform = desired_transform;
-                    sprite.image = new_image;
-                    sprite.custom_size = Some(chunk_world_size);
-                }
-            } else if let Ok((mut transform, mut sprite)) = chunk_transforms.get_mut(entry.entity) {
-                *transform = desired_transform;
-                sprite.custom_size = Some(chunk_world_size);
-            }
-            continue;
+    // Keep all active chunks (both inside `stream_ring` and inside the hysteresis keep-margin)
+    // locked to the floating camera origin.
+    for (coord, entry) in &cache.active {
+        if let Some(slot) = keep_slots.get(coord)
+            && let Ok((mut transform, mut sprite)) = chunk_transforms.get_mut(entry.entity)
+        {
+            *transform = chunk_transform(slot);
+            sprite.custom_size = Some(chunk_world_size);
         }
+    }
 
-        let terrain = sample_chunk(world.maps(), slot.coord);
-        let handle = if let Some(images) = images.as_deref_mut() {
-            images.add(build_chunk_image(world.maps(), &terrain, *mode))
-        } else {
-            Handle::default()
-        };
+    // `AsyncComputeTaskPool::try_get`: bevy_tasks-0.20.1/src/usages.rs:21.
+    // Falls back to synchronous generation when no task pool is initialized (e.g. headless tests).
+    let async_pool = match *sync_mode {
+        PlanetStreamSyncMode::Async => AsyncComputeTaskPool::try_get(),
+        PlanetStreamSyncMode::Blocking => None,
+    };
 
-        // `Sprite::from_image`: bevy_sprite-0.20.1/src/sprite.rs:56.
-        // `Sprite::custom_size`: bevy_sprite-0.20.1/src/sprite.rs:31.
-        let mut sprite = Sprite::from_image(handle.clone());
-        sprite.custom_size = Some(chunk_world_size);
-
-        let entity = commands
-            .spawn((
-                StreamedChunk { coord: slot.coord },
-                sprite,
-                desired_transform,
-            ))
-            .id();
-
-        cache.active.insert(
-            slot.coord,
-            ActiveChunk {
-                entity,
-                image: handle,
-                rendered_mode: *mode,
-            },
+    if let Some(pool) = async_pool {
+        poll_completed_async_chunks(
+            &keep_slots,
+            chunk_world_size,
+            &mut commands,
+            images.as_deref_mut(),
+            &mut cache,
+            &mut chunk_transforms,
         );
+        dispatch_async_chunks(pool, &world, &stream_ring, *mode, &mut cache);
+    } else {
+        sync_chunks_blocking(
+            &world,
+            &stream_ring,
+            ChunkRenderConfig {
+                mode: *mode,
+                world_size: chunk_world_size,
+            },
+            &mut commands,
+            images.as_deref_mut(),
+            &mut cache,
+            &mut chunk_transforms,
+        );
+    }
+
+    let missing_in_ring = stream_ring
+        .iter()
+        .filter(|slot| {
+            !cache
+                .active
+                .get(&slot.coord)
+                .is_some_and(|entry| entry.rendered_mode == *mode)
+        })
+        .count();
+    stats.active_chunks = cache.active.len();
+    stats.in_flight_tasks = cache.pending.len();
+    stats.pending_chunks = missing_in_ring.max(cache.pending.len());
+    if stats.pending_chunks > 0 {
+        redraws.write(RequestRedraw);
     }
 }
 
@@ -1305,15 +1635,24 @@ mod tests {
     }
 
     #[test]
-    fn planet_stream_plugin_spawns_updates_and_despawns_ring() {
+    fn planet_world_maps_arc_shares_allocation() {
+        let synthetic = build_synthetic_planet(8, |[x, _y, _z]| 100.0 * x);
+        let world = PlanetWorld::new(synthetic);
+        let arc_a = world.maps_arc();
+        let arc_b = world.maps_arc();
+        assert!(Arc::ptr_eq(&arc_a, &arc_b));
+    }
+
+    fn build_test_stream_app(sync_mode: PlanetStreamSyncMode, cx: u32, cy: u32) -> App {
         let synthetic = build_synthetic_planet(16, |[x, y, _z]| 500.0 * x + 300.0 * y);
         let mut app = App::new();
         app.insert_resource(PlanetWorld::new(synthetic))
+            .insert_resource(sync_mode)
             .insert_resource(PlanetCameraFocus {
                 anchor: ChunkCoord {
                     face: CubeFace::PosX,
-                    cx: 100,
-                    cy: 100,
+                    cx,
+                    cy,
                 },
                 local_offset_tiles: Vec2::new(32.0, 32.0),
                 view_rotation: FaceRotation::Deg0,
@@ -1322,46 +1661,27 @@ mod tests {
             })
             .insert_resource(Assets::<Image>::default())
             .add_plugins(PlanetStreamPlugin);
+        app
+    }
 
+    #[test]
+    fn planet_stream_blocking_spawns_at_chunk_z_depth_and_toggles_mode() {
+        let mut app = build_test_stream_app(PlanetStreamSyncMode::Blocking, 100, 100);
         app.update();
-        let initial_chunks: Vec<ChunkCoord> = app
-            .world_mut()
-            .query::<&StreamedChunk>()
-            .iter(app.world())
-            .map(|c| c.coord)
-            .collect();
-        assert_eq!(initial_chunks.len(), 9, "R=1 spawns 3x3=9 chunks");
 
-        // Pan 1 full chunk east and confirm old left column despawns while new right column spawns.
-        {
-            let mut focus = app.world_mut().resource_mut::<PlanetCameraFocus>();
-            pan_focus_view(&mut focus, Vec2::new(CHUNK_SIZE_F32, 0.0));
+        let initial: Vec<(ChunkCoord, f32)> = app
+            .world_mut()
+            .query::<(&StreamedChunk, &Transform)>()
+            .iter(app.world())
+            .map(|(c, t)| (c.coord, t.translation.z))
+            .collect();
+        assert_eq!(initial.len(), 9, "R=1 spawns 3x3=9 chunks");
+        for (_, z) in &initial {
+            assert!(
+                (*z - CHUNK_Z_DEPTH).abs() < 1e-6,
+                "chunk z-depth must be {CHUNK_Z_DEPTH}, got {z}"
+            );
         }
-        app.update();
-
-        let moved_chunks: Vec<ChunkCoord> = app
-            .world_mut()
-            .query::<&StreamedChunk>()
-            .iter(app.world())
-            .map(|c| c.coord)
-            .collect();
-        assert_eq!(moved_chunks.len(), 9);
-        assert!(
-            !moved_chunks.contains(&ChunkCoord {
-                face: CubeFace::PosX,
-                cx: 99,
-                cy: 100,
-            }),
-            "exited chunk must be despawned"
-        );
-        assert!(
-            moved_chunks.contains(&ChunkCoord {
-                face: CubeFace::PosX,
-                cx: 102,
-                cy: 100,
-            }),
-            "newly entered chunk must be spawned"
-        );
 
         // Toggling render mode updates textures without duplicating entities.
         *app.world_mut().resource_mut::<PlanetRenderMode>() = PlanetRenderMode::LandOceanMask;
@@ -1372,5 +1692,204 @@ mod tests {
             .iter(app.world())
             .count();
         assert_eq!(after_toggle, 9);
+        let stats = *app.world().resource::<PlanetStreamStats>();
+        assert_eq!(stats.pending_chunks, 0);
+        assert_eq!(stats.in_flight_tasks, 0);
+    }
+
+    #[test]
+    fn planet_stream_hysteresis_keep_margin_retains_one_ring_and_despawns_two_rings() {
+        let mut app = build_test_stream_app(PlanetStreamSyncMode::Blocking, 100, 100);
+        app.update();
+
+        let west_edge_coord = ChunkCoord {
+            face: CubeFace::PosX,
+            cx: 99,
+            cy: 100,
+        };
+        let west_edge_entity = app
+            .world_mut()
+            .query::<(Entity, &StreamedChunk)>()
+            .iter(app.world())
+            .find(|(_, c)| c.coord == west_edge_coord)
+            .map(|(e, _)| e)
+            .expect("west edge chunk spawned");
+
+        // Pan 1 chunk east: `cx = 99` is 1 ring outside `stream_radius` (within `keep_radius`),
+        // so it stays cached while `cx = 102` spawns.
+        {
+            let mut focus = app.world_mut().resource_mut::<PlanetCameraFocus>();
+            pan_focus_view(&mut focus, Vec2::new(CHUNK_SIZE_F32, 0.0));
+        }
+        app.update();
+
+        let after_one_step: Vec<(Entity, ChunkCoord)> = app
+            .world_mut()
+            .query::<(Entity, &StreamedChunk)>()
+            .iter(app.world())
+            .map(|(e, c)| (e, c.coord))
+            .collect();
+        assert_eq!(after_one_step.len(), 12);
+        assert!(
+            after_one_step.contains(&(west_edge_entity, west_edge_coord)),
+            "chunk 1 ring outside stream_radius must retain its entity without thrashing"
+        );
+        let east_entered = ChunkCoord {
+            face: CubeFace::PosX,
+            cx: 102,
+            cy: 100,
+        };
+        assert!(
+            after_one_step
+                .iter()
+                .any(|(_, coord)| *coord == east_entered),
+            "newly entered east column must spawn"
+        );
+
+        // Oscillating back 1 chunk west reuses the exact same cached entity.
+        {
+            let mut focus = app.world_mut().resource_mut::<PlanetCameraFocus>();
+            pan_focus_view(&mut focus, Vec2::new(-CHUNK_SIZE_F32, 0.0));
+        }
+        app.update();
+        let reused = app
+            .world_mut()
+            .query::<(Entity, &StreamedChunk)>()
+            .iter(app.world())
+            .any(|(e, c)| e == west_edge_entity && c.coord == west_edge_coord);
+        assert!(reused, "oscillating back must reuse cached entity");
+
+        // Pan 2 chunks east from anchor 100 -> 102: `cx = 99` is now 2 rings outside `stream_radius`
+        // (outside `keep_radius = 2`) and must despawn.
+        {
+            let mut focus = app.world_mut().resource_mut::<PlanetCameraFocus>();
+            pan_focus_view(&mut focus, Vec2::new(CHUNK_SIZE_F32 * 2.0, 0.0));
+        }
+        app.update();
+        let after_two_steps: Vec<ChunkCoord> = app
+            .world_mut()
+            .query::<&StreamedChunk>()
+            .iter(app.world())
+            .map(|c| c.coord)
+            .collect();
+        assert!(
+            !after_two_steps.contains(&west_edge_coord),
+            "chunk 2 rings outside stream_radius must despawn"
+        );
+        assert!(after_two_steps.contains(&ChunkCoord {
+            face: CubeFace::PosX,
+            cx: 100,
+            cy: 100,
+        }));
+        assert!(after_two_steps.contains(&ChunkCoord {
+            face: CubeFace::PosX,
+            cx: 103,
+            cy: 100,
+        }));
+    }
+
+    #[test]
+    fn planet_stream_async_mode_respects_budget_completes_and_cancels_stale_tasks() {
+        use std::time::Duration;
+        // `AsyncComputeTaskPool::get_or_init`: bevy_tasks-0.20.1/src/usages.rs:15.
+        // `TaskPool::default`: bevy_tasks-0.20.1/src/task_pool.rs:610.
+        AsyncComputeTaskPool::get_or_init(bevy::tasks::TaskPool::default);
+
+        let synthetic = build_synthetic_planet(16, |[x, y, _z]| 400.0 * x - 250.0 * y);
+        let mut app = App::new();
+        app.insert_resource(PlanetWorld::new(synthetic))
+            .insert_resource(PlanetStreamSyncMode::Async)
+            .insert_resource(PlanetCameraFocus {
+                anchor: ChunkCoord {
+                    face: CubeFace::PosX,
+                    cx: 200,
+                    cy: 200,
+                },
+                local_offset_tiles: Vec2::new(32.0, 32.0),
+                view_rotation: FaceRotation::Deg0,
+                stream_radius_chunks: 1,
+                tile_pixel_size: 2.0,
+            })
+            .insert_resource(Assets::<Image>::default())
+            .add_plugins(PlanetStreamPlugin);
+
+        let mut prev_active = 0_usize;
+        let mut settled = false;
+        for _ in 0..200 {
+            app.update();
+            let stats = *app.world().resource::<PlanetStreamStats>();
+            assert!(
+                stats.in_flight_tasks <= MAX_IN_FLIGHT_CHUNK_TASKS,
+                "in-flight tasks must stay within cap"
+            );
+            let delta = stats.active_chunks.saturating_sub(prev_active);
+            assert!(
+                delta <= MAX_CHUNK_UPLOADS_PER_FRAME,
+                "uploaded {delta} chunks in 1 frame, exceeding budget {MAX_CHUNK_UPLOADS_PER_FRAME}"
+            );
+            prev_active = stats.active_chunks;
+            if stats.active_chunks == 9 && stats.pending_chunks == 0 && stats.in_flight_tasks == 0 {
+                settled = true;
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        assert!(settled, "async streaming must settle all 9 chunks");
+
+        // Jump far outside keep_radius (`+10` chunks): all old chunks despawn immediately and
+        // new async tasks stream the new ring to completion.
+        {
+            let mut focus = app.world_mut().resource_mut::<PlanetCameraFocus>();
+            pan_focus_view(&mut focus, Vec2::new(CHUNK_SIZE_F32 * 10.0, 0.0));
+        }
+        app.update();
+        let after_jump_entities = app
+            .world_mut()
+            .query::<&StreamedChunk>()
+            .iter(app.world())
+            .count();
+        assert_eq!(
+            after_jump_entities, 0,
+            "all old chunks outside keep_radius must despawn on jump before new async uploads finish"
+        );
+        let jump_stats = *app.world().resource::<PlanetStreamStats>();
+        assert!(
+            jump_stats.in_flight_tasks > 0 && jump_stats.in_flight_tasks <= 9,
+            "new ring tasks must be dispatched asynchronously after jump"
+        );
+
+        // Immediately jump again before those tasks finish: stale pending tasks must cancel cleanly.
+        {
+            let mut focus = app.world_mut().resource_mut::<PlanetCameraFocus>();
+            pan_focus_view(&mut focus, Vec2::new(0.0, CHUNK_SIZE_F32 * 10.0));
+        }
+        let mut final_settled = false;
+        for _ in 0..200 {
+            app.update();
+            let stats = *app.world().resource::<PlanetStreamStats>();
+            if stats.active_chunks == 9 && stats.pending_chunks == 0 && stats.in_flight_tasks == 0 {
+                final_settled = true;
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        assert!(
+            final_settled,
+            "async streaming must settle cleanly after cancelling stale tasks"
+        );
+        let final_coords: Vec<ChunkCoord> = app
+            .world_mut()
+            .query::<&StreamedChunk>()
+            .iter(app.world())
+            .map(|c| c.coord)
+            .collect();
+        assert!(
+            final_coords.contains(&ChunkCoord {
+                face: CubeFace::PosX,
+                cx: 210,
+                cy: 210,
+            }),
+            "final anchor chunk must be active"
+        );
     }
 }

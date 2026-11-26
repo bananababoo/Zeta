@@ -1,36 +1,57 @@
-//! The prototype test scene: a 20x20 map with a river, a bridge, an oil barrel, and a goblin.
+//! The prototype test scene anchored inside Sera (`PosX`): the 20x20 River Crossing authored
+//! region (river, wooden bridge, oil barrel, and goblin) embedded inside the continuous
+//! `2^21 x 2^21` planetary face so players can walk straight out into Sera with zero loading
+//! zones.
 //!
-//! Rules: `docs/prototypes/realism_prototype.md` Section 1. The scene is temporary test
-//! content, so its layout and text are placeholders, not Lore.
+//! Rules: `docs/prototypes/realism_prototype.md` Section 1 and
+//! `docs/architecture/world_geography.md` Sections 1–4. The scene is temporary test content,
+//! so its layout and text are placeholders, not Lore.
 
 use bevy_ecs::prelude::{Bundle, Commands, ResMut};
 use zeta_core::entity::EntityId;
 use zeta_core::grid::{GridPos, MapBounds};
 use zeta_core::protocol::{Collider, EntityName, MapArea, Tags, Visual};
+use zeta_core::world::FACE_TILES;
 
 use super::inventory::starting_inventory;
 use super::{EntityIndex, NextEntityId};
 use crate::net::messages::Networked;
 
-/// Size of the prototype test scene.
+/// Planetary top-left tile anchor of the River Crossing authored region on Sera (`PosX`),
+/// matching `assets/world/regions/river_crossing.json`.
+pub const RIVER_CROSSING_ORIGIN: GridPos = GridPos::new(1_819_648, 318_464);
+
+/// Height (and width) of the River Crossing authored region in 5-foot squares.
+const RIVER_CROSSING_SIZE: u32 = 20;
+
+/// Size of the playable Sera cube-sphere face (`2^21 x 2^21` 5-foot squares).
 pub const TEST_SCENE_BOUNDS: MapBounds = MapBounds {
-    width: 20,
-    height: 20,
+    width: FACE_TILES,
+    height: FACE_TILES,
 };
+
+/// Translates a River Crossing local `(x, y)` offset into its planetary `PosX` [`GridPos`].
+#[must_use]
+pub(super) const fn river_crossing_pos(local_x: u32, local_y: u32) -> GridPos {
+    GridPos::new(
+        RIVER_CROSSING_ORIGIN.x + local_x,
+        RIVER_CROSSING_ORIGIN.y + local_y,
+    )
+}
 
 /// Place name the AI DM receives with every request in the test scene.
 pub const TEST_SCENE_PLACE_NAME: &str = "Prototype Test Scene";
 
-/// Column of the river that splits the map.
+/// Region-local column of the river that splits River Crossing.
 const RIVER_COLUMN: u32 = 10;
-/// Row where the bridge crosses the river.
+/// Region-local row where the bridge crosses the river.
 const BRIDGE_ROW: u32 = 10;
 /// Where the oil barrel stands, west of the bridge.
-const OIL_BARREL_POSITION: GridPos = GridPos::new(8, 9);
+const OIL_BARREL_POSITION: GridPos = river_crossing_pos(8, 9);
 /// Where the goblin stands, east of the bridge.
-const GOBLIN_POSITION: GridPos = GridPos::new(12, 10);
+const GOBLIN_POSITION: GridPos = river_crossing_pos(12, 10);
 /// Where new player characters appear, or the nearest free square to it.
-pub(crate) const PLAYER_SPAWN_POSITION: GridPos = GridPos::new(4, 10);
+pub(crate) const PLAYER_SPAWN_POSITION: GridPos = river_crossing_pos(4, 10);
 /// Catalog items and quantities every new player character carries.
 pub(crate) const PLAYER_STARTING_ITEMS: &[(&str, u32)] = &[
     ("longsword", 1),
@@ -87,12 +108,12 @@ impl EntitySpec {
 
 /// Every entity of the test scene, in spawn order.
 pub(crate) fn test_scene_entities() -> Vec<EntitySpec> {
-    let mut entities: Vec<EntitySpec> = (0..TEST_SCENE_BOUNDS.height)
+    let mut entities: Vec<EntitySpec> = (0..RIVER_CROSSING_SIZE)
         .filter(|&row| row != BRIDGE_ROW)
         .map(|row| {
             EntitySpec::new(
                 "River",
-                GridPos::new(RIVER_COLUMN, row),
+                river_crossing_pos(RIVER_COLUMN, row),
                 "Fast, cold river water too deep to wade.",
                 &["water", "deep"],
                 false,
@@ -101,7 +122,7 @@ pub(crate) fn test_scene_entities() -> Vec<EntitySpec> {
         .collect();
     entities.push(EntitySpec::new(
         "Wooden Bridge",
-        GridPos::new(RIVER_COLUMN, BRIDGE_ROW),
+        river_crossing_pos(RIVER_COLUMN, BRIDGE_ROW),
         "A narrow wooden footbridge over the river.",
         &["wooden"],
         true,
@@ -152,8 +173,8 @@ mod tests {
     #[test]
     fn the_river_is_crossable_only_at_the_bridge() {
         let entities = test_scene_entities();
-        for row in 0..TEST_SCENE_BOUNDS.height {
-            let square = GridPos::new(RIVER_COLUMN, row);
+        for row in 0..RIVER_CROSSING_SIZE {
+            let square = river_crossing_pos(RIVER_COLUMN, row);
             let on_square: Vec<&EntitySpec> = entities
                 .iter()
                 .filter(|entity| entity.position == square)

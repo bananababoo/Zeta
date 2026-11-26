@@ -17,7 +17,7 @@ use bevy::image::{ImageAddressMode, ImageLoaderSettings, ImageSampler, ImageSamp
 use bevy::prelude::*;
 use bevy::render::render_resource::{AsBindGroup, Extent3d, TextureDimension, TextureFormat};
 use bevy::shader::ShaderRef;
-use bevy::sprite_render::Material2d;
+use bevy::sprite_render::{AlphaMode2d, Material2d};
 use serde::Deserialize;
 use zeta_core::grid::{GridPos, MapBounds};
 use zeta_core::protocol::{EntityName, Tags};
@@ -25,7 +25,7 @@ use zeta_core::protocol::{EntityName, Tags};
 /// Default map config path relative to the `assets/` directory.
 pub const DEFAULT_MAP_CONFIG: &str = "maps/river_crossing.json";
 /// Pixels of splatmap resolution per 5-foot map square.
-const SPLAT_PIXELS_PER_TILE: u32 = 8;
+pub(crate) const SPLAT_PIXELS_PER_TILE: u32 = 8;
 /// Maximum terrain materials supported by the 4-layer GPU splatmap shader.
 const MAX_MATERIALS: usize = 4;
 
@@ -281,12 +281,42 @@ pub struct TerrainSplatMaterial {
     #[texture(9)]
     #[sampler(10)]
     pub layer3: Handle<Image>,
+    /// Soft polygon mask (`R` channel in `[0.0, 1.0]`) feathering region boundaries over Sera.
+    #[texture(11)]
+    #[sampler(12)]
+    pub region_mask: Handle<Image>,
 }
 
 impl Material2d for TerrainSplatMaterial {
     fn fragment_shader() -> ShaderRef {
         "shaders/terrain_splat.wgsl".into()
     }
+
+    // `Material2d::alpha_mode`: bevy_sprite_render-0.20.1/src/mesh2d/material.rs:167.
+    // `AlphaMode2d::Blend`: bevy_sprite_render-0.20.1/src/mesh2d/material.rs:276.
+    fn alpha_mode(&self) -> AlphaMode2d {
+        AlphaMode2d::Blend
+    }
+}
+
+/// Returns a solid opaque `1x1` mask image for rectangular maps without polygon feathering.
+#[must_use]
+pub fn full_region_mask_image() -> Image {
+    // `Image::new`: bevy_image-0.20.1/src/image.rs:1123.
+    // `TextureFormat::Rgba8Unorm`: wgpu-types-30.0.2/src/texture/format.rs:185.
+    let mut image = Image::new(
+        Extent3d {
+            width: 1,
+            height: 1,
+            depth_or_array_layers: 1,
+        },
+        TextureDimension::D2,
+        vec![255, 255, 255, 255],
+        TextureFormat::Rgba8Unorm,
+        RenderAssetUsages::RENDER_WORLD,
+    );
+    image.sampler = ImageSampler::Descriptor(ImageSamplerDescriptor::linear());
+    image
 }
 
 fn default_tiles_per_repeat() -> f32 {

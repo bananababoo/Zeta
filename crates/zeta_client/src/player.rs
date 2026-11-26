@@ -22,6 +22,10 @@ impl LocalPlayer {
     }
 }
 
+/// System set in which [`LocalPlayer`] is updated from `PlayerAssigned` messages.
+#[derive(SystemSet, Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct LocalPlayerUpdate;
+
 /// Keeps [`LocalPlayer`] up to date from `PlayerAssigned` messages.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct LocalPlayerPlugin;
@@ -29,7 +33,7 @@ pub struct LocalPlayerPlugin;
 impl Plugin for LocalPlayerPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<LocalPlayer>()
-            .add_systems(Update, assign_local_player);
+            .add_systems(Update, assign_local_player.in_set(LocalPlayerUpdate));
     }
 }
 

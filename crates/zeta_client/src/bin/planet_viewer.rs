@@ -10,8 +10,8 @@
 use bevy::prelude::*;
 use bevy::window::WindowResolution;
 use zeta_client::planet_stream::{
-    PlanetCameraFocus, PlanetRenderMode, PlanetStreamPlugin, PlanetWorld, focus_tile,
-    pan_focus_view,
+    PlanetCameraFocus, PlanetRenderMode, PlanetStreamPlugin, PlanetStreamStats, PlanetWorld,
+    focus_tile, pan_focus_view,
 };
 use zeta_core::world::sample_tile;
 
@@ -155,6 +155,7 @@ fn handle_viewer_controls(
 fn update_hud_overlay(
     focus: Res<PlanetCameraFocus>,
     mode: Res<PlanetRenderMode>,
+    stats: Res<PlanetStreamStats>,
     world: Option<Res<PlanetWorld>>,
     mut hud_text: Query<&mut Text, With<PlanetHudText>>,
 ) {
@@ -172,12 +173,20 @@ fn update_hud_overlay(
     } else {
         "Elevation: unavailable".to_owned()
     };
+    let streaming_line = if stats.pending_chunks > 0 {
+        format!(
+            "\nStreaming: {} pending ({} in flight)",
+            stats.pending_chunks, stats.in_flight_tasks
+        )
+    } else {
+        String::new()
+    };
 
     text.0 = format!(
         "Face: {} (view rot {:?})\n\
          Tile: ({}, {})  Chunk: ({}, {})\n\
          {elev_line}\n\
-         Mode: {}  Zoom: {:.1} px/tile\n\
+         Mode: {}  Zoom: {:.1} px/tile{streaming_line}\n\
          WASD/Arrows: Pan (Shift: 4x) | Q/E,+/-: Zoom | Space: Mode",
         tile.face,
         focus.view_rotation,

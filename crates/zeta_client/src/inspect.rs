@@ -15,7 +15,7 @@ use crate::focus::{
     clear_ui_click_consumed, cursor_is_over_any,
 };
 use crate::inventory::keep_on_screen;
-use crate::layout::square_at;
+use crate::layout::{FloatingOrigin, square_at_origin};
 use crate::map::is_alive_creature;
 use crate::settings::ClientSettings;
 use crate::theme::{TEXT_ON_PARCHMENT, UiTheme};
@@ -66,6 +66,7 @@ pub struct EntityInspectPlugin;
 impl Plugin for EntityInspectPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<ClientSettings>()
+            .init_resource::<FloatingOrigin>()
             .init_resource::<TextEntryActive>()
             .init_resource::<UiClickConsumed>()
             .init_resource::<InspectPopupState>()
@@ -203,6 +204,7 @@ type InspectableEntities<'w, 's> = Query<
 fn inspect_on_right_click(
     buttons: Res<ButtonInput<MouseButton>>,
     settings: Res<ClientSettings>,
+    origin: Res<FloatingOrigin>,
     text_entry: Res<TextEntryActive>,
     window: Single<&Window, With<PrimaryWindow>>,
     camera: Single<(&Camera, &GlobalTransform), With<Camera2d>>,
@@ -227,7 +229,7 @@ fn inspect_on_right_click(
     let Some(area) = areas.iter().next() else {
         return;
     };
-    let Some(square) = square_at(world, area.0, settings.tile_size) else {
+    let Some(square) = square_at_origin(world, area.0, settings.tile_size, *origin) else {
         state.entries.clear();
         return;
     };

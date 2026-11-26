@@ -14,6 +14,7 @@ pub mod movement_input;
 pub mod narration_log;
 pub mod net;
 pub mod planet_io;
+pub mod planet_region;
 pub mod planet_stream;
 pub mod player;
 pub mod prompt;
@@ -36,6 +37,7 @@ impl PluginGroup for ClientPlugins {
             .add(theme::ThemePlugin)
             .add(player::LocalPlayerPlugin)
             .add(map::MapPlugin)
+            .add(planet_stream::PlanetStreamPlugin)
             .add(movement_input::MovementInputPlugin)
             .add(prompt::FreeformActionPromptPlugin)
             .add(turn_banner::TurnBubbleBannerPlugin)

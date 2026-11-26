@@ -18,6 +18,8 @@ struct TerrainSplatUniform {
 @group(2) @binding(8) var layer2_sampler: sampler;
 @group(2) @binding(9) var layer3_texture: texture_2d<f32>;
 @group(2) @binding(10) var layer3_sampler: sampler;
+@group(2) @binding(11) var region_mask_texture: texture_2d<f32>;
+@group(2) @binding(12) var region_mask_sampler: sampler;
 
 @fragment
 fn fragment(@location(2) uv: vec2<f32>) -> @location(0) vec4<f32> {
@@ -46,5 +48,6 @@ fn fragment(@location(2) uv: vec2<f32>) -> @location(0) vec4<f32> {
     color = mix(color, vec3<f32>(1.0, 1.0, 1.0), line * grid_alpha);
     color = color * material.ambient_tint.rgb;
 
-    return vec4<f32>(color, 1.0);
+    let mask = textureSample(region_mask_texture, region_mask_sampler, uv).r;
+    return vec4<f32>(color, mask);
 }

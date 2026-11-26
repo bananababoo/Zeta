@@ -32,8 +32,10 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 use zeta_client::ClientPlugins;
 use zeta_client::inventory::{InventorySlot, InventoryToggleButton};
-use zeta_client::layout::square_center;
-use zeta_client::planet_stream::{PlanetCameraFocus, PlanetStreamPlugin, focus_tile};
+use zeta_client::layout::{FloatingOrigin, square_center_at};
+use zeta_client::planet_stream::{
+    PlanetCameraFocus, PlanetStreamPlugin, PlanetStreamSyncMode, focus_tile,
+};
 use zeta_client::settings::ClientSettings;
 use zeta_core::catalog::CatalogId;
 use zeta_core::entity::EntityId;
@@ -44,6 +46,7 @@ use zeta_core::protocol::{
     TurnBubble, Visual, register_protocol,
 };
 use zeta_core::resolution::{D20, Volume};
+use zeta_core::world::FACE_TILES;
 
 /// Width of the rendered image in pixels, at a scale factor of 1.
 const IMAGE_WIDTH: u32 = 1280;
@@ -62,6 +65,16 @@ const LIST_FLAG: &str = "--list";
 
 /// The local character's id in every scene.
 const LOCAL_CHARACTER: EntityId = EntityId(1);
+/// Planetary top-left tile anchor of the River Crossing authored region on Sera (`PosX`),
+/// matching `zeta_server::world::RIVER_CROSSING_ORIGIN` and `assets/world/regions/river_crossing.json`.
+const RIVER_CROSSING_ORIGIN: GridPos = GridPos::new(1_819_648, 318_464);
+
+const fn river_crossing_pos(local_x: u32, local_y: u32) -> GridPos {
+    GridPos::new(
+        RIVER_CROSSING_ORIGIN.x + local_x,
+        RIVER_CROSSING_ORIGIN.y + local_y,
+    )
+}
 /// Carried by the local character: catalog id and quantity. The first stack is equipped.
 const CARRIED: [(&str, u32); 9] = [
     ("longsword", 1),
@@ -165,7 +178,9 @@ impl Scene {
             Self::InventoryHover => vec![open, Step::Hover(Target::Slot("painters_supplies"))],
             Self::InventoryMenu => vec![open, Step::Click(Target::Slot("longsword"))],
             Self::RiverScene | Self::CombatHud | Self::PlanetCoast | Self::PlanetSeam => Vec::new(),
-            Self::InspectBridge => vec![Step::RightClick(Target::Square(GridPos::new(10, 10)))],
+            Self::InspectBridge => {
+                vec![Step::RightClick(Target::Square(river_crossing_pos(10, 10)))]
+            }
         }
     }
 }
@@ -234,6 +249,7 @@ struct SceneLayout<'w, 's> {
     holders: Query<'w, 's, (&'static EntityId, &'static Inventory)>,
     camera: Query<'w, 's, (&'static Camera, &'static GlobalTransform), With<Camera2d>>,
     settings: Res<'w, ClientSettings>,
+    origin: Res<'w, FloatingOrigin>,
 }
 
 fn catalog_id(text: &str) -> CatalogId {
@@ -275,11 +291,11 @@ fn spawn_fake_world(
     mut logs: MessageWriter<NarrationLogEntry>,
     mut rolls: MessageWriter<DiceRollShown>,
 ) {
-    // Matches `zeta_server::world::scene::TEST_SCENE_BOUNDS` (20x20, river on column 10,
-    // bridge at (10, 10)) so UI screenshots verify the exact live map geometry.
+    // Matches `zeta_server::world::scene` (River Crossing anchored at `RIVER_CROSSING_ORIGIN`
+    // inside Sera's `FACE_TILES x FACE_TILES` face) so screenshots verify exact live geometry.
     commands.spawn(MapArea(MapBounds {
-        width: 20,
-        height: 20,
+        width: FACE_TILES,
+        height: FACE_TILES,
     }));
     let mut next_id = 10_u64;
     for row in 0..20 {
@@ -288,7 +304,7 @@ fn spawn_fake_world(
         }
         commands.spawn((
             EntityId(next_id),
-            GridPos::new(10, row),
+            river_crossing_pos(10, row),
             EntityName("River".to_owned()),
             Tags(
                 ["water".to_owned(), "deep".to_owned()]
@@ -301,7 +317,7 @@ fn spawn_fake_world(
     }
     commands.spawn((
         EntityId(next_id),
-        GridPos::new(10, 10),
+        river_crossing_pos(10, 10),
         EntityName("Wooden Bridge".to_owned()),
         Visual("A narrow weathered timber plank bridge spanning the river.".to_owned()),
         Tags(["wooden".to_owned()].into_iter().collect()),
@@ -309,7 +325,7 @@ fn spawn_fake_world(
     ));
     commands.spawn((
         EntityId(next_id + 1),
-        GridPos::new(8, 9),
+        river_crossing_pos(8, 9),
         EntityName("Oil Barrel".to_owned()),
         Visual("A wooden barrel of lamp oil, sealed with a cork.".to_owned()),
         Tags(
@@ -321,7 +337,7 @@ fn spawn_fake_world(
     ));
     commands.spawn((
         EntityId(next_id + 2),
-        GridPos::new(12, 10),
+        river_crossing_pos(12, 10),
         EntityName("Goblin".to_owned()),
         Visual("A wary goblin watching the far end of the bridge.".to_owned()),
         Creature,
@@ -330,7 +346,7 @@ fn spawn_fake_world(
     ));
     commands.spawn((
         LOCAL_CHARACTER,
-        GridPos::new(4, 10),
+        river_crossing_pos(4, 10),
         EntityName("Aria".to_owned()),
         Visual("An adventurer controlled by a player.".to_owned()),
         Creature,
@@ -340,7 +356,7 @@ fn spawn_fake_world(
     ));
     commands.spawn((
         EntityId(2),
-        GridPos::new(5, 10),
+        river_crossing_pos(5, 10),
         EntityName("Bram".to_owned()),
         Visual("An adventurer controlled by a player.".to_owned()),
         Creature,
@@ -448,7 +464,8 @@ fn target_center(target: Target, layout: &SceneLayout) -> Option<Vec2> {
         }
         Target::Square(square) => {
             let (camera, camera_transform) = layout.camera.iter().next()?;
-            let world = square_center(square, layout.settings.tile_size).extend(0.0);
+            let world =
+                square_center_at(square, layout.settings.tile_size, *layout.origin).extend(0.0);
             camera.world_to_viewport(camera_transform, world).ok()
         }
     }
@@ -693,6 +710,7 @@ fn main() -> AppExit {
         app.insert_resource(ClearColor(Color::srgb(0.05, 0.09, 0.14)))
             .insert_resource(ActiveScene(scene))
             .insert_resource(focus)
+            .insert_resource(PlanetStreamSyncMode::Blocking)
             .insert_resource(driver)
             .add_plugins(PlanetStreamPlugin)
             .add_systems(Startup, spawn_planet_caption)
@@ -701,6 +719,7 @@ fn main() -> AppExit {
     } else {
         register_protocol(&mut OfflineProtocol(&mut app));
         app.add_plugins(ClientPlugins)
+            .insert_resource(PlanetStreamSyncMode::Blocking)
             .insert_resource(ActiveScene(scene))
             .insert_resource(driver)
             .add_systems(Startup, spawn_fake_world)

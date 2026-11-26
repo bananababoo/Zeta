@@ -16,7 +16,8 @@ use zeta_core::protocol::{DiceRollShown, EntityName, LogEntryKind, NarrationLogE
 use zeta_core::resolution::Volume;
 
 use crate::focus::{UiPanel, cursor_is_over_any};
-use crate::layout::square_center;
+use crate::layout::{FloatingOrigin, square_center_at};
+use crate::planet_stream::PlanetFocusSync;
 use crate::settings::ClientSettings;
 use crate::theme::{SPEECH_BUBBLE_COLOR, TEXT_ON_PARCHMENT, UiTheme};
 
@@ -137,6 +138,7 @@ pub struct NarrationLogPlugin;
 impl Plugin for NarrationLogPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<ClientSettings>()
+            .init_resource::<FloatingOrigin>()
             .init_resource::<NarrationLog>()
             .init_resource::<UiTheme>()
             .add_systems(Startup, spawn_log_panel)
@@ -149,7 +151,8 @@ impl Plugin for NarrationLogPlugin {
                     spawn_speech_bubbles,
                     update_speech_bubbles,
                 )
-                    .chain(),
+                    .chain()
+                    .after(PlanetFocusSync),
             );
     }
 }
@@ -298,6 +301,7 @@ fn spawn_speech_bubbles(
     mut commands: Commands,
     mut entries: MessageReader<NarrationLogEntry>,
     settings: Res<ClientSettings>,
+    origin: Res<FloatingOrigin>,
     theme: Res<UiTheme>,
     speakers: Query<(&EntityId, &GridPos)>,
     bubbles: Query<(Entity, &SpeechBubble)>,
@@ -332,15 +336,16 @@ fn spawn_speech_bubbles(
                 height: None,
             },
             Anchor::BOTTOM_CENTER,
-            Transform::from_translation(bubble_position(*position, tile_size)),
+            Transform::from_translation(bubble_position(*position, tile_size, *origin)),
         ));
     }
 }
 
 /// Where a speech bubble above a speaker on `position` sits.
-fn bubble_position(position: GridPos, tile_size: f32) -> Vec3 {
-    (square_center(position, tile_size) + Vec2::new(0.0, tile_size * BUBBLE_HEIGHT_SQUARES))
-        .extend(BUBBLE_DEPTH)
+fn bubble_position(position: GridPos, tile_size: f32, origin: FloatingOrigin) -> Vec3 {
+    (square_center_at(position, tile_size, origin)
+        + Vec2::new(0.0, tile_size * BUBBLE_HEIGHT_SQUARES))
+    .extend(BUBBLE_DEPTH)
 }
 
 /// Keeps bubbles above moving speakers and removes them when their time runs out.
@@ -352,6 +357,7 @@ fn update_speech_bubbles(
     mut commands: Commands,
     time: Res<Time>,
     settings: Res<ClientSettings>,
+    origin: Res<FloatingOrigin>,
     speakers: Query<(&EntityId, &GridPos)>,
     mut bubbles: Query<(Entity, &mut SpeechBubble, &mut Transform)>,
 ) {
@@ -362,7 +368,7 @@ fn update_speech_bubbles(
             continue;
         }
         if let Some((_, position)) = speakers.iter().find(|(id, _)| **id == bubble.speaker) {
-            let wanted = bubble_position(*position, settings.tile_size);
+            let wanted = bubble_position(*position, settings.tile_size, *origin);
             if transform.translation != wanted {
                 transform.translation = wanted;
             }
@@ -524,7 +530,10 @@ mod tests {
         let (text, transform) = bubbles.single(app.world()).expect("1 bubble");
         assert_eq!(text.0, "Who goes there?");
         let tile_size = crate::settings::TILE_SIZE;
-        assert!(transform.translation.y > square_center(GridPos::new(1, 1), tile_size).y);
+        assert!(
+            transform.translation.y
+                > square_center_at(GridPos::new(1, 1), tile_size, FloatingOrigin::default()).y
+        );
 
         // Virtual time advances at most 250 milliseconds per update, so step in 200.
         for _ in 0..25 {

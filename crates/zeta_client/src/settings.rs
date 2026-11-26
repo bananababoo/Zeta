@@ -93,6 +93,14 @@ pub const MOVE_SOUTH_KEY: KeyCode = KeyCode::KeyS;
 /// are decided (`docs/architecture/technical_architecture.md` Section 5).
 pub const MOVE_EAST_KEY: KeyCode = KeyCode::KeyD;
 
+/// Placeholder: seconds a movement key must be held before continuous walk steps repeat.
+/// Replaced when client feel is tuned (`docs/architecture/technical_architecture.md` Section 5).
+pub const MOVE_HOLD_INITIAL_DELAY_SECONDS: f32 = 0.22;
+
+/// Placeholder: seconds between repeated movement steps while a movement key stays held.
+/// Replaced when client feel is tuned (`docs/architecture/technical_architecture.md` Section 5).
+pub const MOVE_HOLD_REPEAT_INTERVAL_SECONDS: f32 = 0.14;
+
 /// Placeholder: key that ends the local player's turn in a Turn Bubble. Replaced when
 /// keybindings are decided (`docs/architecture/technical_architecture.md` Section 5).
 pub const END_TURN_KEY: KeyCode = KeyCode::Space;
@@ -169,6 +177,10 @@ pub struct ClientSettings {
     pub prompt_max_characters: usize,
     /// Movement keys in the order north, west, south, east.
     pub movement_keys: MovementKeys,
+    /// Seconds a movement key is held before continuous walk steps begin repeating.
+    pub move_hold_initial_delay_seconds: f32,
+    /// Seconds between repeated walk steps while a movement key stays held.
+    pub move_hold_repeat_interval_seconds: f32,
     /// Key that ends the local player's turn.
     pub end_turn_key: KeyCode,
     /// Key that opens and closes the inventory panel.
@@ -236,6 +248,8 @@ impl Default for ClientSettings {
                 south: MOVE_SOUTH_KEY,
                 east: MOVE_EAST_KEY,
             },
+            move_hold_initial_delay_seconds: MOVE_HOLD_INITIAL_DELAY_SECONDS,
+            move_hold_repeat_interval_seconds: MOVE_HOLD_REPEAT_INTERVAL_SECONDS,
             end_turn_key: END_TURN_KEY,
             inventory_key: INVENTORY_KEY,
             inventory_scroll_pixels_per_line: INVENTORY_SCROLL_PIXELS_PER_LINE,

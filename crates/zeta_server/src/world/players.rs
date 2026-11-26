@@ -104,15 +104,52 @@ pub(crate) fn disconnect_players(
 }
 
 /// The free square nearest `origin`, ties broken by row and then column.
+///
+/// Expands ring-by-ring in Chebyshev distance so spawning on a planetary `2^21 x 2^21` face
+/// finishes in microseconds instead of scanning every square.
 fn free_square_near(
     origin: GridPos,
     bounds: MapBounds,
     taken: &BTreeSet<GridPos>,
 ) -> Option<GridPos> {
-    (0..bounds.height)
-        .flat_map(|y| (0..bounds.width).map(move |x| GridPos::new(x, y)))
-        .filter(|square| !taken.contains(square))
-        .min_by_key(|square| (origin.grid_distance(*square), square.y, square.x))
+    if bounds.width == 0 || bounds.height == 0 {
+        return None;
+    }
+    let last_col = bounds.width - 1;
+    let last_row = bounds.height - 1;
+    let span_col = origin.x.max(last_col.saturating_sub(origin.x));
+    let span_row = origin.y.max(last_row.saturating_sub(origin.y));
+    let max_radius = span_col.max(span_row);
+
+    for radius in 0..=max_radius {
+        let col_min = origin.x.saturating_sub(radius);
+        let col_max = origin.x.saturating_add(radius).min(last_col);
+        let row_min = origin.y.saturating_sub(radius);
+        let row_max = origin.y.saturating_add(radius).min(last_row);
+        if col_min > col_max || row_min > row_max {
+            continue;
+        }
+        let top_row = origin.y.checked_sub(radius);
+        let bottom_row = origin.y.checked_add(radius);
+        for row in row_min..=row_max {
+            if Some(row) == top_row || Some(row) == bottom_row {
+                for col in col_min..=col_max {
+                    let candidate = GridPos::new(col, row);
+                    if origin.grid_distance(candidate) == radius && !taken.contains(&candidate) {
+                        return Some(candidate);
+                    }
+                }
+            } else {
+                for col in [col_min, col_max] {
+                    let candidate = GridPos::new(col, row);
+                    if origin.grid_distance(candidate) == radius && !taken.contains(&candidate) {
+                        return Some(candidate);
+                    }
+                }
+            }
+        }
+    }
+    None
 }
 
 #[cfg(test)]
@@ -149,5 +186,19 @@ mod tests {
             .flat_map(|y| (0..5).map(move |x| GridPos::new(x, y)))
             .collect();
         assert_eq!(free_square_near(GridPos::new(0, 0), BOUNDS, &taken), None);
+    }
+
+    #[test]
+    fn planetary_face_spawn_search_is_instant() {
+        let planetary = MapBounds {
+            width: zeta_core::world::FACE_TILES,
+            height: zeta_core::world::FACE_TILES,
+        };
+        let origin = GridPos::new(1_819_652, 318_474);
+        let taken = BTreeSet::from([origin]);
+        assert_eq!(
+            free_square_near(origin, planetary, &taken),
+            Some(GridPos::new(origin.x - 1, origin.y - 1))
+        );
     }
 }

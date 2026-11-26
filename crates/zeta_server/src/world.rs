@@ -30,7 +30,7 @@ use crate::dice::{OsDice, RollD20};
 use crate::net::messages::{PlayerConnection, Recipients, ToPlayers};
 
 pub use event_log::EventLogWriter;
-pub use scene::{TEST_SCENE_BOUNDS, TEST_SCENE_PLACE_NAME};
+pub use scene::{RIVER_CROSSING_ORIGIN, TEST_SCENE_BOUNDS, TEST_SCENE_PLACE_NAME};
 
 #[cfg(doc)]
 use crate::net::messages::Networked;
@@ -427,10 +427,13 @@ mod tests {
         let entity = engine(&app, character).expect("indexed");
         assert!(app.world().get::<PlayerCharacter>(entity).is_some());
         assert!(app.world().get::<Networked>(entity).is_some());
-        assert_eq!(position(&mut app, character), GridPos::new(4, 10));
+        assert_eq!(
+            position(&mut app, character),
+            scene::river_crossing_pos(4, 10)
+        );
 
         let (_, second) = connect(&mut app);
-        assert_ne!(position(&mut app, second), GridPos::new(4, 10));
+        assert_ne!(position(&mut app, second), scene::river_crossing_pos(4, 10));
     }
 
     #[test]
@@ -438,21 +441,20 @@ mod tests {
         let mut app = test_app(&[10]);
         let (connection, character) = connect(&mut app);
 
-        send(
-            &mut app,
-            connection,
-            MoveRequest {
-                target: GridPos::new(6, 10),
-            },
-        );
+        let step_east = scene::river_crossing_pos(6, 10);
+        send(&mut app, connection, MoveRequest { target: step_east });
         app.update();
-        assert_eq!(position(&mut app, character), GridPos::new(6, 10));
+        assert_eq!(position(&mut app, character), step_east);
 
-        for target in [GridPos::new(8, 9), GridPos::new(10, 5), GridPos::new(19, 0)] {
+        for target in [
+            scene::river_crossing_pos(8, 9),
+            scene::river_crossing_pos(10, 5),
+            scene::river_crossing_pos(19, 0),
+        ] {
             let notices_before = app.world().resource::<Sent>().lines.len();
             send(&mut app, connection, MoveRequest { target });
             app.update();
-            assert_eq!(position(&mut app, character), GridPos::new(6, 10));
+            assert_eq!(position(&mut app, character), step_east);
             let sent = app.world().resource::<Sent>();
             assert_eq!(sent.lines.len(), notices_before + 1);
             assert_eq!(
@@ -460,6 +462,36 @@ mod tests {
                 Some(LogEntryKind::Notice)
             );
         }
+    }
+
+    #[test]
+    fn players_can_walk_out_of_river_crossing_onto_continuous_sera() {
+        let mut app = test_app(&[10]);
+        let (connection, character) = connect(&mut app);
+
+        // Start at River Crossing local (4, 10) and walk 5 squares west past the region edge.
+        let outside_west = GridPos::new(RIVER_CROSSING_ORIGIN.x - 1, RIVER_CROSSING_ORIGIN.y + 10);
+        send(
+            &mut app,
+            connection,
+            MoveRequest {
+                target: outside_west,
+            },
+        );
+        app.update();
+        assert_eq!(position(&mut app, character), outside_west);
+
+        // Keep walking further into Sera wilderness with zero artificial boundary.
+        let deeper_sera = GridPos::new(RIVER_CROSSING_ORIGIN.x - 6, RIVER_CROSSING_ORIGIN.y + 10);
+        send(
+            &mut app,
+            connection,
+            MoveRequest {
+                target: deeper_sera,
+            },
+        );
+        app.update();
+        assert_eq!(position(&mut app, character), deeper_sera);
     }
 
     #[test]
@@ -549,21 +581,24 @@ mod tests {
         let snapshot = snapshot_of(&mut app, character);
         let [barrel_local, goblin_local, bridge_local] =
             [barrel, goblin, bridge].map(|id| local_id(&snapshot, id));
+        let goblin_dest = scene::river_crossing_pos(14, 10);
+        let smoke_pos = scene::river_crossing_pos(7, 9);
         let response = format!(
             r#"{{"ok": true, "chk": null, "fail": [], "fx": [
             {{"op": "narrate", "text": "Flames leap up."}},
             {{"op": "speak", "id": {goblin_local}, "text": "Fire!", "vol": "shout"}},
-            {{"op": "move", "id": {goblin_local}, "x": 14, "y": 10, "style": "runs"}},
+            {{"op": "move", "id": {goblin_local}, "x": {}, "y": {}, "style": "runs"}},
             {{"op": "modify", "id": {barrel_local}, "add": ["burning"], "passable": true,
               "visual": "A burning barrel.",
               "settle": {{"minutes": 5, "add": ["charred"], "remove": ["burning"]}}}},
-            {{"op": "spawn", "name": "Smoke", "x": 7, "y": 9, "passable": true,
+            {{"op": "spawn", "name": "Smoke", "x": {}, "y": {}, "passable": true,
               "tags": ["obscuring"], "visual": "Thick grey smoke."}},
             {{"op": "destroy", "id": {bridge_local}, "reason": "burned away"}},
             {{"op": "history", "ids": [{barrel_local}], "summary": "The barrel burned.",
               "preserved": false}},
             {{"op": "bubble", "active": true, "ids": [0, {goblin_local}]}}
-            ]}}"#
+            ]}}"#,
+            goblin_dest.x, goblin_dest.y, smoke_pos.x, smoke_pos.y
         );
         let first = exchange(&mut app, character, "I light the barrel.", &response);
         replay(&mut app, vec![first]);
@@ -586,7 +621,7 @@ mod tests {
             Some(&PromptState::Applied)
         );
 
-        assert_eq!(position(&mut app, goblin), GridPos::new(14, 10));
+        assert_eq!(position(&mut app, goblin), goblin_dest);
         let barrel_entity = engine(&app, barrel).expect("indexed");
         let world = app.world();
         assert!(
@@ -743,24 +778,14 @@ mod tests {
         let goblin = named(&mut app, "Goblin");
         turn_bubble::start_or_extend(app.world_mut(), &[character, goblin]);
 
-        send(
-            &mut app,
-            connection,
-            MoveRequest {
-                target: GridPos::new(5, 10),
-            },
-        );
+        let step_one = scene::river_crossing_pos(5, 10);
+        let step_two = scene::river_crossing_pos(6, 10);
+        send(&mut app, connection, MoveRequest { target: step_one });
         app.update();
-        assert_eq!(position(&mut app, character), GridPos::new(5, 10));
-        send(
-            &mut app,
-            connection,
-            MoveRequest {
-                target: GridPos::new(6, 10),
-            },
-        );
+        assert_eq!(position(&mut app, character), step_one);
+        send(&mut app, connection, MoveRequest { target: step_two });
         app.update();
-        assert_eq!(position(&mut app, character), GridPos::new(5, 10));
+        assert_eq!(position(&mut app, character), step_one);
         assert_eq!(
             app.world()
                 .resource::<Sent>()
@@ -792,15 +817,9 @@ mod tests {
         assert_eq!(bubble.completed_rounds, 1);
         assert!(!bubble.movement_used);
 
-        send(
-            &mut app,
-            connection,
-            MoveRequest {
-                target: GridPos::new(6, 10),
-            },
-        );
+        send(&mut app, connection, MoveRequest { target: step_two });
         app.update();
-        assert_eq!(position(&mut app, character), GridPos::new(6, 10));
+        assert_eq!(position(&mut app, character), step_two);
     }
 
     #[test]
