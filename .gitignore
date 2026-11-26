@@ -32,3 +32,10 @@ desktop.ini
 # Logs and crash dumps.
 *.log
 *.pdb
+
+# Local bulk visual asset library (imported from Google Drive; too large for git).
+/assets/library/
+/maptools*.zip
+
+# Python bytecode.
+**/__pycache__/
