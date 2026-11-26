@@ -2,7 +2,8 @@
 //!
 //! Every UI plugin reads colors, fonts, monochrome icons, and 9-sliced panel/button sprites
 //! from [`UiTheme`] so all panels share 1 cohesive look (warm wood, cream linen, walnut ink,
-//! muted earthy accents; no gold or metal; zero pixel-art HUD clash).
+//! muted earthy accents; no gold or metal; zero pixel-art HUD clash). Item icon mappings come
+//! from `assets/ui/icon_map.json`, never hardcoded item lists in Rust.
 //!
 //! Headless unit tests using `MinimalPlugins` have no `AssetServer`; [`ThemePlugin`] falls back
 //! to `Default` handles when no asset server is present.
@@ -13,6 +14,9 @@ use bevy::prelude::*;
 use bevy::sprite::{BorderRect, SliceScaleMode, TextureSlicer};
 use bevy::ui::VisualBox;
 use bevy::ui::widget::NodeImageMode;
+use serde::Deserialize;
+
+use crate::terrain::assets_root;
 
 /// Warm cream text and icon tint on dark/wood surfaces (`#FBF5EA`).
 pub const TEXT_ON_WOOD: Color = Color::srgb(0.984, 0.961, 0.918);
@@ -46,35 +50,40 @@ const BUTTON_SLICE_INSET: f32 = 10.0;
 /// Corner radius for rounded earthy slots (inventory squares).
 pub const SLOT_CORNER_RADIUS_PIXELS: f32 = 6.0;
 
-/// Named monochrome RPG icons preloaded from `assets/ui/icons/`.
-const ITEM_ICON_IDS: &[(&str, &str)] = &[
-    ("longsword", "ui/icons/longsword.png"),
-    ("shortsword", "ui/icons/longsword.png"),
-    ("greatsword", "ui/icons/longsword.png"),
-    ("rapier", "ui/icons/longsword.png"),
-    ("scimitar", "ui/icons/longsword.png"),
-    ("dagger", "ui/icons/dagger.png"),
-    ("handaxe", "ui/icons/axe.png"),
-    ("battleaxe", "ui/icons/axe.png"),
-    ("greataxe", "ui/icons/axe.png"),
-    ("shortbow", "ui/icons/bow.png"),
-    ("longbow", "ui/icons/bow.png"),
-    ("shield", "ui/icons/shield.png"),
-    ("leather_armor", "ui/icons/leather_armor.png"),
-    ("studded_leather_armor", "ui/icons/leather_armor.png"),
-    ("padded_armor", "ui/icons/leather_armor.png"),
-    ("hide_armor", "ui/icons/leather_armor.png"),
-    ("chain_mail", "ui/icons/helmet.png"),
-    ("plate_armor", "ui/icons/helmet.png"),
-    ("torch", "ui/icons/torch.png"),
-    ("rope", "ui/icons/rope.png"),
-    ("rations", "ui/icons/rations.png"),
-    ("thieves_tools", "ui/icons/thieves_tools.png"),
-    ("healers_kit", "ui/icons/healers_kit.png"),
-    ("painters_supplies", "ui/icons/painters_supplies.png"),
-    ("potion_of_healing", "ui/icons/potion.png"),
-    ("scroll_case", "ui/icons/scroll.png"),
-];
+/// Tracked UI font and panel sprite paths relative to `assets/`.
+const HEADING_FONT_PATH: &str = "fonts/fraunces.ttf";
+const NARRATION_FONT_PATH: &str = "fonts/patrick_hand.ttf";
+const UI_FONT_PATH: &str = "fonts/nunito.ttf";
+const PANEL_WOOD_PATH: &str = "ui/panel_wood.png";
+const PANEL_PARCHMENT_PATH: &str = "ui/panel_parchment.png";
+const BUTTON_WOOD_PATH: &str = "ui/button_wood.png";
+const BUTTON_PARCHMENT_PATH: &str = "ui/button_parchment.png";
+const ICON_MAP_PATH: &str = "ui/icon_map.json";
+
+/// External JSON icon mapping (`assets/ui/icon_map.json`).
+#[derive(Clone, Debug, Deserialize)]
+struct IconMapConfig {
+    defaults: DefaultIconPaths,
+    #[serde(default)]
+    items: HashMap<String, String>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+struct DefaultIconPaths {
+    weapon: String,
+    armor: String,
+    tool: String,
+    gear: String,
+    d20: String,
+}
+
+fn load_icon_map_config() -> Result<IconMapConfig, String> {
+    let full_path = assets_root().join(ICON_MAP_PATH);
+    let raw = std::fs::read_to_string(&full_path)
+        .map_err(|error| format!("could not read {}: {error}", full_path.display()))?;
+    serde_json::from_str(&raw)
+        .map_err(|error| format!("invalid icon map {}: {error}", full_path.display()))
+}
 
 /// Monochrome white-on-transparent RPG icons tinted at runtime by [`UiTheme`].
 #[derive(Clone, Debug, Default)]
@@ -242,24 +251,29 @@ fn load_theme_assets(assets: Option<Res<AssetServer>>, mut theme: ResMut<UiTheme
     let Some(assets) = assets else {
         return;
     };
-    theme.heading_font = assets.load("fonts/fraunces.ttf");
-    theme.narration_font = assets.load("fonts/patrick_hand.ttf");
-    theme.ui_font = assets.load("fonts/nunito.ttf");
-    theme.panel_wood = assets.load("ui/panel_wood.png");
-    theme.panel_parchment = assets.load("ui/panel_parchment.png");
-    theme.button_wood = assets.load("ui/button_wood.png");
-    theme.button_parchment = assets.load("ui/button_parchment.png");
+    theme.heading_font = assets.load(HEADING_FONT_PATH);
+    theme.narration_font = assets.load(NARRATION_FONT_PATH);
+    theme.ui_font = assets.load(UI_FONT_PATH);
+    theme.panel_wood = assets.load(PANEL_WOOD_PATH);
+    theme.panel_parchment = assets.load(PANEL_PARCHMENT_PATH);
+    theme.button_wood = assets.load(BUTTON_WOOD_PATH);
+    theme.button_parchment = assets.load(BUTTON_PARCHMENT_PATH);
 
-    theme.icons.weapon = assets.load("ui/icons/weapon.png");
-    theme.icons.armor = assets.load("ui/icons/armor.png");
-    theme.icons.tool = assets.load("ui/icons/tool.png");
-    theme.icons.gear = assets.load("ui/icons/gear.png");
-    theme.icons.d20 = assets.load("ui/icons/d20.png");
-    for &(catalog_id, path) in ITEM_ICON_IDS {
-        theme
-            .icons
-            .by_catalog_id
-            .insert(catalog_id.to_owned(), assets.load(path));
+    match load_icon_map_config() {
+        Ok(icon_map) => {
+            theme.icons.weapon = assets.load(icon_map.defaults.weapon);
+            theme.icons.armor = assets.load(icon_map.defaults.armor);
+            theme.icons.tool = assets.load(icon_map.defaults.tool);
+            theme.icons.gear = assets.load(icon_map.defaults.gear);
+            theme.icons.d20 = assets.load(icon_map.defaults.d20);
+            for (catalog_id, path) in icon_map.items {
+                theme
+                    .icons
+                    .by_catalog_id
+                    .insert(catalog_id, assets.load(path));
+            }
+        }
+        Err(error) => warn!("UI icon map not loaded ({error}); icons will use defaults"),
     }
 }
 
@@ -276,5 +290,45 @@ mod tests {
         assert_eq!(theme.wood_panel().color, WOOD_PANEL_TINT);
         assert_eq!(theme.parchment_panel().color, PARCHMENT_PANEL_TINT);
         assert_eq!(theme.wood_button().color, WOOD_BUTTON_TINT);
+    }
+
+    #[test]
+    fn every_theme_font_panel_and_icon_asset_exists_on_disk() {
+        let root = assets_root();
+        for relative in [
+            HEADING_FONT_PATH,
+            NARRATION_FONT_PATH,
+            UI_FONT_PATH,
+            PANEL_WOOD_PATH,
+            PANEL_PARCHMENT_PATH,
+            BUTTON_WOOD_PATH,
+            BUTTON_PARCHMENT_PATH,
+            ICON_MAP_PATH,
+        ] {
+            assert!(
+                root.join(relative).is_file(),
+                "missing theme asset: {relative}"
+            );
+        }
+
+        let icon_map = load_icon_map_config().expect("valid assets/ui/icon_map.json");
+        for relative in [
+            &icon_map.defaults.weapon,
+            &icon_map.defaults.armor,
+            &icon_map.defaults.tool,
+            &icon_map.defaults.gear,
+            &icon_map.defaults.d20,
+        ] {
+            assert!(
+                root.join(relative).is_file(),
+                "missing default icon asset: {relative}"
+            );
+        }
+        for (catalog_id, relative) in &icon_map.items {
+            assert!(
+                root.join(relative).is_file(),
+                "missing icon asset for {catalog_id}: {relative}"
+            );
+        }
     }
 }

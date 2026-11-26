@@ -1,0 +1,37 @@
+{
+  "defaults": {
+    "weapon": "ui/icons/weapon.png",
+    "armor": "ui/icons/armor.png",
+    "tool": "ui/icons/tool.png",
+    "gear": "ui/icons/gear.png",
+    "d20": "ui/icons/d20.png"
+  },
+  "items": {
+    "longsword": "ui/icons/longsword.png",
+    "shortsword": "ui/icons/longsword.png",
+    "greatsword": "ui/icons/longsword.png",
+    "rapier": "ui/icons/longsword.png",
+    "scimitar": "ui/icons/longsword.png",
+    "dagger": "ui/icons/dagger.png",
+    "handaxe": "ui/icons/axe.png",
+    "battleaxe": "ui/icons/axe.png",
+    "greataxe": "ui/icons/axe.png",
+    "shortbow": "ui/icons/bow.png",
+    "longbow": "ui/icons/bow.png",
+    "shield": "ui/icons/shield.png",
+    "leather_armor": "ui/icons/leather_armor.png",
+    "studded_leather_armor": "ui/icons/leather_armor.png",
+    "padded_armor": "ui/icons/leather_armor.png",
+    "hide_armor": "ui/icons/leather_armor.png",
+    "chain_mail": "ui/icons/helmet.png",
+    "plate_armor": "ui/icons/helmet.png",
+    "torch": "ui/icons/torch.png",
+    "rope": "ui/icons/rope.png",
+    "rations": "ui/icons/rations.png",
+    "thieves_tools": "ui/icons/thieves_tools.png",
+    "healers_kit": "ui/icons/healers_kit.png",
+    "painters_supplies": "ui/icons/painters_supplies.png",
+    "potion_of_healing": "ui/icons/potion.png",
+    "scroll_case": "ui/icons/scroll.png"
+  }
+}

@@ -3,6 +3,12 @@
 //!
 //! No terrain category or entity name is hardcoded in Rust. Every material texture, brush
 //! layer, and entity visual rule comes from an external JSON map config file.
+//!
+//! Coordinate contract: every position, width, radius, padding, feather, wobble, and sprite
+//! size in [`MapConfig`] is in **grid squares** (`1.0` = 1 five-foot square). `width` on a
+//! polyline is the **full** width (`half_width = width * 0.5`). `entity_cells` layers derive
+//! terrain directly from replicated world entities so visual features stay synchronized with
+//! server passability.
 
 use std::path::{Path, PathBuf};
 
@@ -13,7 +19,7 @@ use bevy::render::render_resource::{AsBindGroup, Extent3d, TextureDimension, Tex
 use bevy::shader::ShaderRef;
 use bevy::sprite_render::Material2d;
 use serde::Deserialize;
-use zeta_core::grid::MapBounds;
+use zeta_core::grid::{GridPos, MapBounds};
 use zeta_core::protocol::{EntityName, Tags};
 
 /// Default map config path relative to the `assets/` directory.
@@ -84,15 +90,15 @@ pub struct EdgeDarken {
     pub strength: f32,
 }
 
-/// Geometric shape painted by a terrain layer, in normalized `[0.0, 1.0]` map coordinates.
+/// Geometric shape painted by a terrain layer, strictly in grid-square coordinates.
 #[derive(Clone, Debug, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum LayerShape {
-    /// Ribbon painted along connected normalized points (`[x, y]` in `0.0..=1.0`).
+    /// Ribbon painted along connected grid-square points (`[x, y]`).
     Polyline {
-        /// Vertices of the polyline in normalized map coordinates.
+        /// Vertices of the polyline in grid squares.
         points: Vec<[f32; 2]>,
-        /// Half-width of the solid interior in grid squares.
+        /// Full width of the solid interior in grid squares.
         width: f32,
         /// Soft transition width in grid squares.
         #[serde(default)]
@@ -101,11 +107,11 @@ pub enum LayerShape {
         #[serde(default)]
         wobble: f32,
     },
-    /// Axis-aligned rectangle in normalized map coordinates.
+    /// Axis-aligned rectangle in grid squares.
     Rect {
-        /// Top-left corner `[x, y]` in `0.0..=1.0`.
+        /// Top-left corner `[x, y]` in grid squares.
         min: [f32; 2],
-        /// Bottom-right corner `[x, y]` in `0.0..=1.0`.
+        /// Bottom-right corner `[x, y]` in grid squares.
         max: [f32; 2],
         /// Soft transition width in grid squares.
         #[serde(default)]
@@ -114,9 +120,9 @@ pub enum LayerShape {
         #[serde(default)]
         wobble: f32,
     },
-    /// Circular region in normalized map coordinates.
+    /// Circular region in grid squares.
     Circle {
-        /// Center `[x, y]` in `0.0..=1.0`.
+        /// Center `[x, y]` in grid squares.
         center: [f32; 2],
         /// Radius in grid squares.
         radius: f32,
@@ -127,6 +133,35 @@ pub enum LayerShape {
         #[serde(default)]
         wobble: f32,
     },
+    /// Union of live grid squares occupied by replicated entities matching any listed tag or name.
+    EntityCells {
+        /// Case-insensitive tags whose entities contribute their occupied square.
+        #[serde(default)]
+        match_tags: Vec<String>,
+        /// Case-insensitive entity names whose entities also contribute their occupied square.
+        #[serde(default)]
+        match_names: Vec<String>,
+        /// Outward expansion (positive) or inward inset (negative) from each cell boundary, in squares.
+        #[serde(default)]
+        padding: f32,
+        /// Soft transition width in grid squares.
+        #[serde(default)]
+        feather: f32,
+        /// Organic edge displacement in grid squares.
+        #[serde(default)]
+        wobble: f32,
+    },
+}
+
+/// Snapshot of 1 replicated entity used to resolve `LayerShape::EntityCells`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TerrainEntityCell {
+    /// Grid square occupied by the entity.
+    pub position: GridPos,
+    /// Optional display name.
+    pub name: Option<String>,
+    /// Narrative tags on the entity.
+    pub tags: Vec<String>,
 }
 
 /// Generic visual override rule for replicated entities.
@@ -280,6 +315,13 @@ pub fn assets_root() -> PathBuf {
     if local.is_dir() {
         return std::fs::canonicalize(local).unwrap_or_else(|_| local.to_path_buf());
     }
+    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    if let Some(workspace_root) = manifest_dir.parent().and_then(Path::parent) {
+        let candidate = workspace_root.join("assets");
+        if candidate.is_dir() {
+            return std::fs::canonicalize(&candidate).unwrap_or(candidate);
+        }
+    }
     PathBuf::from("assets")
 }
 
@@ -289,6 +331,24 @@ pub fn client_asset_plugin() -> AssetPlugin {
         file_path: assets_root().to_string_lossy().into_owned(),
         ..default()
     }
+}
+
+/// Parses a [`MapConfig`] JSON file from `assets/` without loading GPU assets.
+///
+/// # Errors
+///
+/// Returns an error if the file cannot be read, contains invalid JSON, or defines no
+/// materials.
+pub fn read_map_config(relative_path: &str) -> Result<MapConfig, String> {
+    let full_path = assets_root().join(relative_path);
+    let raw = std::fs::read_to_string(&full_path)
+        .map_err(|error| format!("could not read {}: {error}", full_path.display()))?;
+    let config: MapConfig = serde_json::from_str(&raw)
+        .map_err(|error| format!("invalid map config {}: {error}", full_path.display()))?;
+    if config.materials.is_empty() {
+        return Err(format!("{} defines no materials", full_path.display()));
+    }
+    Ok(config)
 }
 
 /// Loads and parses a [`MapConfig`] JSON file from `assets/` and preloads its textures.
@@ -301,14 +361,7 @@ pub fn load_map_config(
     asset_server: &AssetServer,
     relative_path: &str,
 ) -> Result<LoadedMapConfig, String> {
-    let full_path = assets_root().join(relative_path);
-    let raw = std::fs::read_to_string(&full_path)
-        .map_err(|error| format!("could not read {}: {error}", full_path.display()))?;
-    let config: MapConfig = serde_json::from_str(&raw)
-        .map_err(|error| format!("invalid map config {}: {error}", full_path.display()))?;
-    if config.materials.is_empty() {
-        return Err(format!("{} defines no materials", full_path.display()));
-    }
+    let config = read_map_config(relative_path)?;
 
     let first_tex = load_repeating_texture(asset_server, config.materials[0].texture.clone());
     let mut material_textures = [
@@ -389,6 +442,36 @@ pub fn terrain_params(bounds: MapBounds, config: &MapConfig) -> Vec4 {
     )
 }
 
+/// Returns whether an entity with `name` and `tags` contributes to any `EntityCells` layer of
+/// `config`. Used to detect when replicated entities require a splatmap rebuild.
+pub fn entity_matches_any_terrain_layer(
+    config: &MapConfig,
+    name: Option<&EntityName>,
+    tags: Option<&Tags>,
+) -> bool {
+    config.layers.iter().any(|layer| {
+        let LayerShape::EntityCells {
+            match_tags,
+            match_names,
+            ..
+        } = &layer.shape
+        else {
+            return false;
+        };
+        let tag_hit = tags.is_some_and(|t| {
+            match_tags
+                .iter()
+                .any(|wanted| t.0.iter().any(|tag| tag.eq_ignore_ascii_case(wanted)))
+        });
+        let name_hit = name.is_some_and(|n| {
+            match_names
+                .iter()
+                .any(|wanted| n.0.eq_ignore_ascii_case(wanted))
+        });
+        tag_hit || name_hit
+    })
+}
+
 fn smoothstep(edge0: f32, edge1: f32, value: f32) -> f32 {
     if (edge1 - edge0).abs() <= f32::EPSILON {
         return if value < edge0 { 0.0 } else { 1.0 };
@@ -412,9 +495,51 @@ fn point_to_segment_distance(point: Vec2, start: Vec2, end: Vec2) -> f32 {
     point.distance(start + ab * t)
 }
 
+fn box_signed_distance(point: Vec2, min_p: Vec2, max_p: Vec2) -> f32 {
+    let center = (min_p + max_p) * 0.5;
+    let half = (max_p - min_p).abs() * 0.5;
+    let q = (point - center).abs() - half;
+    let outside = q.max(Vec2::ZERO).length();
+    let inside = q.x.max(q.y).min(0.0);
+    outside + inside
+}
+
+fn resolve_layer_cells(shape: &LayerShape, entities: &[TerrainEntityCell]) -> Vec<GridPos> {
+    let LayerShape::EntityCells {
+        match_tags,
+        match_names,
+        ..
+    } = shape
+    else {
+        return Vec::new();
+    };
+    let mut cells: Vec<GridPos> = entities
+        .iter()
+        .filter(|entity| {
+            let tag_hit = match_tags
+                .iter()
+                .any(|wanted| entity.tags.iter().any(|t| t.eq_ignore_ascii_case(wanted)));
+            let name_hit = entity.name.as_deref().is_some_and(|n| {
+                match_names
+                    .iter()
+                    .any(|wanted| n.eq_ignore_ascii_case(wanted))
+            });
+            tag_hit || name_hit
+        })
+        .map(|entity| entity.position)
+        .collect();
+    cells.sort_by_key(|pos| (pos.y, pos.x));
+    cells.dedup();
+    cells
+}
+
 /// Signed distance in grid squares from `tile_pos` to the boundary of `shape` (negative
 /// inside, positive outside), plus `(feather, wobble)`.
-fn shape_signed_distance(shape: &LayerShape, tile_pos: Vec2, map_size: Vec2) -> (f32, f32, f32) {
+fn shape_signed_distance(
+    shape: &LayerShape,
+    tile_pos: Vec2,
+    matched_cells: &[GridPos],
+) -> (f32, f32, f32) {
     match shape {
         LayerShape::Polyline {
             points,
@@ -426,59 +551,76 @@ fn shape_signed_distance(shape: &LayerShape, tile_pos: Vec2, map_size: Vec2) -> 
                 return (f32::INFINITY, *feather, *wobble);
             }
             let min_dist = if points.len() == 1 {
-                let p = Vec2::from_array(points[0]) * map_size;
-                tile_pos.distance(p)
+                tile_pos.distance(Vec2::from_array(points[0]))
             } else {
                 points
                     .windows(2)
                     .map(|pair| {
-                        let a = Vec2::from_array(pair[0]) * map_size;
-                        let b = Vec2::from_array(pair[1]) * map_size;
-                        point_to_segment_distance(tile_pos, a, b)
+                        point_to_segment_distance(
+                            tile_pos,
+                            Vec2::from_array(pair[0]),
+                            Vec2::from_array(pair[1]),
+                        )
                     })
                     .fold(f32::INFINITY, f32::min)
             };
-            (min_dist - *width, *feather, *wobble)
+            (min_dist - *width * 0.5, *feather, *wobble)
         }
         LayerShape::Rect {
             min,
             max,
             feather,
             wobble,
-        } => {
-            let min_p = Vec2::from_array(*min) * map_size;
-            let max_p = Vec2::from_array(*max) * map_size;
-            let center = (min_p + max_p) * 0.5;
-            let half = (max_p - min_p).abs() * 0.5;
-            let q = (tile_pos - center).abs() - half;
-            let outside = q.max(Vec2::ZERO).length();
-            let inside = q.x.max(q.y).min(0.0);
-            (outside + inside, *feather, *wobble)
-        }
+        } => (
+            box_signed_distance(tile_pos, Vec2::from_array(*min), Vec2::from_array(*max)),
+            *feather,
+            *wobble,
+        ),
         LayerShape::Circle {
             center,
             radius,
             feather,
             wobble,
+        } => (
+            tile_pos.distance(Vec2::from_array(*center)) - *radius,
+            *feather,
+            *wobble,
+        ),
+        LayerShape::EntityCells {
+            padding,
+            feather,
+            wobble,
+            ..
         } => {
-            let c = Vec2::from_array(*center) * map_size;
-            (tile_pos.distance(c) - *radius, *feather, *wobble)
+            if matched_cells.is_empty() {
+                return (f32::INFINITY, *feather, *wobble);
+            }
+            let min_sdf = matched_cells
+                .iter()
+                .map(|cell| {
+                    let min_p = Vec2::new(count_to_f32(cell.x), count_to_f32(cell.y));
+                    let max_p = min_p + Vec2::ONE;
+                    box_signed_distance(tile_pos, min_p, max_p)
+                })
+                .fold(f32::INFINITY, f32::min);
+            (min_sdf - *padding, *feather, *wobble)
         }
     }
 }
 
-/// Rasterizes the configurable `layers` of `config` into an RGBA8 splatmap image for `bounds`.
-pub fn build_splatmap_from_config(bounds: MapBounds, config: &MapConfig) -> Image {
+/// Rasterizes the configurable `layers` of `config` into an RGBA8 splatmap image for `bounds`,
+/// using `entities` to resolve any `entity_cells` layers directly from live simulation state.
+pub fn build_splatmap_from_config(
+    bounds: MapBounds,
+    config: &MapConfig,
+    entities: &[TerrainEntityCell],
+) -> Image {
     let width = bounds.width.max(1) * SPLAT_PIXELS_PER_TILE;
     let height = bounds.height.max(1) * SPLAT_PIXELS_PER_TILE;
-    let map_size = Vec2::new(
-        count_to_f32(bounds.width.max(1)),
-        count_to_f32(bounds.height.max(1)),
-    );
     let scale = count_to_f32(SPLAT_PIXELS_PER_TILE);
     let mut data = vec![0_u8; (width * height * 4) as usize];
 
-    let resolved_layers: Vec<(usize, &TerrainLayer)> = config
+    let resolved_layers: Vec<(usize, &TerrainLayer, Vec<GridPos>)> = config
         .layers
         .iter()
         .filter_map(|layer| {
@@ -487,7 +629,8 @@ pub fn build_splatmap_from_config(bounds: MapBounds, config: &MapConfig) -> Imag
                 .iter()
                 .take(MAX_MATERIALS)
                 .position(|m| m.id == layer.material)?;
-            Some((slot, layer))
+            let cells = resolve_layer_cells(&layer.shape, entities);
+            Some((slot, layer, cells))
         })
         .collect();
 
@@ -499,15 +642,15 @@ pub fn build_splatmap_from_config(bounds: MapBounds, config: &MapConfig) -> Imag
             let wave = organic_wave(tile_x, tile_y);
 
             let mut channels = [0.0_f32; 4]; // R=slot1, G=slot2, B=slot3, A=darken
-            for &(slot, layer) in &resolved_layers {
+            for (slot, layer, cells) in &resolved_layers {
                 let (signed_dist, feather, wobble) =
-                    shape_signed_distance(&layer.shape, tile_pos, map_size);
+                    shape_signed_distance(&layer.shape, tile_pos, cells);
                 let displaced = signed_dist + wobble * wave;
                 let half_feather = feather.max(0.01) * 0.5;
                 let weight = (1.0 - smoothstep(-half_feather, half_feather, displaced))
                     * layer.blend.clamp(0.0, 1.0);
 
-                if (1..MAX_MATERIALS).contains(&slot) {
+                if (1..MAX_MATERIALS).contains(slot) {
                     channels[slot - 1] = channels[slot - 1].max(weight);
                 }
                 if let Some(edge) = layer.edge_darken {
@@ -546,8 +689,17 @@ pub fn build_splatmap_from_config(bounds: MapBounds, config: &MapConfig) -> Imag
 mod tests {
     use super::*;
 
+    fn sample_tile(image: &Image, bounds: MapBounds, tile_x: u32, tile_y: u32) -> [u8; 4] {
+        let data = image.data.as_ref().expect("splatmap bytes");
+        let width = bounds.width * SPLAT_PIXELS_PER_TILE;
+        let px = tile_x * SPLAT_PIXELS_PER_TILE + SPLAT_PIXELS_PER_TILE / 2;
+        let py = tile_y * SPLAT_PIXELS_PER_TILE + SPLAT_PIXELS_PER_TILE / 2;
+        let i = ((py * width + px) * 4) as usize;
+        [data[i], data[i + 1], data[i + 2], data[i + 3]]
+    }
+
     #[test]
-    fn splatmap_interprets_generic_config_layers_without_hardcoded_categories() {
+    fn splatmap_interprets_grid_coordinate_layers_with_full_width() {
         let config: MapConfig = serde_json::from_str(
             r#"{
                 "materials": [
@@ -558,11 +710,11 @@ mod tests {
                 "layers": [
                     {
                         "material": "band_a",
-                        "shape": { "kind": "polyline", "points": [[0.0, 0.55], [1.0, 0.55]], "width": 0.6, "feather": 0.2 }
+                        "shape": { "kind": "polyline", "points": [[0.0, 5.5], [10.0, 5.5]], "width": 1.0, "feather": 0.2 }
                     },
                     {
                         "material": "zone_b",
-                        "shape": { "kind": "circle", "center": [0.2, 0.2], "radius": 1.0, "feather": 0.2 }
+                        "shape": { "kind": "circle", "center": [2.5, 2.5], "radius": 1.0, "feather": 0.2 }
                     }
                 ]
             }"#,
@@ -573,24 +725,15 @@ mod tests {
             width: 10,
             height: 10,
         };
-        let image = build_splatmap_from_config(bounds, &config);
-        let data = image.data.as_ref().expect("splatmap bytes");
-        let width = bounds.width * SPLAT_PIXELS_PER_TILE;
+        let image = build_splatmap_from_config(bounds, &config, &[]);
 
-        let sample = |tile_x: u32, tile_y: u32| -> [u8; 4] {
-            let px = tile_x * SPLAT_PIXELS_PER_TILE + SPLAT_PIXELS_PER_TILE / 2;
-            let py = tile_y * SPLAT_PIXELS_PER_TILE + SPLAT_PIXELS_PER_TILE / 2;
-            let i = ((py * width + px) * 4) as usize;
-            [data[i], data[i + 1], data[i + 2], data[i + 3]]
-        };
-
-        // Middle row hits `band_a` (channel R).
-        assert!(sample(5, 5)[0] > 200);
-        // Top-left circle hits `zone_b` (channel G).
-        assert!(sample(2, 2)[1] > 200);
-        // Bottom-right corner stays base material (R and G near 0).
-        assert_eq!(sample(9, 9)[0], 0);
-        assert_eq!(sample(9, 9)[1], 0);
+        // Row 5 (y=5.5) hits `band_a` (channel R), while row 4 (y=4.5, 1 full tile away) stays clear.
+        assert!(sample_tile(&image, bounds, 5, 5)[0] > 200);
+        assert_eq!(sample_tile(&image, bounds, 5, 4)[0], 0);
+        // Circle at (2.5, 2.5) hits `zone_b` (channel G).
+        assert!(sample_tile(&image, bounds, 2, 2)[1] > 200);
+        assert_eq!(sample_tile(&image, bounds, 9, 9)[0], 0);
+        assert_eq!(sample_tile(&image, bounds, 9, 9)[1], 0);
     }
 
     #[test]
@@ -606,5 +749,96 @@ mod tests {
         assert!(rule.matches(Some(&crate_name), Some(&charred)));
         assert!(!rule.matches(Some(&crate_name), Some(&plain)));
         assert!(!rule.matches(None, Some(&charred)));
+    }
+
+    #[test]
+    fn river_crossing_config_assets_exist_and_spatial_invariants_hold() {
+        let root = assets_root();
+        let config = read_map_config(DEFAULT_MAP_CONFIG).expect("valid river_crossing.json");
+
+        for material in &config.materials {
+            assert!(
+                root.join(&material.texture).is_file(),
+                "missing terrain texture: {}",
+                material.texture
+            );
+        }
+        for rule in &config.entity_styles {
+            if let Some(sprite) = &rule.sprite {
+                assert!(
+                    root.join(sprite).is_file(),
+                    "missing entity sprite: {sprite}"
+                );
+            }
+        }
+
+        // Simulate the real 20x20 server river layout (river on column 10, bridge at (10, 10)).
+        let bounds = MapBounds {
+            width: 20,
+            height: 20,
+        };
+        let mut cells: Vec<TerrainEntityCell> = (0..bounds.height)
+            .filter(|&row| row != 10)
+            .map(|row| TerrainEntityCell {
+                position: GridPos::new(10, row),
+                name: Some("River".to_owned()),
+                tags: vec!["water".to_owned(), "deep".to_owned()],
+            })
+            .collect();
+        cells.push(TerrainEntityCell {
+            position: GridPos::new(10, 10),
+            name: Some("Wooden Bridge".to_owned()),
+            tags: vec!["wooden".to_owned()],
+        });
+
+        let image = build_splatmap_from_config(bounds, &config, &cells);
+
+        // Invariant 1: every river cell (including under the bridge) is solid water (channel B).
+        for row in 0..bounds.height {
+            let water = sample_tile(&image, bounds, 10, row)[2];
+            assert!(
+                water >= 220,
+                "river tile (10, {row}) should be solid water, got {water}"
+            );
+        }
+
+        // Invariant 2: adjacent dry walkable squares on columns 9 and 11 stay dry (no submerged land).
+        for row in 0..bounds.height {
+            let west_water = sample_tile(&image, bounds, 9, row)[2];
+            let east_water = sample_tile(&image, bounds, 11, row)[2];
+            assert_eq!(
+                west_water, 0,
+                "dry tile (9, {row}) must not be submerged in water"
+            );
+            assert_eq!(
+                east_water, 0,
+                "dry tile (11, {row}) must not be submerged in water"
+            );
+        }
+
+        // Invariant 3: Wooden Bridge sprite width spans cleanly past both water edges onto solid banks.
+        let bridge_rule = config
+            .entity_styles
+            .iter()
+            .find(|r| r.match_name.as_deref() == Some("Wooden Bridge"))
+            .expect("Wooden Bridge style rule");
+        let bridge_width = bridge_rule.size.expect("bridge size")[0];
+        let bridge_half = bridge_width * 0.5;
+        let data = image.data.as_ref().expect("splatmap bytes");
+        let row_y = 10 * SPLAT_PIXELS_PER_TILE + SPLAT_PIXELS_PER_TILE / 2;
+        let img_w = bounds.width * SPLAT_PIXELS_PER_TILE;
+        let water_pixels: Vec<u32> = (0..img_w)
+            .filter(|&px| data[((row_y * img_w + px) * 4 + 2) as usize] > 16)
+            .collect();
+        let water_left = count_to_f32(*water_pixels.first().expect("water pixels"))
+            / count_to_f32(SPLAT_PIXELS_PER_TILE);
+        let water_right = count_to_f32(*water_pixels.last().expect("water pixels") + 1)
+            / count_to_f32(SPLAT_PIXELS_PER_TILE);
+        let bridge_left = 10.5 - bridge_half;
+        let bridge_right = 10.5 + bridge_half;
+        assert!(
+            bridge_left < water_left - 0.15 && bridge_right > water_right + 0.15,
+            "bridge [{bridge_left:.2}, {bridge_right:.2}] must anchor past water [{water_left:.2}, {water_right:.2}]"
+        );
     }
 }

@@ -9,7 +9,7 @@ use bevy::prelude::*;
 use bevy::sprite::Anchor;
 use bevy::sprite_render::{Material2dPlugin, MeshMaterial2d};
 use zeta_core::entity::EntityId;
-use zeta_core::grid::GridPos;
+use zeta_core::grid::{GridPos, MapBounds};
 use zeta_core::protocol::{Collider, Creature, EntityName, MapArea, PlayerCharacter, Tags};
 
 use crate::layout::{map_center, square_center};
@@ -19,8 +19,8 @@ use crate::settings::{
     OTHER_ENTITY_COLOR, PLAYER_CHARACTER_COLOR,
 };
 use crate::terrain::{
-    DEFAULT_MAP_CONFIG, LoadedMapConfig, TerrainSplatMaterial, build_splatmap_from_config,
-    load_map_config, terrain_params,
+    DEFAULT_MAP_CONFIG, LoadedMapConfig, TerrainEntityCell, TerrainSplatMaterial,
+    build_splatmap_from_config, entity_matches_any_terrain_layer, load_map_config, terrain_params,
 };
 
 /// Draw order of grid squares and the GPU terrain splatmap.
@@ -143,8 +143,26 @@ fn load_default_map_config(mut commands: Commands, asset_server: Res<AssetServer
     }
 }
 
+type TerrainEntities<'w, 's> = Query<
+    'w,
+    's,
+    (
+        &'static GridPos,
+        Option<&'static EntityName>,
+        Option<&'static Tags>,
+    ),
+>;
+
+/// Snapshot of the last rendered map bounds and entity cells driving `EntityCells` terrain layers.
+#[derive(Default)]
+struct RenderedTerrainState {
+    bounds: Option<MapBounds>,
+    cells: Vec<TerrainEntityCell>,
+}
+
 /// Redraws the map terrain (GPU splatmap from `LoadedMapConfig` when present, or fallback
-/// grid squares in headless tests) whenever `MapArea` changes, and centers the camera.
+/// grid squares in headless tests) whenever `MapArea` or terrain-driving entity cells change,
+/// and centers the camera on map bounds changes.
 #[expect(
     clippy::too_many_arguments,
     reason = "a Bevy system lists every resource and query it reads as a parameter"
@@ -160,28 +178,60 @@ fn draw_map_area(
     meshes: Option<ResMut<Assets<Mesh>>>,
     materials: Option<ResMut<Assets<TerrainSplatMaterial>>>,
     images: Option<ResMut<Assets<Image>>>,
-    areas: Query<&MapArea, Changed<MapArea>>,
+    areas: Query<&MapArea>,
+    terrain_entities: TerrainEntities,
     squares: Query<Entity, With<MapSquare>>,
     terrains: Query<Entity, With<TerrainMesh>>,
     mut cameras: Query<&mut Transform, With<MapCamera>>,
+    mut rendered: Local<RenderedTerrainState>,
 ) {
     let Some(area) = areas.iter().last() else {
         return;
     };
+    let bounds = area.0;
+    let mut cells: Vec<TerrainEntityCell> = map_config.as_deref().map_or_default(|loaded| {
+        terrain_entities
+            .iter()
+            .filter(|(_, name, tags)| {
+                entity_matches_any_terrain_layer(&loaded.config, *name, *tags)
+            })
+            .map(|(pos, name, tags)| TerrainEntityCell {
+                position: *pos,
+                name: name.map(|n| n.0.clone()),
+                tags: tags.map_or_default(|t| t.0.iter().cloned().collect()),
+            })
+            .collect()
+    });
+    cells.sort_by(|a, b| {
+        (a.position.y, a.position.x, &a.name, &a.tags).cmp(&(
+            b.position.y,
+            b.position.x,
+            &b.name,
+            &b.tags,
+        ))
+    });
+
+    let bounds_changed = rendered.bounds != Some(bounds);
+    let cells_changed = rendered.cells != cells;
+    if !bounds_changed && !cells_changed {
+        return;
+    }
+    rendered.bounds = Some(bounds);
+    rendered.cells.clone_from(&cells);
+
     for square in &squares {
         commands.entity(square).despawn();
     }
     for terrain in &terrains {
         commands.entity(terrain).despawn();
     }
-    let bounds = area.0;
     let tile_size = settings.tile_size;
     let center = map_center(bounds, tile_size);
 
     if let (Some(loaded), Some(mut meshes), Some(mut materials), Some(mut images)) =
         (map_config, meshes, materials, images)
     {
-        let splat = images.add(build_splatmap_from_config(bounds, &loaded.config));
+        let splat = images.add(build_splatmap_from_config(bounds, &loaded.config, &cells));
         #[expect(
             clippy::cast_precision_loss,
             reason = "map dimensions are small grid counts well within f32 precision"
@@ -225,9 +275,11 @@ fn draw_map_area(
         }
     }
 
-    for mut camera in &mut cameras {
-        camera.translation.x = center.x;
-        camera.translation.y = center.y;
+    if bounds_changed {
+        for mut camera in &mut cameras {
+            camera.translation.x = center.x;
+            camera.translation.y = center.y;
+        }
     }
 }
 

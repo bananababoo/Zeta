@@ -152,7 +152,7 @@ impl Scene {
             Self::InventoryHover => vec![open, Step::Hover(Target::Slot("painters_supplies"))],
             Self::InventoryMenu => vec![open, Step::Click(Target::Slot("longsword"))],
             Self::RiverScene | Self::CombatHud => Vec::new(),
-            Self::InspectBridge => vec![Step::RightClick(Target::Square(GridPos::new(7, 4)))],
+            Self::InspectBridge => vec![Step::RightClick(Target::Square(GridPos::new(10, 10)))],
         }
     }
 }
@@ -262,18 +262,20 @@ fn spawn_fake_world(
     mut logs: MessageWriter<NarrationLogEntry>,
     mut rolls: MessageWriter<DiceRollShown>,
 ) {
+    // Matches `zeta_server::world::scene::TEST_SCENE_BOUNDS` (20x20, river on column 10,
+    // bridge at (10, 10)) so UI screenshots verify the exact live map geometry.
     commands.spawn(MapArea(MapBounds {
-        width: 14,
-        height: 9,
+        width: 20,
+        height: 20,
     }));
     let mut next_id = 10_u64;
-    for row in 0..9 {
-        if row == 4 {
+    for row in 0..20 {
+        if row == 10 {
             continue;
         }
         commands.spawn((
             EntityId(next_id),
-            GridPos::new(7, row),
+            GridPos::new(10, row),
             EntityName("River".to_owned()),
             Tags(
                 ["water".to_owned(), "deep".to_owned()]
@@ -286,7 +288,7 @@ fn spawn_fake_world(
     }
     commands.spawn((
         EntityId(next_id),
-        GridPos::new(7, 4),
+        GridPos::new(10, 10),
         EntityName("Wooden Bridge".to_owned()),
         Visual("A narrow weathered timber plank bridge spanning the river.".to_owned()),
         Tags(["wooden".to_owned()].into_iter().collect()),
@@ -294,7 +296,7 @@ fn spawn_fake_world(
     ));
     commands.spawn((
         EntityId(next_id + 1),
-        GridPos::new(6, 3),
+        GridPos::new(8, 9),
         EntityName("Oil Barrel".to_owned()),
         Visual("A wooden barrel of lamp oil, sealed with a cork.".to_owned()),
         Tags(
@@ -306,7 +308,7 @@ fn spawn_fake_world(
     ));
     commands.spawn((
         EntityId(next_id + 2),
-        GridPos::new(10, 4),
+        GridPos::new(12, 10),
         EntityName("Goblin".to_owned()),
         Visual("A wary goblin watching the far end of the bridge.".to_owned()),
         Creature,
@@ -315,7 +317,7 @@ fn spawn_fake_world(
     ));
     commands.spawn((
         LOCAL_CHARACTER,
-        GridPos::new(3, 4),
+        GridPos::new(4, 10),
         EntityName("Aria".to_owned()),
         Visual("An adventurer controlled by a player.".to_owned()),
         Creature,
@@ -325,7 +327,7 @@ fn spawn_fake_world(
     ));
     commands.spawn((
         EntityId(2),
-        GridPos::new(4, 4),
+        GridPos::new(5, 10),
         EntityName("Bram".to_owned()),
         Visual("An adventurer controlled by a player.".to_owned()),
         Creature,

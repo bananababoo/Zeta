@@ -66,9 +66,9 @@ Do not introduce a 4th font family into the client interface without Game Direct
 ## 3. Icons & Style Quarantine
 
 ### What
-Interface icons use **monochrome white-on-transparent silhouettes** rasterized into `assets/ui/icons/` from the Game-Icons library by [`tools/build_ui_assets.py`](../../tools/build_ui_assets.py) and tinted at runtime through `UiTheme::tinted_icon`. Inventory slots resolve icons in 2 steps inside `UiTheme::slot_icon`:
-1. Match the item's SRD catalog id against `ITEM_ICON_IDS` for a specific silhouette (such as `longsword`, `shield`, `leather_armor`, `torch`, `rope`, `rations`, `thieves_tools`, `healers_kit`, or `painters_supplies`).
-2. Fall back to 1 of 4 category icons (`weapon`, `armor`, `tool`, `gear`) for unmapped catalog items and custom items.
+Interface icons use **monochrome white-on-transparent silhouettes** rasterized into `assets/ui/icons/` from the Game-Icons library by [`tools/build_ui_assets.py`](../../tools/build_ui_assets.py) and tinted at runtime through `UiTheme::tinted_icon`. Inventory slots resolve icons in 2 steps inside `UiTheme::slot_icon` using the external mapping file [`assets/ui/icon_map.json`](../../assets/ui/icon_map.json):
+1. Match the item's SRD catalog id against `items` in `assets/ui/icon_map.json` for a specific silhouette (such as `longsword`, `shield`, `leather_armor`, `torch`, `rope`, `rations`, `thieves_tools`, `healers_kit`, or `painters_supplies`).
+2. Fall back to 1 of 4 category icons (`weapon`, `armor`, `tool`, `gear`) from `defaults` in `assets/ui/icon_map.json` for unmapped catalog items and custom items.
 
 The local asset warehouse (`assets/library/`, gitignored) tags every entry in its manifest with an `art_style` field (`painterly`, `wood_ui`, `monochrome_ui`, `pixel_placeholder`, `vfx`, `audio`, `font`). Only `wood_ui` and `monochrome_ui` assets are promoted into the client interface; `pixel_placeholder` sprites must never be mixed into the interface.
 

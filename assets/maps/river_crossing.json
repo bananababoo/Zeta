@@ -13,33 +13,35 @@
       "material": "path",
       "shape": {
         "kind": "polyline",
-        "points": [[0.0, 0.5], [1.0, 0.5]],
-        "width": 0.8,
+        "points": [[0.0, 10.5], [20.0, 10.5]],
+        "width": 1.5,
         "feather": 0.55,
-        "wobble": 0.22
+        "wobble": 0.18
       }
     },
     {
       "material": "bank",
       "shape": {
-        "kind": "polyline",
-        "points": [[0.535, 0.0], [0.535, 1.0]],
-        "width": 1.45,
-        "feather": 0.65,
-        "wobble": 0.25
+        "kind": "entity_cells",
+        "match_tags": ["water"],
+        "match_names": ["Wooden Bridge"],
+        "padding": 0.35,
+        "feather": 0.4,
+        "wobble": 0.12
       },
-      "blend": 0.7
+      "blend": 0.72
     },
     {
       "material": "water",
       "shape": {
-        "kind": "polyline",
-        "points": [[0.535, 0.0], [0.535, 1.0]],
-        "width": 0.85,
-        "feather": 0.35,
-        "wobble": 0.14
+        "kind": "entity_cells",
+        "match_tags": ["water"],
+        "match_names": ["Wooden Bridge"],
+        "padding": 0.0,
+        "feather": 0.22,
+        "wobble": 0.06
       },
-      "edge_darken": { "width": 0.45, "strength": 0.32 }
+      "edge_darken": { "width": 0.3, "strength": 0.3 }
     }
   ],
   "entity_styles": [
@@ -51,7 +53,7 @@
     {
       "match_name": "Wooden Bridge",
       "sprite": "objects/wooden_bridge.png",
-      "size": [1.45, 1.15],
+      "size": [1.95, 1.1],
       "depth": 0.5
     },
     {
