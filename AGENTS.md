@@ -22,6 +22,7 @@ Decisions live in `docs/`; this file only points to them and records working kno
 | Stack: Bevy, bevy_replicon, client modules | `docs/architecture/technical_architecture.md` |
 | AI DM loop, response schema, catalog lookup | `docs/architecture/ai_orchestration.md` |
 | Database (`sqlx`, PostgreSQL + PostGIS) | `docs/architecture/persistence.md` |
+| Continuous planet geography & cube-sphere | `docs/architecture/world_geography.md` |
 | Looking up third-party crate interfaces | `docs/architecture/library_documentation.md` |
 
 ## Commands
