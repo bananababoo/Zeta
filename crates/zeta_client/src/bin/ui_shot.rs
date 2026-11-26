@@ -33,6 +33,7 @@ use serde::de::DeserializeOwned;
 use zeta_client::ClientPlugins;
 use zeta_client::inventory::{InventorySlot, InventoryToggleButton};
 use zeta_client::layout::square_center;
+use zeta_client::planet_stream::{PlanetCameraFocus, PlanetStreamPlugin, focus_tile};
 use zeta_client::settings::ClientSettings;
 use zeta_core::catalog::CatalogId;
 use zeta_core::entity::EntityId;
@@ -93,6 +94,10 @@ enum Scene {
     CombatHud,
     /// Right-clicking the Wooden Bridge opens its inspect popup with name, description, and attributes.
     InspectBridge,
+    /// Live streamed `64x64` planetary terrain chunks over a real dramatic Sera coastline.
+    PlanetCoast,
+    /// Live streamed `64x64` chunks directly straddling the rotated `NegX <-> PosY` cube-face seam.
+    PlanetSeam,
 }
 
 /// What the fake cursor points at.
@@ -119,13 +124,15 @@ enum Step {
 
 impl Scene {
     /// Every scene, in the order `tools/ui_shots.ps1` lists them.
-    const ALL: [Self; 6] = [
+    const ALL: [Self; 8] = [
         Self::InventoryOpen,
         Self::InventoryHover,
         Self::InventoryMenu,
         Self::RiverScene,
         Self::CombatHud,
         Self::InspectBridge,
+        Self::PlanetCoast,
+        Self::PlanetSeam,
     ];
 
     /// The name given on the command line, which is also the PNG file name.
@@ -137,7 +144,13 @@ impl Scene {
             Self::RiverScene => "river_scene",
             Self::CombatHud => "combat_hud",
             Self::InspectBridge => "inspect_bridge",
+            Self::PlanetCoast => "planet_coast",
+            Self::PlanetSeam => "planet_seam",
         }
+    }
+
+    fn is_planet_scene(self) -> bool {
+        matches!(self, Self::PlanetCoast | Self::PlanetSeam)
     }
 
     fn from_name(name: &str) -> Option<Self> {
@@ -151,7 +164,7 @@ impl Scene {
             Self::InventoryOpen => vec![open],
             Self::InventoryHover => vec![open, Step::Hover(Target::Slot("painters_supplies"))],
             Self::InventoryMenu => vec![open, Step::Click(Target::Slot("longsword"))],
-            Self::RiverScene | Self::CombatHud => Vec::new(),
+            Self::RiverScene | Self::CombatHud | Self::PlanetCoast | Self::PlanetSeam => Vec::new(),
             Self::InspectBridge => vec![Step::RightClick(Target::Square(GridPos::new(10, 10)))],
         }
     }
@@ -530,6 +543,81 @@ fn drive_scene(
     driver.frames_to_wait = STEP_FRAMES;
 }
 
+/// Spawns a compact top-left caption pill for headless planet screenshots without overlapping
+/// the coastline or face seam in the center of the viewport.
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Bevy system parameters are passed by value"
+)]
+fn spawn_planet_caption(
+    mut commands: Commands,
+    scene: Res<ActiveScene>,
+    focus: Res<PlanetCameraFocus>,
+) {
+    let tile = focus_tile(&focus);
+    let label = match scene.0 {
+        Scene::PlanetCoast => format!(
+            "Sera Coastline  |  face: {}  chunk: ({}, {})  tile: ({}, {})",
+            tile.face, focus.anchor.cx, focus.anchor.cy, tile.x, tile.y
+        ),
+        Scene::PlanetSeam => format!(
+            "Sera Cube Seam: neg_x <-> pos_y (90 deg)  |  chunk: ({}, {})  tile: ({}, {})",
+            focus.anchor.cx, focus.anchor.cy, tile.x, tile.y
+        ),
+        _ => return,
+    };
+    commands
+        .spawn((
+            Node {
+                position_type: PositionType::Absolute,
+                top: Val::Px(12.0),
+                left: Val::Px(12.0),
+                padding: UiRect::axes(Val::Px(12.0), Val::Px(8.0)),
+                ..default()
+            },
+            BackgroundColor(Color::srgba(0.06, 0.08, 0.11, 0.80)),
+        ))
+        .with_child((
+            Text::new(label),
+            TextFont {
+                // `FontSize::Px`: bevy_text-0.20.1/src/text.rs:783.
+                font_size: FontSize::Px(14.0),
+                ..default()
+            },
+            TextColor(Color::srgb(0.95, 0.94, 0.90)),
+        ));
+}
+
+/// Waits for streamed planet chunks to render, then saves the off-screen screenshot and exits.
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Bevy system parameters are passed by value"
+)]
+fn drive_planet_scene(
+    mut commands: Commands,
+    mut driver: ResMut<Driver>,
+    image: Res<ShotImage>,
+    mut exits: MessageWriter<AppExit>,
+) {
+    driver.frame += 1;
+    if driver.frame > TIMEOUT_FRAMES {
+        eprintln!("planet scene timed out");
+        exits.write(AppExit::error());
+        return;
+    }
+    if driver.frames_to_wait > 0 {
+        driver.frames_to_wait -= 1;
+        return;
+    }
+    if !driver.screenshot_taken {
+        // `Screenshot::image`: bevy_render-0.20.1/src/view/window/screenshot.rs:107.
+        commands
+            .spawn(Screenshot::image(image.0.clone()))
+            .observe(save_then_exit(driver.output.clone()));
+        driver.screenshot_taken = true;
+    }
+}
+
 fn usage() -> String {
     let names: Vec<&str> = Scene::ALL.iter().map(|scene| scene.name()).collect();
     format!(
@@ -587,21 +675,38 @@ fn main() -> AppExit {
     )
     // `ScheduleRunnerPlugin::run_loop`: bevy_app-0.20.1/src/schedule_runner.rs:64.
     .add_plugins(ScheduleRunnerPlugin::run_loop(FRAME_WAIT));
-    register_protocol(&mut OfflineProtocol(&mut app));
-    app.add_plugins(ClientPlugins)
-        .insert_resource(ActiveScene(scene))
-        .insert_resource(Driver {
-            steps: scene.steps(),
-            next_step: 0,
-            frames_to_wait: SETTLE_FRAMES,
-            frame: 0,
-            release_pending: None,
-            screenshot_taken: false,
-            output,
-        })
-        .add_systems(Startup, spawn_fake_world)
-        .add_systems(PostStartup, render_off_screen)
-        .add_systems(First, drive_scene);
+    let driver = Driver {
+        steps: scene.steps(),
+        next_step: 0,
+        frames_to_wait: SETTLE_FRAMES,
+        frame: 0,
+        release_pending: None,
+        screenshot_taken: false,
+        output,
+    };
+    if scene.is_planet_scene() {
+        let focus = match scene {
+            Scene::PlanetCoast => PlanetCameraFocus::sera_coast(),
+            Scene::PlanetSeam => PlanetCameraFocus::sera_seam(),
+            _ => PlanetCameraFocus::default(),
+        };
+        app.insert_resource(ClearColor(Color::srgb(0.05, 0.09, 0.14)))
+            .insert_resource(ActiveScene(scene))
+            .insert_resource(focus)
+            .insert_resource(driver)
+            .add_plugins(PlanetStreamPlugin)
+            .add_systems(Startup, spawn_planet_caption)
+            .add_systems(PostStartup, render_off_screen)
+            .add_systems(First, drive_planet_scene);
+    } else {
+        register_protocol(&mut OfflineProtocol(&mut app));
+        app.add_plugins(ClientPlugins)
+            .insert_resource(ActiveScene(scene))
+            .insert_resource(driver)
+            .add_systems(Startup, spawn_fake_world)
+            .add_systems(PostStartup, render_off_screen)
+            .add_systems(First, drive_scene);
+    }
     app.run()
 }
 

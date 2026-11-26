@@ -14,6 +14,7 @@ pub mod movement_input;
 pub mod narration_log;
 pub mod net;
 pub mod planet_io;
+pub mod planet_stream;
 pub mod player;
 pub mod prompt;
 pub mod settings;

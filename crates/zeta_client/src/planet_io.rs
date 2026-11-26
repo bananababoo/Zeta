@@ -13,6 +13,7 @@ use bevy::asset::RenderAssetUsages;
 use bevy::image::{CompressedImageFormats, Image, ImageFormat, ImageSampler, ImageType};
 use bevy::render::render_resource::TextureFormat;
 use thiserror::Error;
+use zeta_core::world::{FaceHeightmap, HeightmapError, PlanetHeightmaps};
 
 use crate::terrain::assets_root;
 
@@ -184,11 +185,54 @@ pub enum PlanetIoError {
         /// Expected height shared by the planet face set.
         expected_height: u32,
     },
+    /// Validated `zeta_core` planetary heightmap construction failed.
+    #[error("invalid planetary heightmap dataset: {0}")]
+    Heightmap(#[from] HeightmapError),
 }
 
 /// Resolves the workspace `assets/world/faces` directory.
 pub fn planet_faces_dir() -> PathBuf {
     assets_root().join(PLANET_FACES_DIR)
+}
+
+/// Converts 6 decoded [`RawFaceHeightmap`] layers into a validated [`PlanetHeightmaps`].
+///
+/// # Errors
+/// Returns [`HeightmapError`] if any face is non-square, zero-sized, or mismatches dimensions.
+pub fn raw_faces_to_planet_heightmaps(
+    faces: [RawFaceHeightmap; 6],
+) -> Result<PlanetHeightmaps, HeightmapError> {
+    let convert = |raw: RawFaceHeightmap| -> Result<FaceHeightmap, HeightmapError> {
+        if raw.width != raw.height {
+            return Err(HeightmapError::SampleCountMismatch {
+                face: None,
+                res: raw.width,
+                expected: usize::try_from(raw.width)
+                    .unwrap_or(usize::MAX)
+                    .saturating_mul(usize::try_from(raw.width).unwrap_or(usize::MAX)),
+                actual: raw.samples.len(),
+            });
+        }
+        FaceHeightmap::new(raw.width, raw.samples)
+    };
+    let [pos_x, neg_x, pos_y, neg_y, pos_z, neg_z] = faces;
+    PlanetHeightmaps::new([
+        convert(pos_x)?,
+        convert(neg_x)?,
+        convert(pos_y)?,
+        convert(neg_y)?,
+        convert(pos_z)?,
+        convert(neg_z)?,
+    ])
+}
+
+/// Loads all 6 Layer 0 planetary heightmap PNGs from `dir` directly into [`PlanetHeightmaps`].
+///
+/// # Errors
+/// Returns [`PlanetIoError`] if loading any face PNG or validating the dataset fails.
+pub fn load_planet_heightmaps(dir: &Path) -> Result<PlanetHeightmaps, PlanetIoError> {
+    let raw = load_planet_faces(dir)?;
+    Ok(raw_faces_to_planet_heightmaps(raw)?)
 }
 
 /// Loads all 6 Layer 0 planetary heightmap PNGs from `dir` in canonical face order.
