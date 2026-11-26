@@ -44,6 +44,12 @@ pub struct Collider {
 #[cfg_attr(feature = "bevy", derive(bevy_ecs::prelude::Component))]
 pub struct PlayerCharacter;
 
+/// Marks a living or once-living creature (player character, NPC, or monster), as opposed to
+/// an inanimate object or terrain feature.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "bevy", derive(bevy_ecs::prelude::Component))]
+pub struct Creature;
+
 #[cfg(test)]
 mod tests {
     use super::super::assert_json_round_trip;
@@ -60,5 +66,6 @@ mod tests {
         assert_json_round_trip(&Tags(BTreeSet::from(["burning".to_owned()])));
         assert_json_round_trip(&Collider { passable: false });
         assert_json_round_trip(&PlayerCharacter);
+        assert_json_round_trip(&Creature);
     }
 }

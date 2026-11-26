@@ -7,7 +7,7 @@ use std::collections::BTreeSet;
 
 use bevy_ecs::prelude::{Commands, MessageReader, MessageWriter, Query, Res, ResMut};
 use zeta_core::grid::{GridPos, MapBounds};
-use zeta_core::protocol::{Collider, PlayerAssigned, PlayerCharacter, TurnBubble};
+use zeta_core::protocol::{Collider, Creature, PlayerAssigned, PlayerCharacter, TurnBubble};
 
 use super::inventory::starting_inventory;
 use super::prompts::PromptRegistry;
@@ -65,6 +65,7 @@ pub(crate) fn connect_players(
         let entity = commands
             .spawn((
                 spec.into_bundle(id),
+                Creature,
                 PlayerCharacter,
                 starting_inventory(PLAYER_STARTING_ITEMS),
             ))

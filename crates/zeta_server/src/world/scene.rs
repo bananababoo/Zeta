@@ -133,10 +133,13 @@ pub(crate) fn spawn_test_scene(
     commands.spawn((MapArea(TEST_SCENE_BOUNDS), Networked));
     for spec in test_scene_entities() {
         let id = next_id.allocate();
-        let carries_items = spec.name == GOBLIN_NAME;
+        let is_goblin = spec.name == GOBLIN_NAME;
         let mut entity = commands.spawn(spec.into_bundle(id));
-        if carries_items {
-            entity.insert(starting_inventory(GOBLIN_STARTING_ITEMS));
+        if is_goblin {
+            entity.insert((
+                zeta_core::protocol::Creature,
+                starting_inventory(GOBLIN_STARTING_ITEMS),
+            ));
         }
         index.0.insert(id, entity.id());
     }

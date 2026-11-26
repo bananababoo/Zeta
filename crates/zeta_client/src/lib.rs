@@ -6,6 +6,7 @@
 pub mod dice;
 pub mod focus;
 pub mod frame_pacing;
+pub mod inspect;
 pub mod inventory;
 pub mod layout;
 pub mod map;
@@ -39,5 +40,6 @@ impl PluginGroup for ClientPlugins {
             .add(dice::DiceRollPlugin)
             .add(narration_log::NarrationLogPlugin)
             .add(inventory::InventoryPlugin)
+            .add(inspect::EntityInspectPlugin)
     }
 }

@@ -10,7 +10,7 @@ use bevy::sprite::Anchor;
 use bevy::sprite_render::{Material2dPlugin, MeshMaterial2d};
 use zeta_core::entity::EntityId;
 use zeta_core::grid::GridPos;
-use zeta_core::protocol::{Collider, EntityName, MapArea, PlayerCharacter, Tags};
+use zeta_core::protocol::{Collider, Creature, EntityName, MapArea, PlayerCharacter, Tags};
 
 use crate::layout::{map_center, square_center};
 use crate::player::LocalPlayer;
@@ -106,6 +106,13 @@ pub fn entity_color(is_player_character: bool, is_local_player: bool, passable: 
     } else {
         IMPASSABLE_COLOR
     }
+}
+
+/// Whether an entity is an alive creature (gets a floating name label on the map).
+#[must_use]
+pub fn is_alive_creature(is_creature: bool, is_player: bool, tags: Option<&Tags>) -> bool {
+    let is_dead = tags.is_some_and(|t| t.0.iter().any(|tag| tag.eq_ignore_ascii_case("dead")));
+    (is_creature || is_player) && !is_dead
 }
 
 /// The label text of an entity: its name, then its Tags as bracketed badges.
@@ -326,27 +333,40 @@ fn style_entities(
     }
 }
 
+type LabelOwners<'w, 's> = Query<
+    'w,
+    's,
+    (
+        &'static MapLabelEntity,
+        Option<&'static EntityName>,
+        Option<&'static Tags>,
+        Has<Creature>,
+        Has<PlayerCharacter>,
+    ),
+>;
+
 #[allow(
     clippy::needless_pass_by_value,
     reason = "Bevy system parameters are passed by value"
 )]
 fn update_labels(
     map_config: Option<Res<LoadedMapConfig>>,
-    owners: Query<(&MapLabelEntity, Option<&EntityName>, Option<&Tags>)>,
+    owners: LabelOwners,
     mut labels: Query<&mut Text2d, With<MapLabel>>,
 ) {
-    for (label, name, tags) in &owners {
+    for (label, name, tags, is_creature, is_player) in &owners {
         let Ok(mut text) = labels.get_mut(label.0) else {
             continue;
         };
-        let hide = map_config
+        let hide_by_config = map_config
             .as_deref()
             .and_then(|loaded| loaded.style_for(name, tags))
             .is_some_and(|(rule, _)| rule.hide_label);
-        let wanted = if hide {
-            String::new()
-        } else {
+        let show = is_alive_creature(is_creature, is_player, tags) && !hide_by_config;
+        let wanted = if show {
             label_text(name, tags)
+        } else {
+            String::new()
         };
         if text.0 != wanted {
             text.0 = wanted;
@@ -476,19 +496,33 @@ mod tests {
     }
 
     #[test]
-    fn labels_show_the_name_and_tags_as_badges_and_follow_changes() {
+    fn labels_show_only_for_alive_creatures_and_follow_tag_changes() {
         let mut app = test_app();
         let barrel = app
             .world_mut()
             .spawn((GridPos::new(0, 0), EntityName("Oil barrel".to_owned())))
             .id();
+        let goblin = app
+            .world_mut()
+            .spawn((
+                GridPos::new(1, 0),
+                EntityName("Goblin".to_owned()),
+                Creature,
+            ))
+            .id();
         app.update();
-        assert_eq!(label_of(&app, barrel), "Oil barrel");
+        assert_eq!(label_of(&app, barrel), "");
+        assert_eq!(label_of(&app, goblin), "Goblin");
 
-        let tags = Tags(BTreeSet::from(["burning".to_owned(), "leaking".to_owned()]));
-        app.world_mut().entity_mut(barrel).insert(tags);
+        let tags = Tags(BTreeSet::from(["burning".to_owned()]));
+        app.world_mut().entity_mut(goblin).insert(tags);
         app.update();
-        assert_eq!(label_of(&app, barrel), "Oil barrel\n[burning] [leaking]");
+        assert_eq!(label_of(&app, goblin), "Goblin\n[burning]");
+
+        let dead = Tags(BTreeSet::from(["dead".to_owned()]));
+        app.world_mut().entity_mut(goblin).insert(dead);
+        app.update();
+        assert_eq!(label_of(&app, goblin), "");
     }
 
     #[test]

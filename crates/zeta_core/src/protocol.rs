@@ -32,7 +32,7 @@ pub use inventory::{
 };
 pub use log::{DiceRollShown, LogEntryKind, NarrationLogEntry};
 pub use turn::{EndTurnRequest, TurnBubble};
-pub use world::{Collider, EntityName, MapArea, PlayerCharacter, Tags, Visual};
+pub use world::{Collider, Creature, EntityName, MapArea, PlayerCharacter, Tags, Visual};
 
 #[cfg(feature = "bevy")]
 use serde::Serialize;
@@ -92,6 +92,7 @@ pub fn register_protocol(registrar: &mut impl ProtocolRegistrar) {
     registrar.server_message::<PromptStatusUpdate>(Delivery::Ordered);
     registrar.component::<Inventory>();
     registrar.client_message::<ItemVerbRequest>(Delivery::Ordered);
+    registrar.component::<Creature>();
 }
 
 /// Shared by the submodule tests: serializes to JSON and back, and expects the same value.
@@ -172,6 +173,7 @@ mod tests {
                 "server PromptStatusUpdate Ordered",
                 "component Inventory",
                 "client ItemVerbRequest Ordered",
+                "component Creature",
             ]
         );
     }

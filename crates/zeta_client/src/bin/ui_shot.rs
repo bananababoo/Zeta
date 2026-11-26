@@ -32,13 +32,15 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 use zeta_client::ClientPlugins;
 use zeta_client::inventory::{InventorySlot, InventoryToggleButton};
+use zeta_client::layout::square_center;
+use zeta_client::settings::ClientSettings;
 use zeta_core::catalog::CatalogId;
 use zeta_core::entity::EntityId;
 use zeta_core::grid::{GridPos, MapBounds};
 use zeta_core::protocol::{
-    Collider, Delivery, DiceRollShown, EntityName, Inventory, Item, LogEntryKind, MapArea,
-    NarrationLogEntry, PlayerAssigned, PlayerCharacter, ProtocolRegistrar, Tags, TurnBubble,
-    register_protocol,
+    Collider, Creature, Delivery, DiceRollShown, EntityName, Inventory, Item, LogEntryKind,
+    MapArea, NarrationLogEntry, PlayerAssigned, PlayerCharacter, ProtocolRegistrar, Tags,
+    TurnBubble, Visual, register_protocol,
 };
 use zeta_core::resolution::{D20, Volume};
 
@@ -89,6 +91,8 @@ enum Scene {
     RiverScene,
     /// All HUD panels visible together: Turn Banner, settled Dice Roll, Narration Log, and Prompt.
     CombatHud,
+    /// Right-clicking the Wooden Bridge opens its inspect popup with name, description, and attributes.
+    InspectBridge,
 }
 
 /// What the fake cursor points at.
@@ -98,6 +102,8 @@ enum Target {
     InventoryToggle,
     /// The slot of the local character's stack of this catalog id.
     Slot(&'static str),
+    /// The center of 1 map grid square.
+    Square(GridPos),
 }
 
 /// 1 action of the fake cursor.
@@ -107,16 +113,19 @@ enum Step {
     Hover(Target),
     /// Move the cursor over the target and click the left button.
     Click(Target),
+    /// Move the cursor over the target and click the right button.
+    RightClick(Target),
 }
 
 impl Scene {
     /// Every scene, in the order `tools/ui_shots.ps1` lists them.
-    const ALL: [Self; 5] = [
+    const ALL: [Self; 6] = [
         Self::InventoryOpen,
         Self::InventoryHover,
         Self::InventoryMenu,
         Self::RiverScene,
         Self::CombatHud,
+        Self::InspectBridge,
     ];
 
     /// The name given on the command line, which is also the PNG file name.
@@ -127,6 +136,7 @@ impl Scene {
             Self::InventoryMenu => "inventory_menu",
             Self::RiverScene => "river_scene",
             Self::CombatHud => "combat_hud",
+            Self::InspectBridge => "inspect_bridge",
         }
     }
 
@@ -142,6 +152,7 @@ impl Scene {
             Self::InventoryHover => vec![open, Step::Hover(Target::Slot("painters_supplies"))],
             Self::InventoryMenu => vec![open, Step::Click(Target::Slot("longsword"))],
             Self::RiverScene | Self::CombatHud => Vec::new(),
+            Self::InspectBridge => vec![Step::RightClick(Target::Square(GridPos::new(7, 4)))],
         }
     }
 }
@@ -179,7 +190,7 @@ struct Driver {
     next_step: usize,
     frames_to_wait: u32,
     frame: u32,
-    release_pending: bool,
+    release_pending: Option<MouseButton>,
     screenshot_taken: bool,
     output: PathBuf,
 }
@@ -208,6 +219,8 @@ struct SceneLayout<'w, 's> {
         ),
     >,
     holders: Query<'w, 's, (&'static EntityId, &'static Inventory)>,
+    camera: Query<'w, 's, (&'static Camera, &'static GlobalTransform), With<Camera2d>>,
+    settings: Res<'w, ClientSettings>,
 }
 
 fn catalog_id(text: &str) -> CatalogId {
@@ -275,6 +288,7 @@ fn spawn_fake_world(
         EntityId(next_id),
         GridPos::new(7, 4),
         EntityName("Wooden Bridge".to_owned()),
+        Visual("A narrow weathered timber plank bridge spanning the river.".to_owned()),
         Tags(["wooden".to_owned()].into_iter().collect()),
         Collider { passable: true },
     ));
@@ -282,6 +296,7 @@ fn spawn_fake_world(
         EntityId(next_id + 1),
         GridPos::new(6, 3),
         EntityName("Oil Barrel".to_owned()),
+        Visual("A wooden barrel of lamp oil, sealed with a cork.".to_owned()),
         Tags(
             ["wooden".to_owned(), "flammable".to_owned()]
                 .into_iter()
@@ -293,6 +308,8 @@ fn spawn_fake_world(
         EntityId(next_id + 2),
         GridPos::new(10, 4),
         EntityName("Goblin".to_owned()),
+        Visual("A wary goblin watching the far end of the bridge.".to_owned()),
+        Creature,
         Collider { passable: false },
         Inventory::default(),
     ));
@@ -300,6 +317,8 @@ fn spawn_fake_world(
         LOCAL_CHARACTER,
         GridPos::new(3, 4),
         EntityName("Aria".to_owned()),
+        Visual("An adventurer controlled by a player.".to_owned()),
+        Creature,
         PlayerCharacter,
         Collider { passable: false },
         carried_inventory(),
@@ -308,6 +327,8 @@ fn spawn_fake_world(
         EntityId(2),
         GridPos::new(4, 4),
         EntityName("Bram".to_owned()),
+        Visual("An adventurer controlled by a player.".to_owned()),
+        Creature,
         PlayerCharacter,
         Collider { passable: false },
         Inventory::default(),
@@ -410,6 +431,11 @@ fn target_center(target: Target, layout: &SceneLayout) -> Option<Vec2> {
                 .find(|(node, _, slot)| slot.0 == stack.id() && laid_out(node))
                 .map(|(_, transform, _)| transform.translation)
         }
+        Target::Square(square) => {
+            let (camera, camera_transform) = layout.camera.iter().next()?;
+            let world = square_center(square, layout.settings.tile_size).extend(0.0);
+            camera.world_to_viewport(camera_transform, world).ok()
+        }
     }
 }
 
@@ -457,14 +483,13 @@ fn drive_scene(
         exits.write(AppExit::error());
         return;
     }
-    if driver.release_pending {
+    if let Some(button) = driver.release_pending.take() {
         // `MouseButtonInput`: bevy_input-0.20.1/src/mouse.rs:46.
         buttons.write(MouseButtonInput {
-            button: MouseButton::Left,
+            button,
             state: ButtonState::Released,
             window: *window_entity,
         });
-        driver.release_pending = false;
     }
     if driver.frames_to_wait > 0 {
         driver.frames_to_wait -= 1;
@@ -481,8 +506,9 @@ fn drive_scene(
         return;
     };
     let (target, click) = match step {
-        Step::Hover(target) => (target, false),
-        Step::Click(target) => (target, true),
+        Step::Hover(target) => (target, None),
+        Step::Click(target) => (target, Some(MouseButton::Left)),
+        Step::RightClick(target) => (target, Some(MouseButton::Right)),
     };
     let Some(center) = target_center(target, &layout) else {
         return;
@@ -490,13 +516,13 @@ fn drive_scene(
     // `Window::set_physical_cursor_position`: bevy_window-0.20.1/src/window.rs:659. Without
     // the winit plugin nothing moves the real cursor or overwrites this position.
     window.set_physical_cursor_position(Some(center.as_dvec2()));
-    if click {
+    if let Some(button) = click {
         buttons.write(MouseButtonInput {
-            button: MouseButton::Left,
+            button,
             state: ButtonState::Pressed,
             window: *window_entity,
         });
-        driver.release_pending = true;
+        driver.release_pending = Some(button);
     }
     driver.next_step += 1;
     driver.frames_to_wait = STEP_FRAMES;
@@ -567,7 +593,7 @@ fn main() -> AppExit {
             next_step: 0,
             frames_to_wait: SETTLE_FRAMES,
             frame: 0,
-            release_pending: false,
+            release_pending: None,
             screenshot_taken: false,
             output,
         })
