@@ -23,6 +23,7 @@ pub mod snapshot;
 pub mod time;
 pub mod validation;
 pub mod wire;
+pub mod world;
 
 #[cfg(test)]
 mod test_support;
