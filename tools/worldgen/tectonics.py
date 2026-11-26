@@ -1224,15 +1224,16 @@ def _eval_pair_envelopes(
         c_str = _smoothstep(0.08, 0.34, conv[oo_conv]) * (np.float32(0.40) + np.float32(0.95) * np.clip(conv[oo_conv] / np.float32(0.85), np.float32(0.0), np.float32(1.05)))
         polar_arc = np.float32(1.0) - np.float32(0.70) * _smoothstep(0.92, 0.99, np.abs(pz[oo_conv]))
 
-        arc_off = np.float32(0.048) + np.float32(0.010) * fl[oo_conv]
+        arc_off = np.float32(0.048) + np.float32(0.022) * fl[oo_conv]
         over_fade = _smoothstep(-0.028, 0.028, so)
-        sub_ridge = np.float32(2800.0) * np.exp(-(((so - arc_off) / (np.float32(0.030) * wm)) ** 2)) * over_fade * c_str
-        group_env = _smoothstep(-0.45, 0.25, st[oo_conv])
-        volc_core = np.exp(-(((so - arc_off) / (np.float32(0.022) * (np.float32(0.68) + np.float32(0.45) * wm))) ** 2)) * over_fade
+        # Keep the submarine volcanic bank submerged (-1800..-900 m) so the fault never emerges as a solid 5000 km needle wall.
+        sub_ridge = np.float32(1550.0) * np.exp(-(((so - arc_off) / (np.float32(0.042) * wm)) ** 2)) * over_fade * c_str
+        group_env = _smoothstep(-0.08, 0.55, st[oo_conv])
+        volc_core = np.exp(-(((so - arc_off) / (np.float32(0.024) * (np.float32(0.68) + np.float32(0.45) * wm))) ** 2)) * over_fade
 
         ped_a[oo_conv] += sub_ridge
-        # Realistic volcanic island arc amplitude (peaks at +1200..+3200m above sea, smooth slopes!)
-        arc_a[oo_conv] += np.float32(3600.0) * volc_core * group_env * c_str * polar_arc
+        # Discrete volcanic islands rise only where both group_env and bead_peak align.
+        arc_a[oo_conv] += np.float32(4350.0) * volc_core * group_env * c_str * polar_arc
 
         tr_off = np.float32(-0.026) - np.float32(0.009) * fl[oo_conv]
         tr_w = np.float32(0.028) * (np.float32(0.54) + np.float32(0.70) * wm)
@@ -1725,11 +1726,11 @@ def generate_tectonic_base(
             np.float32(1.16),
         )
 
-        # Smooth C-infinity volcanic island beads (NO razor C0 V-cusp spikes!)
-        b1 = np.exp(np.float32(-2.6) * (oct16 * oct16))
+        # Smooth C-infinity volcanic island beads (discrete spaced cones, never a continuous thin wall)
+        b1 = np.exp(np.float32(-3.2) * (oct16 * oct16))
         b2 = np.float32(0.5) + np.float32(0.5) * oct36
-        arc_beads = np.clip(b1 * np.float32(0.76) + b2 * np.float32(0.42) - np.float32(0.10), np.float32(0.0), np.float32(1.18))
-        bead_peak = _smoothstep(0.30, 0.92, arc_beads) * (np.float32(0.55) + np.float32(0.55) * ridge_full)
+        arc_beads = np.clip(b1 * np.float32(0.74) + b2 * np.float32(0.40) - np.float32(0.14), np.float32(0.0), np.float32(1.18))
+        bead_peak = _smoothstep(0.48, 0.92, arc_beads) * (np.float32(0.55) + np.float32(0.55) * ridge_full)
 
         fbm_lo = _sample_strip(low["fbm_low"], width, height, r0, r1)
         strike = _sample_strip(low["strike_mod"], width, height, r0, r1)
