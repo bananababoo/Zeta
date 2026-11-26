@@ -2,7 +2,7 @@
 name: The Gathering of the Outer Planes
 subtype: cosmic
 parent: none
-began: unknown
+began: -8500000000
 ended: present
 ---
 The Gathering of the Outer Planes is the slow, ongoing formation of outer realms from the accumulated intentions of mortal worlds across [[Zeta]].

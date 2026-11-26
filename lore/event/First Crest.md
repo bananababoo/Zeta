@@ -2,8 +2,8 @@
 name: The First Crest
 subtype: cosmic
 parent: none
-began: unknown
-ended: unknown
+began: -13800000000
+ended: -13800000000
 ---
 The First Crest was a massive alignment of ripples in the [[Twill]] that took the form of a mind, [[Kairo]].
 

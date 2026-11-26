@@ -2,8 +2,8 @@
 name: The First Choice
 subtype: cosmic
 parent: none
-began: unknown
-ended: unknown
+began: -13800000000
+ended: -13800000000
 ---
 The First Choice was [[Kairo]]'s decision to create, made out of curiosity to see goodness exist.
 
