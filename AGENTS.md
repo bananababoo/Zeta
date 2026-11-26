@@ -16,6 +16,7 @@ Decisions live in `docs/`; this file only points to them and records working kno
 |---|---|
 | Doc rules (Locked) | `docs/documentation_specification.md`, `docs/glossary.md` |
 | Gameplay, 2024 5e (SRD 5.2.1), items & crafting | `docs/design/game_design.md` |
+| UI theme, fonts, monochrome icons & map lighting | `docs/design/visual_style_guide.md` |
 | First playable slice | `docs/prototypes/realism_prototype.md` |
 | Code & dependency rules | `docs/architecture/code_style.md` |
 | Stack: Bevy, bevy_replicon, client modules | `docs/architecture/technical_architecture.md` |
