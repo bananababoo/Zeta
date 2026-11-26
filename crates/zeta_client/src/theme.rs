@@ -96,9 +96,9 @@ pub struct UiIcons {
 /// Loaded font, monochrome icon, and 9-slice sprite handles for the client UI.
 #[derive(Resource, Clone, Debug, Default)]
 pub struct UiTheme {
-    /// Display/heading font (`Fraunces` — warm soft woodblock serif).
+    /// Display/heading font (`Fraunces` — warm bold woodblock serif).
     pub heading_font: Handle<Font>,
-    /// Narrative/journal font (`Lora` — warm full-bodied serif).
+    /// Narrative/journal font (`Patrick Hand` — warm hand-inked tabletop journal).
     pub narration_font: Handle<Font>,
     /// Compact HUD/control font (`Nunito` — warm rounded sans).
     pub ui_font: Handle<Font>,
@@ -115,23 +115,28 @@ pub struct UiTheme {
 }
 
 impl UiTheme {
-    /// Heading `TextFont` (`Fraunces`).
+    /// Heading `TextFont` (`Fraunces` bold).
     /// `TextFont::with_font`: `bevy_text-0.20.1/src/text.rs:719`.
+    /// `TextFont::with_font_weight`: `bevy_text-0.20.1/src/text.rs:743`.
     #[must_use]
     pub fn heading_font(&self, size: f32) -> TextFont {
-        TextFont::from_font_size(size).with_font(self.heading_font.clone())
+        TextFont::from_font_size(size)
+            .with_font(self.heading_font.clone())
+            .with_font_weight(FontWeight::BOLD)
     }
 
-    /// Narration/tooltip `TextFont` (`Lora`).
+    /// Narration/tooltip `TextFont` (`Patrick Hand`).
     #[must_use]
     pub fn narration_font(&self, size: f32) -> TextFont {
         TextFont::from_font_size(size).with_font(self.narration_font.clone())
     }
 
-    /// Compact HUD/button `TextFont` (`Nunito`).
+    /// Compact HUD/button `TextFont` (`Nunito` semibold).
     #[must_use]
     pub fn ui_font(&self, size: f32) -> TextFont {
-        TextFont::from_font_size(size).with_font(self.ui_font.clone())
+        TextFont::from_font_size(size)
+            .with_font(self.ui_font.clone())
+            .with_font_weight(FontWeight::SEMIBOLD)
     }
 
     /// 9-sliced warm wood panel background.
@@ -238,7 +243,7 @@ fn load_theme_assets(assets: Option<Res<AssetServer>>, mut theme: ResMut<UiTheme
         return;
     };
     theme.heading_font = assets.load("fonts/fraunces.ttf");
-    theme.narration_font = assets.load("fonts/lora.ttf");
+    theme.narration_font = assets.load("fonts/patrick_hand.ttf");
     theme.ui_font = assets.load("fonts/nunito.ttf");
     theme.panel_wood = assets.load("ui/panel_wood.png");
     theme.panel_parchment = assets.load("ui/panel_parchment.png");

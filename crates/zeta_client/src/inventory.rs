@@ -779,7 +779,7 @@ fn spawn_popup(
                     ..default()
                 },
                 Text::new(text.clone()),
-                theme.narration_font(TOOLTIP_FONT_SIZE + 1.0),
+                theme.narration_font(TOOLTIP_FONT_SIZE + 3.0),
                 TextColor(TEXT_ON_PARCHMENT),
             ))
             .id(),

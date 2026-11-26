@@ -21,7 +21,7 @@ use crate::settings::ClientSettings;
 use crate::theme::{SPEECH_BUBBLE_COLOR, TEXT_ON_PARCHMENT, UiTheme};
 
 /// Font size of log lines.
-const LOG_FONT_SIZE: f32 = 16.0;
+const LOG_FONT_SIZE: f32 = 19.0;
 /// Font size of speech bubbles relative to the square size.
 const BUBBLE_FONT_SCALE: f32 = 0.45;
 /// Width of a speech bubble in squares, before it wraps.
