@@ -189,6 +189,7 @@ fn draw_map_area(
             MeshMaterial2d(materials.add(TerrainSplatMaterial {
                 params: terrain_params(bounds, &loaded.config),
                 scales: loaded.material_scales,
+                ambient_tint: loaded.ambient_vec4(),
                 splat,
                 layer0: loaded.material_textures[0].clone(),
                 layer1: loaded.material_textures[1].clone(),
@@ -297,8 +298,11 @@ fn style_entities(
                 if sprite.image != *handle {
                     sprite.image = handle.clone();
                 }
-                if sprite.color != Color::WHITE {
-                    sprite.color = Color::WHITE;
+                let ambient = map_config
+                    .as_deref()
+                    .map_or(Color::WHITE, LoadedMapConfig::ambient_color);
+                if sprite.color != ambient {
+                    sprite.color = ambient;
                 }
                 let wanted_size = rule
                     .size

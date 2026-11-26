@@ -38,8 +38,8 @@ use crate::theme::{SLOT_CORNER_RADIUS_PIXELS, TEXT_ON_PARCHMENT, TEXT_ON_WOOD, U
 
 /// Font size of the panel heading.
 const HEADING_FONT_SIZE: f32 = 18.0;
-/// Font size of the category letter inside a slot.
-const SLOT_LETTER_FONT_SIZE: f32 = 18.0;
+/// Width and height of the monochrome RPG icon inside a slot, in logical pixels.
+const SLOT_ICON_PIXELS: f32 = 24.0;
 /// Font size of the quantity in a slot's corner.
 const SLOT_QUANTITY_FONT_SIZE: f32 = 11.0;
 /// Font size of the tooltip text.
@@ -140,8 +140,10 @@ pub enum SlotCategory {
 pub struct SlotView {
     /// The stack the slot shows.
     pub stack: StackId,
-    /// Decides the color and letter.
+    /// Decides the color and fallback icon.
     pub category: SlotCategory,
+    /// Optional SRD catalog id used to pick a specific monochrome item icon.
+    pub icon_key: Option<String>,
     /// The corner number, present above 1.
     pub quantity: Option<String>,
     /// Whether the slot gets the equipped border.
@@ -584,6 +586,10 @@ pub fn panel_view(
             .map(|stack| SlotView {
                 stack: stack.id(),
                 category: slot_category(stack, catalog),
+                icon_key: match stack.item() {
+                    Item::Catalog(id) => Some(id.as_str().to_owned()),
+                    Item::Custom(_) => None,
+                },
                 quantity: quantity_label(stack),
                 equipped: stack.equipped(),
                 tooltip: tooltip_text(stack, catalog),
@@ -689,10 +695,14 @@ fn spawn_slot(
         BorderColor::all(look.equipped_border_color),
     ))
     .with_children(|square| {
+        let icon = theme.slot_icon(slot.icon_key.as_deref(), slot.category);
         square.spawn((
-            Text::new(slot_letter(slot.category).to_string()),
-            theme.ui_font(SLOT_LETTER_FONT_SIZE),
-            TextColor(TEXT_ON_WOOD),
+            Node {
+                width: Val::Px(SLOT_ICON_PIXELS),
+                height: Val::Px(SLOT_ICON_PIXELS),
+                ..default()
+            },
+            theme.tinted_icon(icon, TEXT_ON_WOOD),
         ));
         if let Some(quantity) = &slot.quantity {
             square.spawn((
@@ -1607,9 +1617,20 @@ mod tests {
         assert_eq!(panel_display(&mut app), Display::Flex);
         assert_eq!(count::<InventorySlot>(&mut app), 2);
         let mut texts = app.world_mut().query::<&Text>();
-        let letters: Vec<String> = texts.iter(app.world()).map(|text| text.0.clone()).collect();
-        assert!(letters.contains(&"W".to_owned()), "{letters:?}");
-        assert!(letters.contains(&"G".to_owned()), "{letters:?}");
+        assert!(
+            texts
+                .iter(app.world())
+                .any(|text| text.0 == "Inventory: 8 lb carried"),
+            "heading shows carried weight"
+        );
+        let mut icons = app
+            .world_mut()
+            .query_filtered::<&ImageNode, With<ChildOf>>();
+        assert_eq!(
+            icons.iter(app.world()).count(),
+            2,
+            "each slot renders a monochrome RPG icon"
+        );
 
         tap(&mut app, crate::settings::INVENTORY_KEY);
         assert_eq!(panel_display(&mut app), Display::None);

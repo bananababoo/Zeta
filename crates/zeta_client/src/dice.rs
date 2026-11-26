@@ -246,12 +246,29 @@ fn spawn_dice_panel(mut commands: Commands, theme: Res<UiTheme>) {
             theme.wood_panel(),
         ))
         .with_children(|panel| {
-            panel.spawn((
-                DiceFaceText,
-                Text::new(""),
-                theme.heading_font(FACE_FONT_SIZE),
-                TextColor(TUMBLING_COLOR),
-            ));
+            panel
+                .spawn(Node {
+                    flex_direction: FlexDirection::Row,
+                    align_items: AlignItems::Center,
+                    column_gap: Val::Px(12.0),
+                    ..default()
+                })
+                .with_children(|header| {
+                    header.spawn((
+                        Node {
+                            width: Val::Px(36.0),
+                            height: Val::Px(36.0),
+                            ..default()
+                        },
+                        theme.tinted_icon(theme.icons.d20.clone(), TEXT_ON_WOOD),
+                    ));
+                    header.spawn((
+                        DiceFaceText,
+                        Text::new(""),
+                        theme.heading_font(FACE_FONT_SIZE),
+                        TextColor(TUMBLING_COLOR),
+                    ));
+                });
             panel.spawn((
                 DiceDetailText,
                 Text::new(""),

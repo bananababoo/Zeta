@@ -32,6 +32,9 @@ pub struct MapConfig {
     /// Opacity of the subtle 5-foot grid overlay (`0.0` hides the grid).
     #[serde(default = "default_grid_alpha")]
     pub grid_alpha: f32,
+    /// Per-map ambient RGB tint applied to both terrain and entity sprites to unify mixed art packs.
+    #[serde(default = "default_ambient_tint")]
+    pub ambient_tint: [f32; 3],
     /// Ordered terrain materials: slot 0 is the base fill, slots 1..=3 map to splat channels.
     pub materials: Vec<TerrainMaterialDef>,
     /// Ordered brush layers painted into the terrain splatmap.
@@ -183,6 +186,20 @@ pub struct LoadedMapConfig {
 }
 
 impl LoadedMapConfig {
+    /// Per-map ambient lighting tint as a `Vec4` uniform for `TerrainSplatMaterial`.
+    #[must_use]
+    pub fn ambient_vec4(&self) -> Vec4 {
+        let [r, g, b] = self.config.ambient_tint;
+        Vec4::new(r, g, b, 1.0)
+    }
+
+    /// Per-map ambient lighting tint as a Bevy `Color` for map entity sprites.
+    #[must_use]
+    pub fn ambient_color(&self) -> Color {
+        let [r, g, b] = self.config.ambient_tint;
+        Color::srgb(r, g, b)
+    }
+
     /// Returns the first matching entity style rule and its preloaded sprite handle.
     pub fn style_for(
         &self,
@@ -206,6 +223,9 @@ pub struct TerrainSplatMaterial {
     /// Per-material UV scale multipliers for `layer0`..`layer3`.
     #[uniform(0)]
     pub scales: Vec4,
+    /// Per-map ambient lighting tint (`rgb`, `1.0`).
+    #[uniform(0)]
+    pub ambient_tint: Vec4,
     /// RGBA splat weights: `R = layer1`, `G = layer2`, `B = layer3`, `A = edge darkening`.
     #[texture(1)]
     #[sampler(2)]
@@ -240,6 +260,10 @@ fn default_tiles_per_repeat() -> f32 {
 
 fn default_grid_alpha() -> f32 {
     0.12
+}
+
+fn default_ambient_tint() -> [f32; 3] {
+    [1.0, 1.0, 1.0]
 }
 
 fn default_scale() -> f32 {

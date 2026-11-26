@@ -1,18 +1,20 @@
 //! Shared client UI theme: Warm Wood & Linen.
 //!
-//! Every UI plugin reads colors, fonts, and 9-sliced panel/button sprites from [`UiTheme`] so
-//! all panels share 1 cohesive look (warm wood, cream linen, walnut ink, muted earthy accents;
-//! no gold or metal).
+//! Every UI plugin reads colors, fonts, monochrome icons, and 9-sliced panel/button sprites
+//! from [`UiTheme`] so all panels share 1 cohesive look (warm wood, cream linen, walnut ink,
+//! muted earthy accents; no gold or metal; zero pixel-art HUD clash).
 //!
 //! Headless unit tests using `MinimalPlugins` have no `AssetServer`; [`ThemePlugin`] falls back
 //! to `Default` handles when no asset server is present.
+
+use std::collections::HashMap;
 
 use bevy::prelude::*;
 use bevy::sprite::{BorderRect, SliceScaleMode, TextureSlicer};
 use bevy::ui::VisualBox;
 use bevy::ui::widget::NodeImageMode;
 
-/// Warm cream text on dark/wood surfaces (`#FBF5EA`).
+/// Warm cream text and icon tint on dark/wood surfaces (`#FBF5EA`).
 pub const TEXT_ON_WOOD: Color = Color::srgb(0.984, 0.961, 0.918);
 /// Soft oatmeal secondary text on wood surfaces (`#DDD0BE`).
 pub const TEXT_MUTED_ON_WOOD: Color = Color::srgb(0.867, 0.816, 0.745);
@@ -44,14 +46,61 @@ const BUTTON_SLICE_INSET: f32 = 10.0;
 /// Corner radius for rounded earthy slots (inventory squares).
 pub const SLOT_CORNER_RADIUS_PIXELS: f32 = 6.0;
 
-/// Loaded font and 9-slice sprite handles for the client UI.
+/// Named monochrome RPG icons preloaded from `assets/ui/icons/`.
+const ITEM_ICON_IDS: &[(&str, &str)] = &[
+    ("longsword", "ui/icons/longsword.png"),
+    ("shortsword", "ui/icons/longsword.png"),
+    ("greatsword", "ui/icons/longsword.png"),
+    ("rapier", "ui/icons/longsword.png"),
+    ("scimitar", "ui/icons/longsword.png"),
+    ("dagger", "ui/icons/dagger.png"),
+    ("handaxe", "ui/icons/axe.png"),
+    ("battleaxe", "ui/icons/axe.png"),
+    ("greataxe", "ui/icons/axe.png"),
+    ("shortbow", "ui/icons/bow.png"),
+    ("longbow", "ui/icons/bow.png"),
+    ("shield", "ui/icons/shield.png"),
+    ("leather_armor", "ui/icons/leather_armor.png"),
+    ("studded_leather_armor", "ui/icons/leather_armor.png"),
+    ("padded_armor", "ui/icons/leather_armor.png"),
+    ("hide_armor", "ui/icons/leather_armor.png"),
+    ("chain_mail", "ui/icons/helmet.png"),
+    ("plate_armor", "ui/icons/helmet.png"),
+    ("torch", "ui/icons/torch.png"),
+    ("rope", "ui/icons/rope.png"),
+    ("rations", "ui/icons/rations.png"),
+    ("thieves_tools", "ui/icons/thieves_tools.png"),
+    ("healers_kit", "ui/icons/healers_kit.png"),
+    ("painters_supplies", "ui/icons/painters_supplies.png"),
+    ("potion_of_healing", "ui/icons/potion.png"),
+    ("scroll_case", "ui/icons/scroll.png"),
+];
+
+/// Monochrome white-on-transparent RPG icons tinted at runtime by [`UiTheme`].
+#[derive(Clone, Debug, Default)]
+pub struct UiIcons {
+    /// Fallback icon for weapon slots.
+    pub weapon: Handle<Image>,
+    /// Fallback icon for armor and shield slots.
+    pub armor: Handle<Image>,
+    /// Fallback icon for tool slots.
+    pub tool: Handle<Image>,
+    /// Fallback icon for general gear slots.
+    pub gear: Handle<Image>,
+    /// d20 die icon for the dice panel.
+    pub d20: Handle<Image>,
+    /// Specific SRD catalog id -> monochrome icon handle.
+    pub by_catalog_id: HashMap<String, Handle<Image>>,
+}
+
+/// Loaded font, monochrome icon, and 9-slice sprite handles for the client UI.
 #[derive(Resource, Clone, Debug, Default)]
 pub struct UiTheme {
-    /// Display/heading font (`Cinzel`).
+    /// Display/heading font (`Fraunces` — warm soft woodblock serif).
     pub heading_font: Handle<Font>,
-    /// Narrative/journal font (`EB Garamond`).
+    /// Narrative/journal font (`Lora` — warm full-bodied serif).
     pub narration_font: Handle<Font>,
-    /// Compact HUD/control font (`Inter`).
+    /// Compact HUD/control font (`Nunito` — warm rounded sans).
     pub ui_font: Handle<Font>,
     /// 9-sliced notched wood panel (`assets/ui/panel_wood.png`).
     pub panel_wood: Handle<Image>,
@@ -61,23 +110,25 @@ pub struct UiTheme {
     pub button_wood: Handle<Image>,
     /// 9-sliced parchment button (`assets/ui/button_parchment.png`).
     pub button_parchment: Handle<Image>,
+    /// Preloaded monochrome RPG icons (`assets/ui/icons/`).
+    pub icons: UiIcons,
 }
 
 impl UiTheme {
-    /// Heading `TextFont` (`Cinzel`).
+    /// Heading `TextFont` (`Fraunces`).
     /// `TextFont::with_font`: `bevy_text-0.20.1/src/text.rs:719`.
     #[must_use]
     pub fn heading_font(&self, size: f32) -> TextFont {
         TextFont::from_font_size(size).with_font(self.heading_font.clone())
     }
 
-    /// Narration/tooltip `TextFont` (`EB Garamond`).
+    /// Narration/tooltip `TextFont` (`Lora`).
     #[must_use]
     pub fn narration_font(&self, size: f32) -> TextFont {
         TextFont::from_font_size(size).with_font(self.narration_font.clone())
     }
 
-    /// Compact HUD/button `TextFont` (`Inter`).
+    /// Compact HUD/button `TextFont` (`Nunito`).
     #[must_use]
     pub fn ui_font(&self, size: f32) -> TextFont {
         TextFont::from_font_size(size).with_font(self.ui_font.clone())
@@ -120,6 +171,34 @@ impl UiTheme {
             PARCHMENT_BUTTON_TINT,
         )
     }
+
+    /// Tinted monochrome icon node (`ImageNode::new`: `bevy_ui-0.20.1/src/widget/image.rs:74`).
+    #[must_use]
+    pub fn tinted_icon(&self, handle: Handle<Image>, tint: Color) -> ImageNode {
+        let mut node = ImageNode::new(handle);
+        node.color = tint;
+        node
+    }
+
+    /// Resolves the monochrome icon for an inventory slot, falling back to its category icon.
+    #[must_use]
+    pub fn slot_icon(
+        &self,
+        catalog_id: Option<&str>,
+        category: crate::inventory::SlotCategory,
+    ) -> Handle<Image> {
+        if let Some(id) = catalog_id
+            && let Some(handle) = self.icons.by_catalog_id.get(id)
+        {
+            return handle.clone();
+        }
+        match category {
+            crate::inventory::SlotCategory::Weapon => self.icons.weapon.clone(),
+            crate::inventory::SlotCategory::Armor => self.icons.armor.clone(),
+            crate::inventory::SlotCategory::Tool => self.icons.tool.clone(),
+            crate::inventory::SlotCategory::Gear => self.icons.gear.clone(),
+        }
+    }
 }
 
 fn sliced_image(handle: Handle<Image>, inset: f32, color: Color) -> ImageNode {
@@ -158,13 +237,25 @@ fn load_theme_assets(assets: Option<Res<AssetServer>>, mut theme: ResMut<UiTheme
     let Some(assets) = assets else {
         return;
     };
-    theme.heading_font = assets.load("fonts/cinzel.ttf");
-    theme.narration_font = assets.load("fonts/eb_garamond.ttf");
-    theme.ui_font = assets.load("fonts/inter.ttf");
+    theme.heading_font = assets.load("fonts/fraunces.ttf");
+    theme.narration_font = assets.load("fonts/lora.ttf");
+    theme.ui_font = assets.load("fonts/nunito.ttf");
     theme.panel_wood = assets.load("ui/panel_wood.png");
     theme.panel_parchment = assets.load("ui/panel_parchment.png");
     theme.button_wood = assets.load("ui/button_wood.png");
     theme.button_parchment = assets.load("ui/button_parchment.png");
+
+    theme.icons.weapon = assets.load("ui/icons/weapon.png");
+    theme.icons.armor = assets.load("ui/icons/armor.png");
+    theme.icons.tool = assets.load("ui/icons/tool.png");
+    theme.icons.gear = assets.load("ui/icons/gear.png");
+    theme.icons.d20 = assets.load("ui/icons/d20.png");
+    for &(catalog_id, path) in ITEM_ICON_IDS {
+        theme
+            .icons
+            .by_catalog_id
+            .insert(catalog_id.to_owned(), assets.load(path));
+    }
 }
 
 #[cfg(test)]

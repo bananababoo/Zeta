@@ -3,6 +3,8 @@ struct TerrainSplatUniform {
     params: vec4<f32>,
     // Per-material UV scale multipliers for layer0..layer3.
     scales: vec4<f32>,
+    // Per-map ambient lighting tint (rgb) to unify textures & entity sprites from mixed sources.
+    ambient_tint: vec4<f32>,
 }
 
 @group(2) @binding(0) var<uniform> material: TerrainSplatUniform;
@@ -42,6 +44,7 @@ fn fragment(@location(2) uv: vec2<f32>) -> @location(0) vec4<f32> {
     let edge = min(min(cell.x, 1.0 - cell.x), min(cell.y, 1.0 - cell.y));
     let line = 1.0 - smoothstep(0.0, 0.025, edge);
     color = mix(color, vec3<f32>(1.0, 1.0, 1.0), line * grid_alpha);
+    color = color * material.ambient_tint.rgb;
 
     return vec4<f32>(color, 1.0);
 }
