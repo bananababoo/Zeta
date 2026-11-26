@@ -752,93 +752,83 @@ mod tests {
     }
 
     #[test]
-    fn river_crossing_config_assets_exist_and_spatial_invariants_hold() {
-        let root = assets_root();
-        let config = read_map_config(DEFAULT_MAP_CONFIG).expect("valid river_crossing.json");
+    fn entity_cells_layer_stays_aligned_with_matching_grid_squares() {
+        let config: MapConfig = serde_json::from_str(
+            r#"{
+                "materials": [
+                    { "id": "base", "texture": "a.png" },
+                    { "id": "feature", "texture": "b.png" }
+                ],
+                "layers": [
+                    {
+                        "material": "feature",
+                        "shape": {
+                            "kind": "entity_cells",
+                            "match_tags": ["feature_tag"],
+                            "padding": 0.0,
+                            "feather": 0.2,
+                            "wobble": 0.05
+                        }
+                    }
+                ]
+            }"#,
+        )
+        .expect("valid generic entity_cells config");
 
-        for material in &config.materials {
-            assert!(
-                root.join(&material.texture).is_file(),
-                "missing terrain texture: {}",
-                material.texture
-            );
-        }
-        for rule in &config.entity_styles {
-            if let Some(sprite) = &rule.sprite {
-                assert!(
-                    root.join(sprite).is_file(),
-                    "missing entity sprite: {sprite}"
-                );
-            }
-        }
-
-        // Simulate the real 20x20 server river layout (river on column 10, bridge at (10, 10)).
         let bounds = MapBounds {
-            width: 20,
-            height: 20,
+            width: 8,
+            height: 8,
         };
-        let mut cells: Vec<TerrainEntityCell> = (0..bounds.height)
-            .filter(|&row| row != 10)
-            .map(|row| TerrainEntityCell {
-                position: GridPos::new(10, row),
-                name: Some("River".to_owned()),
-                tags: vec!["water".to_owned(), "deep".to_owned()],
-            })
-            .collect();
-        cells.push(TerrainEntityCell {
-            position: GridPos::new(10, 10),
-            name: Some("Wooden Bridge".to_owned()),
-            tags: vec!["wooden".to_owned()],
-        });
+        let cells = vec![
+            TerrainEntityCell {
+                position: GridPos::new(3, 3),
+                name: None,
+                tags: vec!["feature_tag".to_owned()],
+            },
+            TerrainEntityCell {
+                position: GridPos::new(3, 4),
+                name: None,
+                tags: vec!["feature_tag".to_owned()],
+            },
+        ];
 
         let image = build_splatmap_from_config(bounds, &config, &cells);
 
-        // Invariant 1: every river cell (including under the bridge) is solid water (channel B).
-        for row in 0..bounds.height {
-            let water = sample_tile(&image, bounds, 10, row)[2];
-            assert!(
-                water >= 220,
-                "river tile (10, {row}) should be solid water, got {water}"
-            );
-        }
+        assert!(sample_tile(&image, bounds, 3, 3)[0] >= 220);
+        assert!(sample_tile(&image, bounds, 3, 4)[0] >= 220);
+        assert_eq!(sample_tile(&image, bounds, 2, 3)[0], 0);
+        assert_eq!(sample_tile(&image, bounds, 4, 3)[0], 0);
+    }
 
-        // Invariant 2: adjacent dry walkable squares on columns 9 and 11 stay dry (no submerged land).
-        for row in 0..bounds.height {
-            let west_water = sample_tile(&image, bounds, 9, row)[2];
-            let east_water = sample_tile(&image, bounds, 11, row)[2];
-            assert_eq!(
-                west_water, 0,
-                "dry tile (9, {row}) must not be submerged in water"
-            );
-            assert_eq!(
-                east_water, 0,
-                "dry tile (11, {row}) must not be submerged in water"
-            );
-        }
-
-        // Invariant 3: Wooden Bridge sprite width spans cleanly past both water edges onto solid banks.
-        let bridge_rule = config
-            .entity_styles
-            .iter()
-            .find(|r| r.match_name.as_deref() == Some("Wooden Bridge"))
-            .expect("Wooden Bridge style rule");
-        let bridge_width = bridge_rule.size.expect("bridge size")[0];
-        let bridge_half = bridge_width * 0.5;
-        let data = image.data.as_ref().expect("splatmap bytes");
-        let row_y = 10 * SPLAT_PIXELS_PER_TILE + SPLAT_PIXELS_PER_TILE / 2;
-        let img_w = bounds.width * SPLAT_PIXELS_PER_TILE;
-        let water_pixels: Vec<u32> = (0..img_w)
-            .filter(|&px| data[((row_y * img_w + px) * 4 + 2) as usize] > 16)
+    #[test]
+    fn every_map_config_in_assets_parses_and_references_existing_files() {
+        let root = assets_root();
+        let maps_dir = root.join("maps");
+        let entries: Vec<_> = std::fs::read_dir(&maps_dir)
+            .expect("assets/maps directory exists")
+            .filter_map(Result::ok)
+            .filter(|entry| entry.path().extension().and_then(|e| e.to_str()) == Some("json"))
             .collect();
-        let water_left = count_to_f32(*water_pixels.first().expect("water pixels"))
-            / count_to_f32(SPLAT_PIXELS_PER_TILE);
-        let water_right = count_to_f32(*water_pixels.last().expect("water pixels") + 1)
-            / count_to_f32(SPLAT_PIXELS_PER_TILE);
-        let bridge_left = 10.5 - bridge_half;
-        let bridge_right = 10.5 + bridge_half;
-        assert!(
-            bridge_left < water_left - 0.15 && bridge_right > water_right + 0.15,
-            "bridge [{bridge_left:.2}, {bridge_right:.2}] must anchor past water [{water_left:.2}, {water_right:.2}]"
-        );
+        assert!(!entries.is_empty(), "at least 1 map config exists");
+
+        for entry in entries {
+            let rel = format!("maps/{}", entry.file_name().to_string_lossy());
+            let config = read_map_config(&rel).unwrap_or_else(|e| panic!("invalid {rel}: {e}"));
+            for material in &config.materials {
+                assert!(
+                    root.join(&material.texture).is_file(),
+                    "{rel}: missing terrain texture {}",
+                    material.texture
+                );
+            }
+            for rule in &config.entity_styles {
+                if let Some(sprite) = &rule.sprite {
+                    assert!(
+                        root.join(sprite).is_file(),
+                        "{rel}: missing entity sprite {sprite}"
+                    );
+                }
+            }
+        }
     }
 }

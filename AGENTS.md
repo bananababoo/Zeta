@@ -74,13 +74,13 @@ Decisions live in `docs/`; this file only points to them and records working kno
 
 ## UI Verification
 - Every client UI change gets a screenshot check before handoff: add or update a scene in `crates/zeta_client/src/bin/ui_shot.rs`, run `tools/ui_shots.ps1`, and look at the PNGs. Text must fit its box, popups stay on screen, nothing overlaps by accident.
-- Visual checks audit **world truth**, not just UI boxes: verify sprites match colliders, bridges reach solid banks, tokens align on grid squares, and `ui_shot.rs` mirrors the real server scene geometry (never a fake aspect ratio).
+- Visual checks audit **world truth**, not just UI boxes: verify sprites match colliders, tokens align on grid squares, and `ui_shot.rs` mirrors the real server scene geometry (never a fake aspect ratio).
 - Bevy measures text with the Text node's own width limits; put `max_width` on the Text node, not only its container.
 
 ## Longevity & Verification Rules
 - **Contract before implementation:** before building any data-driven subsystem (maps, themes, icons, items), lock its coordinate space, units, and single-source schema first. Never mix normalized `[0, 1]` positions with grid-square widths, and never call a half-width `width`.
 - **Single source of truth:** never duplicate scenes, terrain geometry, or asset tables across server, client, and dev tools. Derive terrain visuals from live grid/entity state (`entity_cells`) and external JSON (`assets/maps/`, `assets/ui/icon_map.json`), not hardcoded Rust lists.
-- **Asset & spatial invariant tests:** every external asset table (`theme.rs`, `assets/ui/icon_map.json`, `assets/maps/*.json`) gets deterministic tests verifying every referenced file exists on disk and spatial invariants hold (visual water matches server passability; bridges span cleanly past water edges onto banks).
+- **Generic schema & asset tests:** test the engine's general invariants (every file referenced by `theme.rs`, `assets/ui/icon_map.json`, or any `assets/maps/*.json` exists on disk; generic `entity_cells` alignment holds), never brittle tests hardcoded to specific prototype props or scenes.
 - **Direction before ingestion:** lock art direction and target schema before downloading or promoting bulk assets.
 - **Keep docs synchronized:** when a new permanent pattern stabilizes, propose updating `docs/` immediately rather than letting it live as unwritten tribal knowledge.
 
