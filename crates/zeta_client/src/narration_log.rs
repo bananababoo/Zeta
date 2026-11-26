@@ -16,7 +16,8 @@ use zeta_core::protocol::{DiceRollShown, EntityName, LogEntryKind, NarrationLogE
 use zeta_core::resolution::Volume;
 
 use crate::focus::{UiPanel, cursor_is_over_any};
-use crate::layout::{FloatingOrigin, square_center_at};
+use crate::layout::{FloatingOrigin, square_center_at, tile_point_at};
+use crate::map::VisualTilePos;
 use crate::planet_stream::PlanetFocusSync;
 use crate::settings::ClientSettings;
 use crate::theme::{SPEECH_BUBBLE_COLOR, TEXT_ON_PARCHMENT, UiTheme};
@@ -348,6 +349,20 @@ fn bubble_position(position: GridPos, tile_size: f32, origin: FloatingOrigin) ->
     .extend(BUBBLE_DEPTH)
 }
 
+/// Where a speech bubble above a speaker sits (using smooth [`VisualTilePos`] when present).
+fn bubble_position_visual(
+    position: GridPos,
+    visual: Option<&VisualTilePos>,
+    tile_size: f32,
+    origin: FloatingOrigin,
+) -> Vec3 {
+    let base = visual.map_or_else(
+        || square_center_at(position, tile_size, origin),
+        |v| tile_point_at(v.tile_x, v.tile_y, tile_size, origin),
+    );
+    (base + Vec2::new(0.0, tile_size * BUBBLE_HEIGHT_SQUARES)).extend(BUBBLE_DEPTH)
+}
+
 /// Keeps bubbles above moving speakers and removes them when their time runs out.
 #[allow(
     clippy::needless_pass_by_value,
@@ -358,7 +373,7 @@ fn update_speech_bubbles(
     time: Res<Time>,
     settings: Res<ClientSettings>,
     origin: Res<FloatingOrigin>,
-    speakers: Query<(&EntityId, &GridPos)>,
+    speakers: Query<(&EntityId, &GridPos, Option<&VisualTilePos>)>,
     mut bubbles: Query<(Entity, &mut SpeechBubble, &mut Transform)>,
 ) {
     for (entity, mut bubble, mut transform) in &mut bubbles {
@@ -367,8 +382,10 @@ fn update_speech_bubbles(
             commands.entity(entity).despawn();
             continue;
         }
-        if let Some((_, position)) = speakers.iter().find(|(id, _)| **id == bubble.speaker) {
-            let wanted = bubble_position(*position, settings.tile_size, *origin);
+        if let Some((_, position, visual)) =
+            speakers.iter().find(|(id, _, _)| **id == bubble.speaker)
+        {
+            let wanted = bubble_position_visual(*position, visual, settings.tile_size, *origin);
             if transform.translation != wanted {
                 transform.translation = wanted;
             }

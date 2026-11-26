@@ -11,6 +11,8 @@ use std::collections::{HashMap, HashSet};
 use bevy::prelude::*;
 use bevy::sprite::Anchor;
 use bevy::sprite_render::{Material2dPlugin, MeshMaterial2d};
+// `RequestRedraw`: bevy_window-0.20.1/src/event.rs:61.
+use bevy::window::RequestRedraw;
 use zeta_core::entity::EntityId;
 use zeta_core::grid::{GridPos, MapBounds};
 use zeta_core::protocol::{Collider, Creature, EntityName, MapArea, PlayerCharacter, Tags};
@@ -49,6 +51,14 @@ const GAME_STREAM_RADIUS_CHUNKS: i32 = 2;
 const MAX_FALLBACK_GRID_DIMENSION: u32 = 64;
 /// Margin in 5-foot squares around [`FloatingOrigin`] within which authored regions stay mounted.
 const REGION_VIEW_MARGIN_TILES: f64 = 96.0;
+/// Exponential damping rate (per second) for entity visual gliding between discrete 5-ft squares.
+const ENTITY_GLIDE_RATE: f64 = 16.0;
+/// Exponential damping rate (per second) for smooth camera follow behind the local character.
+const CAMERA_FOLLOW_RATE: f64 = 6.5;
+/// Distance in 5-ft squares above which camera or entity visuals snap instead of gliding (e.g. spawn/teleport).
+const SNAP_DISTANCE_TILES: f64 = 16.0;
+/// Remaining distance in 5-ft squares below which damping settles cleanly (`0.002 * 32px ≈ 0.06px`).
+const SETTLE_EPSILON_TILES: f64 = 0.002;
 
 /// What deciding an entity's visual reads.
 type VisualQueryData = (
@@ -89,6 +99,26 @@ pub struct MapLabel;
 #[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
 pub struct MapLabelEntity(pub Entity);
 
+/// Smoothly interpolated visual center of a drawn entity in 5-foot tile coordinates (`x + 0.5, y + 0.5`).
+#[derive(Component, Clone, Copy, Debug, PartialEq)]
+pub struct VisualTilePos {
+    /// Continuous horizontal tile coordinate.
+    pub tile_x: f64,
+    /// Continuous vertical tile coordinate.
+    pub tile_y: f64,
+}
+
+impl VisualTilePos {
+    /// Visual center of discrete square `position`.
+    #[must_use]
+    pub fn from_grid(position: GridPos) -> Self {
+        Self {
+            tile_x: f64::from(position.x) + 0.5,
+            tile_y: f64::from(position.y) + 0.5,
+        }
+    }
+}
+
 /// Draws the map area, authored planetary regions, entities with a grid position, and their labels.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct MapPlugin;
@@ -103,10 +133,16 @@ impl Plugin for MapPlugin {
         app.init_resource::<ClientSettings>()
             .init_resource::<LocalPlayer>()
             .init_resource::<FloatingOrigin>()
+            .add_message::<RequestRedraw>()
             .add_systems(Startup, spawn_camera)
             .add_systems(
                 Update,
-                sync_floating_origin
+                (
+                    attach_entity_visuals,
+                    glide_entity_visual_positions,
+                    sync_floating_origin,
+                )
+                    .chain()
                     .in_set(PlanetFocusSync)
                     .after(LocalPlayerUpdate),
             )
@@ -114,7 +150,6 @@ impl Plugin for MapPlugin {
                 Update,
                 (
                     draw_map_area,
-                    attach_entity_visuals,
                     move_entity_visuals,
                     style_entities,
                     update_labels,
@@ -197,9 +232,73 @@ fn load_authored_regions_startup(
     }
 }
 
-/// Keeps [`FloatingOrigin`] and [`PlanetCameraFocus`] locked onto the local player character
-/// (or the first authored region while awaiting character assignment on a planetary map), with
-/// [`MapCamera`] pinned at `(0.0, 0.0)` so coordinates stay sub-pixel accurate anywhere on Sera.
+/// Frame-rate-independent exponential damping in 5-ft tile coordinates.
+///
+/// Snaps immediately when `dt <= 0.0` (headless tests / initial frame) or when distance exceeds
+/// [`SNAP_DISTANCE_TILES`] (initial spawn or teleport). Returns `(next_pos, still_moving)`.
+#[must_use]
+pub fn damp_tile_towards(
+    current: (f64, f64),
+    target: (f64, f64),
+    rate: f64,
+    dt: f64,
+) -> ((f64, f64), bool) {
+    let dx = target.0 - current.0;
+    let dy = target.1 - current.1;
+    let dist_sq = dx * dx + dy * dy;
+    if dist_sq <= SETTLE_EPSILON_TILES * SETTLE_EPSILON_TILES {
+        return (target, false);
+    }
+    if dt <= 0.0 || dist_sq > SNAP_DISTANCE_TILES * SNAP_DISTANCE_TILES {
+        return (target, false);
+    }
+    let alpha = 1.0 - (-rate * dt).exp();
+    let next = (current.0 + dx * alpha, current.1 + dy * alpha);
+    let remaining_x = target.0 - next.0;
+    let remaining_y = target.1 - next.1;
+    if remaining_x * remaining_x + remaining_y * remaining_y
+        <= SETTLE_EPSILON_TILES * SETTLE_EPSILON_TILES
+    {
+        (target, false)
+    } else {
+        (next, true)
+    }
+}
+
+/// Smoothly glides each entity's [`VisualTilePos`] toward its authoritative discrete [`GridPos`].
+#[allow(
+    clippy::needless_pass_by_value,
+    reason = "Bevy system parameters are passed by value"
+)]
+fn glide_entity_visual_positions(
+    time: Option<Res<Time>>,
+    mut entities: Query<(&GridPos, &mut VisualTilePos), With<MapLabelEntity>>,
+    mut redraws: MessageWriter<RequestRedraw>,
+) {
+    // `Time::delta_secs`: bevy_time-0.20.1/src/time.rs:283.
+    let dt = time.map_or(0.0, |t| f64::from(t.delta_secs()));
+    let mut animating = false;
+    for (position, mut visual) in &mut entities {
+        let target = (f64::from(position.x) + 0.5, f64::from(position.y) + 0.5);
+        let current = (visual.tile_x, visual.tile_y);
+        if current == target {
+            continue;
+        }
+        let ((next_x, next_y), still_moving) =
+            damp_tile_towards(current, target, ENTITY_GLIDE_RATE, dt);
+        visual.tile_x = next_x;
+        visual.tile_y = next_y;
+        animating |= still_moving;
+    }
+    if animating {
+        redraws.write(RequestRedraw);
+    }
+}
+
+/// Smoothly follows the local player character's [`VisualTilePos`] with [`FloatingOrigin`] and
+/// [`PlanetCameraFocus`] (or snaps to the first authored region while awaiting character
+/// assignment on a planetary map), keeping [`MapCamera`] pinned at `(0.0, 0.0)` so coordinates
+/// stay sub-pixel accurate anywhere on Sera without 5-foot snap stutter.
 #[expect(
     clippy::too_many_arguments,
     reason = "a Bevy system lists every resource and query it reads as a parameter"
@@ -209,19 +308,26 @@ fn load_authored_regions_startup(
     reason = "Bevy system parameters are passed by value"
 )]
 fn sync_floating_origin(
+    time: Option<Res<Time>>,
     settings: Res<ClientSettings>,
     local_player: Res<LocalPlayer>,
     authored_regions: Option<Res<LoadedAuthoredRegions>>,
     areas: Query<&MapArea>,
-    characters: Query<(&EntityId, &GridPos)>,
+    characters: Query<(&EntityId, &GridPos, Option<&VisualTilePos>)>,
     mut origin: ResMut<FloatingOrigin>,
     mut planet_focus: Option<ResMut<PlanetCameraFocus>>,
     mut cameras: Query<&mut Transform, With<MapCamera>>,
+    mut redraws: MessageWriter<RequestRedraw>,
 ) {
     let target_tile = characters
         .iter()
-        .find(|(id, _)| local_player.is(**id))
-        .map(|(_, pos)| (f64::from(pos.x) + 0.5, f64::from(pos.y) + 0.5))
+        .find(|(id, _, _)| local_player.is(**id))
+        .map(|(_, pos, visual)| {
+            visual.map_or_else(
+                || (f64::from(pos.x) + 0.5, f64::from(pos.y) + 0.5),
+                |v| (v.tile_x, v.tile_y),
+            )
+        })
         .or_else(|| {
             let is_planetary = areas.iter().last().is_some_and(|area| {
                 area.0.width > MAX_FALLBACK_GRID_DIMENSION
@@ -236,9 +342,24 @@ fn sync_floating_origin(
                 .map(|first| first.region.bounds.center_tile())
         });
 
-    let Some((tile_x, tile_y)) = target_tile else {
+    let Some(target) = target_tile else {
         return;
     };
+
+    let dt = time.map_or(0.0, |t| f64::from(t.delta_secs()));
+    let ((tile_x, tile_y), still_following) = if *origin == FloatingOrigin::default() {
+        (target, false)
+    } else {
+        damp_tile_towards(
+            (origin.tile_x, origin.tile_y),
+            target,
+            CAMERA_FOLLOW_RATE,
+            dt,
+        )
+    };
+    if still_following {
+        redraws.write(RequestRedraw);
+    }
 
     let desired_origin = FloatingOrigin { tile_x, tile_y };
     if *origin != desired_origin {
@@ -655,11 +776,14 @@ fn attach_entity_visuals(
                 ChildOf(entity),
             ))
             .id();
+        let visual = VisualTilePos::from_grid(*position);
         commands.entity(entity).try_insert((
             MapLabelEntity(label),
+            visual,
             Sprite::from_color(OTHER_ENTITY_COLOR, Vec2::splat(tile_size * ENTITY_SCALE)),
             Transform::from_translation(
-                square_center_at(*position, tile_size, *origin).extend(ENTITY_DEPTH),
+                tile_point_at(visual.tile_x, visual.tile_y, tile_size, *origin)
+                    .extend(ENTITY_DEPTH),
             ),
         ));
     }
@@ -672,15 +796,15 @@ fn attach_entity_visuals(
 fn move_entity_visuals(
     settings: Res<ClientSettings>,
     origin: Res<FloatingOrigin>,
-    mut entities: Query<(Ref<GridPos>, &mut Transform), With<MapLabelEntity>>,
+    mut entities: Query<(Ref<VisualTilePos>, &mut Transform), With<MapLabelEntity>>,
 ) {
     let origin_changed = origin.is_changed();
     let tile_size = settings.tile_size;
-    for (position, mut transform) in &mut entities {
-        if !origin_changed && !position.is_changed() {
+    for (visual, mut transform) in &mut entities {
+        if !origin_changed && !visual.is_changed() {
             continue;
         }
-        let center = square_center_at(*position, tile_size, *origin);
+        let center = tile_point_at(visual.tile_x, visual.tile_y, tile_size, *origin);
         transform.translation.x = center.x;
         transform.translation.y = center.y;
     }
@@ -926,10 +1050,16 @@ mod tests {
         assert_eq!(player_pos, Vec2::ZERO);
         assert_eq!(neighbor_world, Vec2::new(crate::settings::TILE_SIZE, 0.0));
 
-        // Step the local player 1 tile east: floating origin shifts, player stays at (0, 0),
-        // and the stationary neighbor shifts onto (0, 0).
+        // Step the local player 1 tile east: with deterministic 16ms frames, the character glides
+        // and the camera trails smoothly until both settle onto `neighbor_pos`.
+        // `TimeUpdateStrategy`: bevy_time-0.20.1/src/lib.rs:113.
+        app.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
+            std::time::Duration::from_millis(16),
+        ));
         app.world_mut().entity_mut(player).insert(neighbor_pos);
-        app.update();
+        for _ in 0..80 {
+            app.update();
+        }
         assert_eq!(
             app.world()
                 .get::<Transform>(player)
@@ -951,6 +1081,9 @@ mod tests {
     #[test]
     fn grid_entities_are_drawn_at_their_square_and_follow_moves() {
         let mut app = test_app();
+        app.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
+            std::time::Duration::from_millis(16),
+        ));
         let barrel = app.world_mut().spawn(GridPos::new(2, 1)).id();
         app.update();
         let transform = app.world().get::<Transform>(barrel).expect("placed");
@@ -959,7 +1092,9 @@ mod tests {
         app.world_mut()
             .entity_mut(barrel)
             .insert(GridPos::new(0, 0));
-        app.update();
+        for _ in 0..40 {
+            app.update();
+        }
         let transform = app.world().get::<Transform>(barrel).expect("placed");
         assert_eq!(transform.translation.truncate(), Vec2::new(16.0, -16.0));
     }
@@ -1039,5 +1174,67 @@ mod tests {
         app.update();
         let mut labels = app.world_mut().query::<&MapLabel>();
         assert_eq!(labels.iter(app.world()).count(), 0);
+    }
+
+    #[test]
+    fn entity_visual_and_camera_lerp_smoothly_instead_of_snapping() {
+        let mut app = test_app();
+        // `TimeUpdateStrategy`: bevy_time-0.20.1/src/lib.rs:113.
+        app.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
+            std::time::Duration::from_millis(16),
+        ));
+        let player = app
+            .world_mut()
+            .spawn((EntityId(1), GridPos::new(100, 100), PlayerCharacter))
+            .id();
+        app.world_mut().resource_mut::<LocalPlayer>().character = Some(EntityId(1));
+        app.update();
+
+        // Initial spawn snaps camera directly onto player center.
+        let initial_origin = *app.world().resource::<FloatingOrigin>();
+        assert_eq!(initial_origin.tile_x, 100.5);
+        assert_eq!(initial_origin.tile_y, 100.5);
+
+        // Move 1 square east and step 16ms: character glides ahead while camera trails smoothly.
+        app.world_mut()
+            .entity_mut(player)
+            .insert(GridPos::new(101, 100));
+        app.update();
+
+        let visual = *app
+            .world()
+            .get::<VisualTilePos>(player)
+            .expect("visual pos attached");
+        let mid_origin = *app.world().resource::<FloatingOrigin>();
+        assert!(
+            visual.tile_x > 100.5 && visual.tile_x < 101.5,
+            "character should glide smoothly instead of snapping: {visual:?}"
+        );
+        assert!(
+            mid_origin.tile_x > 100.5 && mid_origin.tile_x < visual.tile_x,
+            "camera should trail behind character instead of hard-locking: origin={mid_origin:?}, visual={visual:?}"
+        );
+        let sprite_x = app
+            .world()
+            .get::<Transform>(player)
+            .expect("transform")
+            .translation
+            .x;
+        assert!(
+            sprite_x > 0.0,
+            "character should visibly lead camera center while walking east: sprite_x={sprite_x}"
+        );
+
+        // Over ~1.3s of 16ms frames, both character and camera settle cleanly to (101.5, 100.5).
+        for _ in 0..80 {
+            app.update();
+        }
+        let settled_visual = *app
+            .world()
+            .get::<VisualTilePos>(player)
+            .expect("visual pos");
+        let settled_origin = *app.world().resource::<FloatingOrigin>();
+        assert_eq!(settled_visual.tile_x, 101.5);
+        assert_eq!(settled_origin.tile_x, 101.5);
     }
 }

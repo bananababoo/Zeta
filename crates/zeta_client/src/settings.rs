@@ -94,8 +94,9 @@ pub const MOVE_SOUTH_KEY: KeyCode = KeyCode::KeyS;
 pub const MOVE_EAST_KEY: KeyCode = KeyCode::KeyD;
 
 /// Placeholder: seconds a movement key must be held before continuous walk steps repeat.
+/// Matches `MOVE_HOLD_REPEAT_INTERVAL_SECONDS` so holding a direction glides smoothly from step 1.
 /// Replaced when client feel is tuned (`docs/architecture/technical_architecture.md` Section 5).
-pub const MOVE_HOLD_INITIAL_DELAY_SECONDS: f32 = 0.22;
+pub const MOVE_HOLD_INITIAL_DELAY_SECONDS: f32 = 0.14;
 
 /// Placeholder: seconds between repeated movement steps while a movement key stays held.
 /// Replaced when client feel is tuned (`docs/architecture/technical_architecture.md` Section 5).
