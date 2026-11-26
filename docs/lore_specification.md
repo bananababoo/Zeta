@@ -4,7 +4,7 @@
 |---|---|
 | **Status** | `Draft` |
 | **Scope** | The Lore Format for every Lore Entry in `lore/`: folders, identifiers, links, front matter, history, validation, and production use |
-| **Last Updated** | `2026-11-25` |
+| **Last Updated** | `2026-11-26` |
 | **Decision Authority** | Game Director (Project Owner) |
 
 ---
@@ -62,7 +62,7 @@ Each folder has a fixed list of allowed `subtype` values, kept in the table belo
 | `natural_law` | `field`, `aspect`, `principle` |
 | `character` | `god` |
 | `event` | `cosmic` |
-| `geography` | `universe`, `galaxy`, `planet`, `continent` |
+| `geography` | `universe`, `galaxy`, `planet`, `continent`, `plane` |
 
 Until a Lore Entry type has fixed body sections, the body is a 1-sentence summary followed by free prose.
 
