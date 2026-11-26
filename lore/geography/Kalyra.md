@@ -7,6 +7,6 @@ ended: n/a
 ---
 Kalyra is an outer plane of pure [[Luminifory]], formed from unselfish kindness and compassion without demand for reward or order.
 
-Its 4 sunlit tiers follow a slow, winding river through flower-thick meadows, warm hills, cypress groves, and calm coastal bays. The peace of Kalyra is so deep that visitors who linger too long gradually lose the desire to leave, letting old grievances fall away.
+It is an endless warm archipelago of white-sand atolls, flowering headlands, and calm turquoise channels carried by gentle trade breezes. The peace of Kalyra runs so deep that visitors who linger too long gradually lose old grievances and forget the urge to depart.
 
-Gentle planar beings coalesce along Kalyra's riverbanks out of concentrated Luminifory, comforting travelers for a season before fading back into the [[Twill]].
+Gentle planar beings coalesce along Kalyra's shores out of concentrated Luminifory, comforting travelers for a season before fading back into the [[Twill]].
