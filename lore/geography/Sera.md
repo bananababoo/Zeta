@@ -5,7 +5,7 @@ parent: "[[Yonder]]"
 began: "[[Formation of Sera]]"
 ended: n/a
 ---
-Sera is a tectonic world in the galaxy [[Yonder]], formed as a tight knot in the [[Twill]].
+Sera is a tectonic world in the galaxy [[Yonder]], formed as a tight knot in the [[Twill]] in a wide orbit around the binary stars [[Aurel]] and [[Embra]], accompanied by 1 moon, [[Vela]].
 
 Roughly 35% of Sera's surface is land, split across 8 major continents and hundreds of volcanic and coastal islands separated by deep ocean trenches and wide continental shelves. Its largest landmasses are [[Matara]], [[Hhorun]], [[Oshka]], [[Byblon]], [[Amunor]], [[Kald]], [[Auster]], and [[Luwara]].
 
