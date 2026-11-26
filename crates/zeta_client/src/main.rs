@@ -32,13 +32,17 @@ fn main() -> AppExit {
         }
     };
     App::new()
-        .add_plugins(DefaultPlugins.set(WindowPlugin {
-            primary_window: Some(Window {
-                title: "Zeta".to_owned(),
-                ..default()
-            }),
-            ..default()
-        }))
+        .add_plugins(
+            DefaultPlugins
+                .set(zeta_client::terrain::client_asset_plugin())
+                .set(WindowPlugin {
+                    primary_window: Some(Window {
+                        title: "Zeta".to_owned(),
+                        ..default()
+                    }),
+                    ..default()
+                }),
+        )
         .add_plugins(ClientNetPlugin { server_address })
         .add_plugins(ClientPlugins)
         .run()

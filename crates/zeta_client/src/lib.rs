@@ -15,6 +15,7 @@ pub mod net;
 pub mod player;
 pub mod prompt;
 pub mod settings;
+pub mod terrain;
 pub mod turn_banner;
 
 use bevy::app::{PluginGroup, PluginGroupBuilder};

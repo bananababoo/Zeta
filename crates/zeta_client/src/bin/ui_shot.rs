@@ -37,15 +37,15 @@ use zeta_core::entity::EntityId;
 use zeta_core::grid::{GridPos, MapBounds};
 use zeta_core::protocol::{
     Collider, Delivery, EntityName, Inventory, Item, MapArea, PlayerAssigned, PlayerCharacter,
-    ProtocolRegistrar, register_protocol,
+    ProtocolRegistrar, Tags, register_protocol,
 };
 
 /// Width of the rendered image in pixels, at a scale factor of 1.
 const IMAGE_WIDTH: u32 = 1280;
 /// Height of the rendered image in pixels.
 const IMAGE_HEIGHT: u32 = 720;
-/// Frames before the first cursor step, so the fake world replicates and lays out.
-const SETTLE_FRAMES: u32 = 10;
+/// Frames before the first cursor step, so the fake world replicates, assets load, and UI lays out.
+const SETTLE_FRAMES: u32 = 25;
 /// Frames after each cursor step, so the UI reacts and lays out again.
 const STEP_FRAMES: u32 = 6;
 /// Frames after which a scene that never finishes fails.
@@ -83,6 +83,8 @@ enum Scene {
     InventoryHover,
     /// The longsword slot clicked, so its action menu shows.
     InventoryMenu,
+    /// The river, wooden bridge, oil barrel, goblin, and players rendered with GPU terrain.
+    RiverScene,
 }
 
 /// What the fake cursor points at.
@@ -105,10 +107,11 @@ enum Step {
 
 impl Scene {
     /// Every scene, in the order `tools/ui_shots.ps1` lists them.
-    const ALL: [Self; 3] = [
+    const ALL: [Self; 4] = [
         Self::InventoryOpen,
         Self::InventoryHover,
         Self::InventoryMenu,
+        Self::RiverScene,
     ];
 
     /// The name given on the command line, which is also the PNG file name.
@@ -117,6 +120,7 @@ impl Scene {
             Self::InventoryOpen => "inventory_open",
             Self::InventoryHover => "inventory_hover",
             Self::InventoryMenu => "inventory_menu",
+            Self::RiverScene => "river_scene",
         }
     }
 
@@ -131,6 +135,7 @@ impl Scene {
             Self::InventoryOpen => vec![open],
             Self::InventoryHover => vec![open, Step::Hover(Target::Slot("painters_supplies"))],
             Self::InventoryMenu => vec![open, Step::Click(Target::Slot("longsword"))],
+            Self::RiverScene => Vec::new(),
         }
     }
 }
@@ -220,16 +225,60 @@ fn carried_inventory() -> Inventory {
     inventory
 }
 
-/// Spawns what the server would replicate: the map area, the local character, and a second
-/// Player Character beside it, so `Give` has a recipient. Then assigns the local character.
+/// Spawns what the server would replicate: the map area, river, wooden bridge, oil barrel,
+/// goblin, the local character, and a second Player Character beside it so `Give` has a
+/// recipient. Then assigns the local character.
 fn spawn_fake_world(mut commands: Commands, mut assignments: MessageWriter<PlayerAssigned>) {
     commands.spawn(MapArea(MapBounds {
-        width: 12,
-        height: 8,
+        width: 14,
+        height: 9,
     }));
+    let mut next_id = 10_u64;
+    for row in 0..9 {
+        if row == 4 {
+            continue;
+        }
+        commands.spawn((
+            EntityId(next_id),
+            GridPos::new(7, row),
+            EntityName("River".to_owned()),
+            Tags(
+                ["water".to_owned(), "deep".to_owned()]
+                    .into_iter()
+                    .collect(),
+            ),
+            Collider { passable: false },
+        ));
+        next_id += 1;
+    }
+    commands.spawn((
+        EntityId(next_id),
+        GridPos::new(7, 4),
+        EntityName("Wooden Bridge".to_owned()),
+        Tags(["wooden".to_owned()].into_iter().collect()),
+        Collider { passable: true },
+    ));
+    commands.spawn((
+        EntityId(next_id + 1),
+        GridPos::new(6, 3),
+        EntityName("Oil Barrel".to_owned()),
+        Tags(
+            ["wooden".to_owned(), "flammable".to_owned()]
+                .into_iter()
+                .collect(),
+        ),
+        Collider { passable: false },
+    ));
+    commands.spawn((
+        EntityId(next_id + 2),
+        GridPos::new(10, 4),
+        EntityName("Goblin".to_owned()),
+        Collider { passable: false },
+        Inventory::default(),
+    ));
     commands.spawn((
         LOCAL_CHARACTER,
-        GridPos::new(5, 4),
+        GridPos::new(3, 4),
         EntityName("Aria".to_owned()),
         PlayerCharacter,
         Collider { passable: false },
@@ -237,7 +286,7 @@ fn spawn_fake_world(mut commands: Commands, mut assignments: MessageWriter<Playe
     ));
     commands.spawn((
         EntityId(2),
-        GridPos::new(6, 4),
+        GridPos::new(4, 4),
         EntityName("Bram".to_owned()),
         PlayerCharacter,
         Collider { passable: false },
@@ -426,6 +475,7 @@ fn main() -> AppExit {
     app.add_plugins(
         DefaultPlugins
             .build()
+            .set(zeta_client::terrain::client_asset_plugin())
             .set(WindowPlugin {
                 primary_window: Some(Window {
                     // `WindowResolution::new`: bevy_window-0.20.1/src/window.rs:923.
