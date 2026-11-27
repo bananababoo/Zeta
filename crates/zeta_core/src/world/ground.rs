@@ -25,6 +25,16 @@ const SWAMP_PATCH_SEED: u64 = 0x7A6B_5C4D_3E2F_1009;
 const DIRT_PATCH_TILES: f64 = 20.0;
 /// Typical diameter of a swamp pool, in tiles.
 const SWAMP_PATCH_TILES: f64 = 48.0;
+/// Seed of the beach width noise.
+const BEACH_PATCH_SEED: u64 = 0x2B3C_4D5E_6F70_8192;
+/// Typical length of a stretch of wider beach, in tiles.
+const BEACH_PATCH_TILES: f64 = 12.0;
+/// Seeds of the coherent threshold offsets ([`boundary_noise`]).
+const TEMPERATURE_OFFSET_SEED: u64 = 0x3C4D_5E6F_7081_92A3;
+const MOISTURE_OFFSET_SEED: u64 = 0x4D5E_6F70_8192_A3B4;
+const FOLIAGE_OFFSET_SEED: u64 = 0x5E6F_7081_92A3_B4C5;
+/// Octaves of [`boundary_noise`]: feature size in tiles and weight (weights sum to 1).
+const BOUNDARY_NOISE_OCTAVES: [(f64, f32); 3] = [(400.0, 0.5), (120.0, 0.3), (36.0, 0.2)];
 
 /// Tiles per radian of arc at a face center (`FACE_TILES` squares span `pi / 2`).
 const TILES_PER_RADIAN: f64 = FACE_TILES as f64 / std::f64::consts::FRAC_PI_2;
@@ -152,8 +162,8 @@ impl GroundCover {
     }
 }
 
-/// Stable 64-bit hash of a tile, shared by every deterministic per-tile scatter (ground cover
-/// dithering, splat edge noise, clutter placement).
+/// Stable 64-bit hash of a tile, shared by every deterministic per-tile scatter (splat edge
+/// noise, clutter placement).
 ///
 /// Defined as `splitmix64(splitmix64(splitmix64(SEED ^ face_index) ^ x) ^ y)` over the tile's
 /// raw coordinates. Callers must pass a canonical tile (`x`, `y` below `FACE_TILES`); an
@@ -183,7 +193,7 @@ pub fn hash_unit(hash: u64, salt: u64) -> f32 {
 /// Everything [`ground_cover`] needs to classify 1 tile.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct GroundCoverInput {
-    /// The tile being classified (source of hash and patch noise).
+    /// The tile being classified (source of the patch and boundary noise).
     pub tile: PlanetTile,
     /// Deterministic terrain sample of the tile (`sample_tile`).
     pub sample: TileSample,
@@ -204,7 +214,7 @@ pub struct GroundCoverInput {
 /// 2. Rock: an elevation step of 10 ft or more to an edge neighbor (snow never sticks to
 ///    cliffs).
 /// 3. Snow: temperature at or below -12 °C, or at or below -6 °C on land 8,000 ft and up
-///    (snowcaps); temperature is jittered ±1.5 °C per tile.
+///    (snowcaps); temperature is offset by up to ±1.5 °C of coherent noise.
 /// 4. Rock: alpine heights (10,000 ft and up) with sparse foliage, below the snowline.
 /// 5. Beach: a band 3-5 tiles wide from the waterline, at most 25 ft above sea level.
 /// 6. Desert sand: moisture below 0.12.
@@ -215,10 +225,11 @@ pub struct GroundCoverInput {
 /// 10. Dirt: low-frequency patches, more frequent where drier.
 /// 11. Dry grass below moisture 0.3, lush grass from moisture 0.6, grass otherwise.
 ///
-/// Per-tile hash jitter on thresholds dithers boundaries so bands never form straight lines.
+/// Temperature, moisture, and foliage get coherent sphere-space noise offsets (features from
+/// 36 to 400 tiles), so cover borders break into natural clumps whose share shifts gradually
+/// across a transition, never per-tile speckle or straight lines.
 /// The biome override id is not interpreted here.
 pub fn ground_cover(input: &GroundCoverInput) -> GroundCover {
-    let hash = tile_hash(input.tile);
     let sample = input.sample;
     let climate = input.climate;
 
@@ -236,8 +247,10 @@ pub fn ground_cover(input: &GroundCoverInput) -> GroundCover {
         return GroundCover::Rock;
     }
 
-    let jitter = |salt: u64| hash_unit(hash, salt) - 0.5;
-    let temperature = climate.temperature + jitter(1) * 3.0;
+    // Coherent offsets in [-0.5, 0.5]: borders between covers break into natural clumps
+    // instead of per-tile salt-and-pepper speckle.
+    let offset = |seed: u64| boundary_noise(input.tile, seed);
+    let temperature = climate.temperature + offset(TEMPERATURE_OFFSET_SEED) * 3.0;
     let snow_max_temperature = if sample.elevation_ft >= ALPINE_SNOW_MIN_ELEVATION_FT {
         ALPINE_SNOW_MAX_TEMPERATURE_C
     } else {
@@ -253,14 +266,18 @@ pub fn ground_cover(input: &GroundCoverInput) -> GroundCover {
         return GroundCover::Rock;
     }
 
-    let beach_extra = if hash_unit(hash, 2) < 0.5 { 0 } else { 2 };
+    let beach_extra = if patch_noise(input.tile, BEACH_PATCH_TILES, BEACH_PATCH_SEED) < 0.0 {
+        0
+    } else {
+        2
+    };
     if input.shore_distance_tiles <= BEACH_SHORE_TILES + beach_extra
         && sample.elevation_ft <= BEACH_MAX_ELEVATION_FT
     {
         return GroundCover::Beach;
     }
 
-    let moisture = climate.moisture + jitter(3) * 0.04;
+    let moisture = climate.moisture + offset(MOISTURE_OFFSET_SEED) * 0.04;
     if moisture < DESERT_MAX_MOISTURE {
         return GroundCover::DesertSand;
     }
@@ -272,14 +289,12 @@ pub fn ground_cover(input: &GroundCoverInput) -> GroundCover {
     {
         // Wetter ground lowers the bar, so swamps grow from pools into wide marshes.
         let swamp_threshold = 0.3 - (moisture - SWAMP_MIN_MOISTURE) * 1.2;
-        if patch_noise(input.tile, SWAMP_PATCH_TILES, SWAMP_PATCH_SEED) + jitter(6) * 0.1
-            > swamp_threshold
-        {
+        if patch_noise(input.tile, SWAMP_PATCH_TILES, SWAMP_PATCH_SEED) > swamp_threshold {
             return GroundCover::Swamp;
         }
     }
 
-    if climate.foliage + jitter(4) * 0.08 >= FOREST_MIN_FOLIAGE {
+    if climate.foliage + offset(FOLIAGE_OFFSET_SEED) * 0.08 >= FOREST_MIN_FOLIAGE {
         return GroundCover::ForestFloor;
     }
 
@@ -289,8 +304,7 @@ pub fn ground_cover(input: &GroundCoverInput) -> GroundCover {
 
     // Patches: smooth noise in [-1, 1]; drier ground exposes more dirt.
     let dirt_threshold = 0.35 + moisture.clamp(0.0, 1.0) * 0.3;
-    if patch_noise(input.tile, DIRT_PATCH_TILES, DIRT_PATCH_SEED) + jitter(5) * 0.1 > dirt_threshold
-    {
+    if patch_noise(input.tile, DIRT_PATCH_TILES, DIRT_PATCH_SEED) > dirt_threshold {
         return GroundCover::Dirt;
     }
 
@@ -307,6 +321,21 @@ pub fn ground_cover(input: &GroundCoverInput) -> GroundCover {
 /// `feature_tiles` tiles across; continuous across face seams because it is evaluated in 3D.
 fn patch_noise(tile: PlanetTile, feature_tiles: f64, seed: u64) -> f32 {
     let [x, y, z] = tile_to_unit_vec(tile);
+    patch_noise_at([x, y, z], feature_tiles, seed)
+}
+
+/// Coherent threshold offset in `[-0.5, 0.5]` at `tile`: [`BOUNDARY_NOISE_OCTAVES`] of
+/// sphere-space value noise, so cover borders form clumps from tens to hundreds of tiles.
+fn boundary_noise(tile: PlanetTile, seed: u64) -> f32 {
+    let direction = tile_to_unit_vec(tile);
+    let mut total = 0.0;
+    for (octave, (feature_tiles, weight)) in (0_u64..).zip(BOUNDARY_NOISE_OCTAVES) {
+        total += patch_noise_at(direction, feature_tiles, seed ^ (octave << 48)) * weight;
+    }
+    (total * 0.5).clamp(-0.5, 0.5)
+}
+
+fn patch_noise_at([x, y, z]: [f64; 3], feature_tiles: f64, seed: u64) -> f32 {
     let frequency = TILES_PER_RADIAN / feature_tiles;
     let coarse = value_noise_3d(x * frequency, y * frequency, z * frequency, seed);
     let fine_frequency = frequency * 2.7;
@@ -644,6 +673,47 @@ mod tests {
         assert!(
             swamp > 200,
             "only {swamp}/2000 saturated lowland tiles are swamp"
+        );
+    }
+
+    #[test]
+    fn cover_borders_form_clumps_not_speckle() {
+        // Right on the desert threshold, both covers appear, but neighbors almost always agree.
+        let clim = climate(20.0, DESERT_MAX_MOISTURE, 0.1);
+        let base = PlanetTile {
+            face: CubeFace::PosY,
+            x: 700_000,
+            y: 1_100_000,
+        };
+        let (mut agree, mut desert) = (0, 0);
+        let total = 4_000;
+        for index in 0..total {
+            let tile = PlanetTile {
+                face: base.face,
+                x: base.x + index * 37,
+                y: base.y + (index % 40) * 53,
+            };
+            let next = PlanetTile {
+                x: tile.x + 1,
+                ..tile
+            };
+            let cover = classify(tile, land(200), clim, 0, 16);
+            if cover == GroundCover::DesertSand {
+                desert += 1;
+            }
+            if (cover == GroundCover::DesertSand)
+                == (classify(next, land(200), clim, 0, 16) == GroundCover::DesertSand)
+            {
+                agree += 1;
+            }
+        }
+        assert!(
+            desert > total / 10 && desert < total * 9 / 10,
+            "desert {desert}/{total} on the threshold"
+        );
+        assert!(
+            agree * 100 / total >= 97,
+            "only {agree}/{total} neighbors agree"
         );
     }
 
