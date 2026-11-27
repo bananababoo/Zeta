@@ -6,6 +6,7 @@
 pub mod dice;
 pub mod focus;
 pub mod frame_pacing;
+pub mod ground_clutter;
 pub mod inspect;
 pub mod inventory;
 pub mod layout;
