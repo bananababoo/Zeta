@@ -3,6 +3,7 @@
 //! Rules: `docs/architecture/technical_architecture.md` Section 5. Each plugin reads only the
 //! replicated components and messages it owns; [`ClientPlugins`] adds them all.
 
+pub mod chunk_splat;
 pub mod dice;
 pub mod focus;
 pub mod frame_pacing;
@@ -21,6 +22,7 @@ pub mod player;
 pub mod prompt;
 pub mod settings;
 pub mod terrain;
+pub mod terrain_palette;
 pub mod theme;
 pub mod turn_banner;
 
