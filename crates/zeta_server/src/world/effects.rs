@@ -5,15 +5,21 @@
 //! `docs/architecture/technical_architecture.md` Section 2. Every entity a
 //! effect names is a Snapshot local identifier, mapped back to its permanent identifier here.
 
-use bevy_ecs::prelude::{Component, World};
-use zeta_core::catalog::CatalogId;
+use bevy_ecs::prelude::{Component, Entity, World};
+use zeta_core::catalog::{Ability, CatalogId};
 use zeta_core::entity::EntityId;
 use zeta_core::event_log::ItemChange;
 use zeta_core::grid::{GridPos, MapBounds};
+use zeta_core::protocol::properties::{
+    AbilityScores, ActiveEffects, ArmorClass, CharacterTraits, ClassId, ClassLevels, Concentration,
+    ConditionId, ConditionImmunities, Conditions, DamageAffinities, DeathSaves, Health,
+    ResourcePools, RulesetId, SubclassId,
+};
 use zeta_core::protocol::{
     Collider, EntityName, Item, LogEntryKind, NarrationLogEntry, PlayerCharacter, Tags, Visual,
 };
 use zeta_core::resolution::{LocalId, Settle, Volume, WorldEffect};
+use zeta_core::ruleset::{Ruleset, RulesetDomain};
 use zeta_core::snapshot::Snapshot;
 
 use super::inventory;
@@ -82,6 +88,10 @@ pub(crate) fn apply_effects(
     applied
 }
 
+#[allow(
+    clippy::too_many_lines,
+    reason = "single top-level dispatch over every WorldEffect variant"
+)]
 fn apply_effect(
     world: &mut World,
     snapshot: &Snapshot,
@@ -186,6 +196,269 @@ fn apply_effect(
                 turn_bubble::start_or_extend(world, &participants);
             } else if ids.is_empty() || !participants.is_empty() {
                 turn_bubble::end_bubbles(world, &participants);
+            }
+        }
+        WorldEffect::Damage { .. }
+        | WorldEffect::Heal { .. }
+        | WorldEffect::TempHp { .. }
+        | WorldEffect::Condition { .. }
+        | WorldEffect::ApplyEffect { .. }
+        | WorldEffect::RemoveEffect { .. }
+        | WorldEffect::SpendResource { .. }
+        | WorldEffect::RestoreResource { .. }
+        | WorldEffect::AdvanceLevel { .. } => {
+            apply_property_effect(world, snapshot, effect);
+        }
+    }
+}
+
+/// Executes 1 typed 2024 5e property `WorldEffect` with server-authoritative rules math.
+#[allow(
+    clippy::too_many_lines,
+    reason = "1 match dispatching the 9 typed property verbs in a single place"
+)]
+fn apply_property_effect(world: &mut World, snapshot: &Snapshot, effect: &WorldEffect) {
+    match effect {
+        WorldEffect::Damage {
+            id,
+            amount,
+            damage_type,
+        } => {
+            let Some(entity) = engine_entity(world, snapshot, *id) else {
+                return;
+            };
+            let threshold = world
+                .get::<ArmorClass>(entity)
+                .map_or(0, |ac| ac.damage_threshold);
+            let affinities = world.get::<DamageAffinities>(entity).cloned();
+            let active = world.get::<ActiveEffects>(entity).cloned();
+            let Some(outcome) = world.get_mut::<Health>(entity).map(|mut hp| {
+                hp.apply_damage(
+                    *amount,
+                    *damage_type,
+                    threshold,
+                    affinities.as_ref(),
+                    active.as_ref(),
+                )
+            }) else {
+                return;
+            };
+            if outcome.reached_zero {
+                clear_concentration(world, entity);
+                if world.get::<DeathSaves>(entity).is_some() {
+                    let immunities = world.get::<ConditionImmunities>(entity).cloned();
+                    ensure_conditions(world, entity);
+                    if let Some(mut conds) = world.get_mut::<Conditions>(entity) {
+                        conds.apply_changes(
+                            &[ConditionId::Unconscious],
+                            &[],
+                            0,
+                            &[],
+                            &[],
+                            immunities.as_ref(),
+                        );
+                    }
+                }
+            }
+        }
+        WorldEffect::Heal { id, amount } => {
+            let Some(entity) = engine_entity(world, snapshot, *id) else {
+                return;
+            };
+            let revived = world.get_mut::<Health>(entity).is_some_and(|mut hp| {
+                let was_zero = hp.is_zero();
+                let healed = hp.apply_heal(*amount);
+                was_zero && healed > 0
+            });
+            if revived {
+                if let Some(mut saves) = world.get_mut::<DeathSaves>(entity) {
+                    saves.reset();
+                }
+                if let Some(mut conds) = world.get_mut::<Conditions>(entity) {
+                    conds.apply_changes(&[], &[ConditionId::Unconscious], 0, &[], &[], None);
+                }
+            }
+        }
+        WorldEffect::TempHp { id, amount } => {
+            with_component::<Health>(world, snapshot, *id, |hp| hp.apply_temp_hp(*amount));
+        }
+        WorldEffect::Condition {
+            id,
+            add,
+            remove,
+            exhaustion_delta,
+            add_hazards,
+            remove_hazards,
+        } => {
+            let Some(entity) = engine_entity(world, snapshot, *id) else {
+                return;
+            };
+            let immunities = world.get::<ConditionImmunities>(entity).cloned();
+            if !add.is_empty() || !add_hazards.is_empty() || *exhaustion_delta > 0 {
+                ensure_conditions(world, entity);
+            }
+            let broke = world
+                .get_mut::<Conditions>(entity)
+                .is_some_and(|mut conds| {
+                    conds.apply_changes(
+                        add,
+                        remove,
+                        *exhaustion_delta,
+                        add_hazards,
+                        remove_hazards,
+                        immunities.as_ref(),
+                    )
+                });
+            if broke {
+                clear_concentration(world, entity);
+            }
+        }
+        WorldEffect::ApplyEffect {
+            id,
+            effect,
+            concentrate,
+        } => {
+            let Some(entity) = engine_entity(world, snapshot, *id) else {
+                return;
+            };
+            if *concentrate {
+                clear_concentration(world, entity);
+                let next_conc = Concentration {
+                    active_effect_id: Some(effect.id.clone()),
+                    source_id: effect.source.clone(),
+                    remaining_rounds: effect.duration_rounds,
+                };
+                if let Ok(mut entity_mut) = world.get_entity_mut(entity) {
+                    entity_mut.insert(next_conc);
+                }
+            }
+            if world.get::<ActiveEffects>(entity).is_none()
+                && let Ok(mut entity_mut) = world.get_entity_mut(entity)
+            {
+                entity_mut.insert(ActiveEffects::default());
+            }
+            if let Some(mut active) = world.get_mut::<ActiveEffects>(entity) {
+                active.upsert(effect.clone());
+            }
+        }
+        WorldEffect::RemoveEffect { id, effect_id } => {
+            let Some(entity) = engine_entity(world, snapshot, *id) else {
+                return;
+            };
+            if let Some(mut active) = world.get_mut::<ActiveEffects>(entity) {
+                active.remove(effect_id);
+            }
+            if let Some(mut conc) = world.get_mut::<Concentration>(entity)
+                && conc.active_effect_id.as_deref() == Some(effect_id.as_str())
+            {
+                conc.clear();
+            }
+        }
+        WorldEffect::SpendResource { id, target, amount } => {
+            with_component::<ResourcePools>(world, snapshot, *id, |pools| {
+                let _ = pools.spend(target, *amount);
+            });
+        }
+        WorldEffect::RestoreResource { id, target, amount } => {
+            with_component::<ResourcePools>(world, snapshot, *id, |pools| {
+                let _ = pools.restore(target, *amount);
+            });
+        }
+        WorldEffect::AdvanceLevel {
+            id,
+            class,
+            subclass,
+        } => {
+            let Some(entity) = engine_entity(world, snapshot, *id) else {
+                return;
+            };
+            advance_entity_level(world, entity, *class, *subclass);
+        }
+        _ => {}
+    }
+}
+
+fn ensure_conditions(world: &mut World, entity: Entity) {
+    if world.get::<Conditions>(entity).is_none()
+        && let Ok(mut entity_mut) = world.get_entity_mut(entity)
+    {
+        entity_mut.insert(Conditions::default());
+    }
+}
+
+/// Clears active [`Concentration`] on `entity` and removes its concentrated [`ActiveEffect`].
+fn clear_concentration(world: &mut World, entity: Entity) {
+    let old_effect_id = world.get_mut::<Concentration>(entity).and_then(|mut conc| {
+        let old = conc.active_effect_id.clone();
+        conc.clear();
+        old
+    });
+    if let Some(effect_id) = old_effect_id
+        && let Some(mut active) = world.get_mut::<ActiveEffects>(entity)
+    {
+        active.remove(&effect_id);
+    }
+}
+
+/// Adds 1 level in `class`, updates hit points using 2024 fixed progression, and grants
+/// level-1 class features from [`Ruleset::srd`] on the first level in that class.
+fn advance_entity_level(
+    world: &mut World,
+    entity: Entity,
+    class: ClassId,
+    subclass: Option<SubclassId>,
+) {
+    let first_level_in_class = world
+        .get::<ClassLevels>(entity)
+        .is_none_or(|levels| !levels.entries.iter().any(|entry| entry.class == class));
+    if world.get::<ClassLevels>(entity).is_none()
+        && let Ok(mut entity_mut) = world.get_entity_mut(entity)
+    {
+        entity_mut.insert(ClassLevels::default());
+    }
+    let Some(new_total_level) = world.get_mut::<ClassLevels>(entity).and_then(|mut levels| {
+        levels
+            .add_level(class, subclass)
+            .then(|| levels.total_level())
+    }) else {
+        return;
+    };
+
+    let active = world.get::<ActiveEffects>(entity).cloned();
+    let con_mod = world.get::<AbilityScores>(entity).map_or(0, |scores| {
+        scores.modifier(Ability::Constitution, active.as_ref())
+    });
+    let die_gain = if new_total_level == 1 {
+        i16::from(class.hit_die_sides())
+    } else {
+        i16::from(class.hit_die_sides() / 2 + 1)
+    };
+    let hp_gain = u16::try_from((die_gain + i16::from(con_mod)).max(1)).unwrap_or(1);
+    if let Some(mut hp) = world.get_mut::<Health>(entity) {
+        hp.max = hp.max.saturating_add(hp_gain);
+        hp.current = hp.current.saturating_add(hp_gain).min(hp.max);
+    }
+
+    if first_level_in_class
+        && let Some(class_entry) = Ruleset::srd().get(RulesetDomain::Class, class.as_str())
+        && let Some(feature_ids) = class_entry
+            .data
+            .as_ref()
+            .and_then(|data| data.get("level_1_features"))
+            .and_then(serde_json::Value::as_array)
+    {
+        if world.get::<CharacterTraits>(entity).is_none()
+            && let Ok(mut entity_mut) = world.get_entity_mut(entity)
+        {
+            entity_mut.insert(CharacterTraits::default());
+        }
+        if let Some(mut traits) = world.get_mut::<CharacterTraits>(entity) {
+            for feature in feature_ids {
+                if let Some(raw_id) = feature.as_str()
+                    && let Ok(ruleset_id) = RulesetId::new(raw_id)
+                {
+                    traits.features.insert(ruleset_id);
+                }
             }
         }
     }

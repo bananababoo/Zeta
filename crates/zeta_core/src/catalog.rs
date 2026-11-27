@@ -232,7 +232,9 @@ pub struct Dice {
     pub sides: u8,
 }
 
-/// Weapon damage types in the catalog.
+/// The 13 damage types in System Reference Document 5.2.1.
+///
+/// The first 3 variants keep their original order for wire compatibility.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DamageType {
@@ -242,6 +244,64 @@ pub enum DamageType {
     Piercing,
     /// Slashing damage.
     Slashing,
+    /// Acid damage.
+    Acid,
+    /// Cold damage.
+    Cold,
+    /// Fire damage.
+    Fire,
+    /// Force damage.
+    Force,
+    /// Lightning damage.
+    Lightning,
+    /// Necrotic damage.
+    Necrotic,
+    /// Poison damage.
+    Poison,
+    /// Psychic damage.
+    Psychic,
+    /// Radiant damage.
+    Radiant,
+    /// Thunder damage.
+    Thunder,
+}
+
+impl DamageType {
+    /// Every System Reference Document 5.2.1 damage type in canonical order.
+    pub const ALL: [Self; 13] = [
+        Self::Bludgeoning,
+        Self::Piercing,
+        Self::Slashing,
+        Self::Acid,
+        Self::Cold,
+        Self::Fire,
+        Self::Force,
+        Self::Lightning,
+        Self::Necrotic,
+        Self::Poison,
+        Self::Psychic,
+        Self::Radiant,
+        Self::Thunder,
+    ];
+
+    /// Canonical lowercase `snake_case` ruleset identifier.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Bludgeoning => "bludgeoning",
+            Self::Piercing => "piercing",
+            Self::Slashing => "slashing",
+            Self::Acid => "acid",
+            Self::Cold => "cold",
+            Self::Fire => "fire",
+            Self::Force => "force",
+            Self::Lightning => "lightning",
+            Self::Necrotic => "necrotic",
+            Self::Poison => "poison",
+            Self::Psychic => "psychic",
+            Self::Radiant => "radiant",
+            Self::Thunder => "thunder",
+        }
+    }
 }
 
 /// SRD weapon properties.
@@ -375,6 +435,30 @@ pub enum Ability {
     Charisma,
 }
 
+impl Ability {
+    /// All 6 abilities in standard character-sheet order.
+    pub const ALL: [Self; 6] = [
+        Self::Strength,
+        Self::Dexterity,
+        Self::Constitution,
+        Self::Intelligence,
+        Self::Wisdom,
+        Self::Charisma,
+    ];
+
+    /// Canonical lowercase identifier.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Strength => "strength",
+            Self::Dexterity => "dexterity",
+            Self::Constitution => "constitution",
+            Self::Intelligence => "intelligence",
+            Self::Wisdom => "wisdom",
+            Self::Charisma => "charisma",
+        }
+    }
+}
+
 /// 1 check an item offers through `Utilize`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct UtilizeCheck {
@@ -433,6 +517,73 @@ pub enum Skill {
     Stealth,
     /// Survival (Wisdom).
     Survival,
+}
+
+impl Skill {
+    /// All 18 skills in alphabetical order.
+    pub const ALL: [Self; 18] = [
+        Self::Acrobatics,
+        Self::AnimalHandling,
+        Self::Arcana,
+        Self::Athletics,
+        Self::Deception,
+        Self::History,
+        Self::Insight,
+        Self::Intimidation,
+        Self::Investigation,
+        Self::Medicine,
+        Self::Nature,
+        Self::Perception,
+        Self::Performance,
+        Self::Persuasion,
+        Self::Religion,
+        Self::SleightOfHand,
+        Self::Stealth,
+        Self::Survival,
+    ];
+
+    /// Canonical lowercase `snake_case` identifier.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Acrobatics => "acrobatics",
+            Self::AnimalHandling => "animal_handling",
+            Self::Arcana => "arcana",
+            Self::Athletics => "athletics",
+            Self::Deception => "deception",
+            Self::History => "history",
+            Self::Insight => "insight",
+            Self::Intimidation => "intimidation",
+            Self::Investigation => "investigation",
+            Self::Medicine => "medicine",
+            Self::Nature => "nature",
+            Self::Perception => "perception",
+            Self::Performance => "performance",
+            Self::Persuasion => "persuasion",
+            Self::Religion => "religion",
+            Self::SleightOfHand => "sleight_of_hand",
+            Self::Stealth => "stealth",
+            Self::Survival => "survival",
+        }
+    }
+
+    /// Default governing ability for this skill in System Reference Document 5.2.1.
+    pub const fn ability(self) -> Ability {
+        match self {
+            Self::Athletics => Ability::Strength,
+            Self::Acrobatics | Self::SleightOfHand | Self::Stealth => Ability::Dexterity,
+            Self::Arcana | Self::History | Self::Investigation | Self::Nature | Self::Religion => {
+                Ability::Intelligence
+            }
+            Self::AnimalHandling
+            | Self::Insight
+            | Self::Medicine
+            | Self::Perception
+            | Self::Survival => Ability::Wisdom,
+            Self::Deception | Self::Intimidation | Self::Performance | Self::Persuasion => {
+                Ability::Charisma
+            }
+        }
+    }
 }
 
 /// 1 line of a pack or bundle.

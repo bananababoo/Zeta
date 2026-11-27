@@ -1,0 +1,1862 @@
+{
+  "schema_version": 1,
+  "source": "System Reference Document 5.2.1 (CC-BY-4.0) & Zeta Entity Properties Schema",
+  "domains": {
+    "component": [
+      {
+        "id": "health",
+        "name": "Health",
+        "summary": "Current, maximum, and non-stacking temporary hit points for creatures and breakable objects.",
+        "rules": "Mutated by Damage, Heal, and TempHp effects. Damage absorbs into temporary HP first, clamps current at 0, and is Bloodied at current <= max / 2. Temporary HP takes max(existing, amount).",
+        "data": {
+          "fields": [
+            "current: u16",
+            "max: u16",
+            "temporary: u16"
+          ]
+        }
+      },
+      {
+        "id": "armor_class",
+        "name": "ArmorClass",
+        "summary": "Base Armor Class and optional structural damage threshold.",
+        "rules": "Effective AC adds flat AcBonus modifiers from ActiveEffects. Attacks dealing less than damage_threshold in a single hit deal 0 damage to fortified structures.",
+        "data": {
+          "fields": [
+            "base: u8",
+            "damage_threshold: u16"
+          ]
+        }
+      },
+      {
+        "id": "size",
+        "name": "Size",
+        "summary": "Physical size category from Tiny to Gargantuan.",
+        "rules": "Closed enum Size (tiny, small, medium, large, huge, gargantuan). Governs grid footprint, grapple eligibility, carrying capacity, and object HP.",
+        "data": {
+          "fields": [
+            "tiny | small | medium | large | huge | gargantuan"
+          ]
+        }
+      },
+      {
+        "id": "damage_affinities",
+        "name": "DamageAffinities",
+        "summary": "Permanent damage resistances, immunities, and vulnerabilities across the 13 DamageTypes.",
+        "rules": "Immunity reduces damage to 0; resistance halves (rounded down); vulnerability doubles. Objects automatically carry Poison and Psychic immunity.",
+        "data": {
+          "fields": [
+            "resistances: DamageType[]",
+            "immunities: DamageType[]",
+            "vulnerabilities: DamageType[]"
+          ]
+        }
+      },
+      {
+        "id": "condition_immunities",
+        "name": "ConditionImmunities",
+        "summary": "Conditions that cannot affect this entity.",
+        "rules": "Condition effects targeting any ConditionId listed here are ignored by the server.",
+        "data": {
+          "fields": [
+            "immune: ConditionId[]"
+          ]
+        }
+      },
+      {
+        "id": "creature_type",
+        "name": "CreatureType",
+        "summary": "The 14 official SRD 5.2.1 creature classifications.",
+        "rules": "Closed enum CreatureType used by spells and features that target specific kinds of creatures (such as Humanoid, Undead, Fiend, or Construct).",
+        "data": {
+          "fields": [
+            "aberration | beast | celestial | construct | dragon | elemental | fey | fiend | giant | humanoid | monstrosity | ooze | plant | undead"
+          ]
+        }
+      },
+      {
+        "id": "ability_scores",
+        "name": "AbilityScores",
+        "summary": "The 6 core ability scores (1..=30) with derived modifiers floor((score - 10) / 2).",
+        "rules": "Base scores remain unchanged by temporary magic items or buffs; ActiveEffects AbilityScoreMin and AbilityScoreBonus compute effective scores dynamically.",
+        "data": {
+          "fields": [
+            "strength: u8",
+            "dexterity: u8",
+            "constitution: u8",
+            "intelligence: u8",
+            "wisdom: u8",
+            "charisma: u8"
+          ]
+        }
+      },
+      {
+        "id": "speed",
+        "name": "Speed",
+        "summary": "Movement speeds in feet per round across walk, burrow, climb, fly, swim, plus hover.",
+        "rules": "Effective speed subtracts 5 ft per Exhaustion level, adds ActiveEffects SpeedBonusFt, and drops to 0 when Grappled, Paralyzed, Petrified, Restrained, or Unconscious.",
+        "data": {
+          "fields": [
+            "walk: u16",
+            "burrow: u16",
+            "climb: u16",
+            "fly: u16",
+            "swim: u16",
+            "hover: bool"
+          ]
+        }
+      },
+      {
+        "id": "senses",
+        "name": "Senses",
+        "summary": "Special perception ranges in feet (0 means absent).",
+        "rules": "Tracks blindsight, darkvision, tremorsense, and truesight ranges.",
+        "data": {
+          "fields": [
+            "blindsight: u16",
+            "darkvision: u16",
+            "tremorsense: u16",
+            "truesight: u16"
+          ]
+        }
+      },
+      {
+        "id": "proficiencies",
+        "name": "Proficiencies",
+        "summary": "Saving throws, 18 skills (Half, Proficient, Expertise), armor, weapons, weapon masteries, tools, and languages.",
+        "rules": "Used to derive skill modifiers, saving throw modifiers, and passive scores (10 + skill modifier).",
+        "data": {
+          "fields": [
+            "saving_throws",
+            "skills",
+            "armor",
+            "weapons",
+            "weapon_ids",
+            "weapon_masteries",
+            "tools",
+            "languages"
+          ]
+        }
+      },
+      {
+        "id": "species",
+        "name": "Species",
+        "summary": "Fixed SRD 5.2.1 species identifier on a character or humanoid NPC.",
+        "rules": "Closed enum SpeciesId (9 official SRD 5.2.1 species). AI cannot invent new species.",
+        "data": {
+          "fields": [
+            "id: SpeciesId"
+          ]
+        }
+      },
+      {
+        "id": "background",
+        "name": "Background",
+        "summary": "Fixed SRD 5.2.1 starting background identifier.",
+        "rules": "Closed enum BackgroundId (acolyte, criminal, sage, soldier).",
+        "data": {
+          "fields": [
+            "id: BackgroundId"
+          ]
+        }
+      },
+      {
+        "id": "class_levels",
+        "name": "ClassLevels",
+        "summary": "Multiclass class levels (total 1..=20), optional subclasses, and per-die-size hit dice pools.",
+        "rules": "Closed ClassId (12) and SubclassId (12) enums. Mutated by AdvanceLevel; server enforces total_level <= 20 and subclass-to-class membership. Proficiency bonus is derived as 2 + (total_level - 1) / 4.",
+        "data": {
+          "fields": [
+            "entries: ClassLevelEntry[]",
+            "hit_dice: HitDiePool[]"
+          ]
+        }
+      },
+      {
+        "id": "character_traits",
+        "name": "CharacterTraits",
+        "summary": "Unlocked features, feats, attuned magic items (max 3), and Heroic Inspiration.",
+        "rules": "Features are validated RulesetIds, feats use closed FeatId enum, attuned_items caps at 3 inventory stacks, and heroic_inspiration grants 1 d20 Test reroll.",
+        "data": {
+          "fields": [
+            "features: RulesetId[]",
+            "feats: FeatId[]",
+            "attuned_items: StackId[]",
+            "heroic_inspiration: bool"
+          ]
+        }
+      },
+      {
+        "id": "spellbook",
+        "name": "Spellbook",
+        "summary": "Spells accessible across class spellcasting, species innate traits, feats, and magic items.",
+        "rules": "Each SpellEntry records spell_id, spell_level, source (class/species/feat/item), casting_ability or fixed_dc, prep_state, and optional charge_cost so multiclass and item DCs stay exact.",
+        "data": {
+          "fields": [
+            "entries: SpellEntry[]"
+          ]
+        }
+      },
+      {
+        "id": "coin_purse",
+        "name": "CoinPurse",
+        "summary": "Standard 5e coinage (cp, sp, ep, gp, pp) carried by any character, chest, or shopkeeper.",
+        "rules": "10 cp = 1 sp, 50 cp = 1 ep, 100 cp = 1 gp, 1000 cp = 1 pp.",
+        "data": {
+          "fields": [
+            "cp: u32",
+            "sp: u32",
+            "ep: u32",
+            "gp: u32",
+            "pp: u32"
+          ]
+        }
+      },
+      {
+        "id": "character_bio",
+        "name": "CharacterBio",
+        "summary": "Roleplay traits, ideals, bonds, and flaws read by the AI DM for characterization.",
+        "rules": "Zeta omits 9-box alignment because objective morality is governed by the Twill.",
+        "data": {
+          "fields": [
+            "traits: String",
+            "ideals: String",
+            "bonds: String",
+            "flaws: String"
+          ]
+        }
+      },
+      {
+        "id": "conditions",
+        "name": "Conditions",
+        "summary": "Active SRD 5.2.1 conditions (15), 2024 exhaustion level (0..=6), and ongoing hazards (4).",
+        "rules": "Mutated by Condition effect. Exhaustion applies -2 per level to D20 Tests, -5 ft per level to Speed, and kills at level 6. Gaining Incapacitated or equivalent breaks Concentration.",
+        "data": {
+          "fields": [
+            "active: ConditionId[]",
+            "exhaustion_level: u8",
+            "hazards: HazardId[]"
+          ]
+        }
+      },
+      {
+        "id": "death_saves",
+        "name": "DeathSaves",
+        "summary": "Death saving throw successes (0..=3), failures (0..=3), and stabilization state at 0 HP.",
+        "rules": "Automatically reset when Heal restores current HP above 0.",
+        "data": {
+          "fields": [
+            "successes: u8",
+            "failures: u8",
+            "stabilized: bool"
+          ]
+        }
+      },
+      {
+        "id": "concentration",
+        "name": "Concentration",
+        "summary": "Single active concentration slot on a spellcaster.",
+        "rules": "Applying a new concentrating effect replaces any prior concentration. Taking damage requires a Constitution saving throw (DC max(10, damage / 2), capped at 30). Breaks automatically on Incapacitated or 0 HP.",
+        "data": {
+          "fields": [
+            "active_effect_id: Option<String>",
+            "source_id: Option<RulesetId>",
+            "remaining_rounds: Option<u32>"
+          ]
+        }
+      },
+      {
+        "id": "active_effects",
+        "name": "ActiveEffects",
+        "summary": "Timed or untimed buffs, debuffs, stances, cover, and magic-item passive modifiers.",
+        "rules": "Mutated by ApplyEffect and RemoveEffect. Supports flat AC/speed/roll bonuses, dice formulas (Bless +1d4), Advantage/Disadvantage scopes, AbilityScoreMin overrides, and temporary damage affinities.",
+        "data": {
+          "fields": [
+            "effects: ActiveEffect[]"
+          ]
+        }
+      },
+      {
+        "id": "resource_pools",
+        "name": "ResourcePools",
+        "summary": "Finite spell slots (1..=9), Warlock pact slots, class pools, feature uses, and item charges.",
+        "rules": "Mutated by SpendResource and RestoreResource. Server rejects underflow and clamps restoration to pool maximum.",
+        "data": {
+          "fields": [
+            "spell_slots: SlotPool[9]",
+            "pact_slots",
+            "class_pools",
+            "feature_uses",
+            "item_charges"
+          ]
+        }
+      },
+      {
+        "id": "monster_profile",
+        "name": "MonsterProfile",
+        "summary": "Monster Challenge Rating (in exact eighths) and flat Initiative bonus.",
+        "rules": "Attached to monsters and non-classed NPCs; omitted on player characters.",
+        "data": {
+          "fields": [
+            "challenge_rating_eighths: u16",
+            "initiative_bonus: i8"
+          ]
+        }
+      }
+    ],
+    "class": [
+      {
+        "id": "barbarian",
+        "name": "Barbarian",
+        "summary": "Fierce primal warrior fueled by Rage (d12 hit die).",
+        "rules": "Primary: Strength. Saves: Strength, Constitution. Armor: Light, Medium, Shields. Weapons: Simple, Martial. Core features: Rage (Bonus Action, resistance to Bludgeoning/Piercing/Slashing, bonus melee damage, Advantage on Strength checks/saves), Unarmored Defense (10 + Dex + Con), Weapon Mastery, Reckless Attack, Danger Sense, Extra Attack, Fast Movement.",
+        "data": {
+          "hit_die": 12,
+          "primary_abilities": [
+            "strength"
+          ],
+          "saving_throws": [
+            "strength",
+            "constitution"
+          ],
+          "subclass_level": 3,
+          "level_1_features": [
+            "rage",
+            "unarmored_defense",
+            "weapon_mastery"
+          ]
+        }
+      },
+      {
+        "id": "bard",
+        "name": "Bard",
+        "summary": "Inspiring Charisma full spellcaster and jack of all trades (d8 hit die).",
+        "rules": "Primary: Charisma. Saves: Dexterity, Charisma. Armor: Light. Weapons: Simple. Core features: Bardic Inspiration (Bonus Action die to ally D20 Test), Spellcasting (Charisma), Expertise, Jack of All Trades (half proficiency to non-proficient ability checks), Font of Inspiration.",
+        "data": {
+          "hit_die": 8,
+          "primary_abilities": [
+            "charisma"
+          ],
+          "saving_throws": [
+            "dexterity",
+            "charisma"
+          ],
+          "subclass_level": 3,
+          "level_1_features": [
+            "bardic_inspiration",
+            "spellcasting"
+          ]
+        }
+      },
+      {
+        "id": "cleric",
+        "name": "Cleric",
+        "summary": "Armored Wisdom full spellcaster wielding divine magic and Channel Divinity (d8 hit die).",
+        "rules": "Primary: Wisdom. Saves: Wisdom, Charisma. Armor: Light, Medium, Shields. Weapons: Simple. Core features: Spellcasting (Wisdom), Divine Order (Protector or Thaumaturge), Channel Divinity (Divine Spark / Turn Undead), Sear Undead, Blessed Strikes, Divine Intervention.",
+        "data": {
+          "hit_die": 8,
+          "primary_abilities": [
+            "wisdom"
+          ],
+          "saving_throws": [
+            "wisdom",
+            "charisma"
+          ],
+          "subclass_level": 3,
+          "level_1_features": [
+            "spellcasting",
+            "divine_order"
+          ]
+        }
+      },
+      {
+        "id": "druid",
+        "name": "Druid",
+        "summary": "Nature Wisdom full spellcaster able to transform via Wild Shape (d8 hit die).",
+        "rules": "Primary: Wisdom. Saves: Intelligence, Wisdom. Armor: Light, Shields. Weapons: Simple. Core features: Spellcasting (Wisdom), Druidic, Primal Order (Magician or Warden), Wild Shape (Bonus Action beast forms + Temp HP), Wild Companion, Elemental Fury.",
+        "data": {
+          "hit_die": 8,
+          "primary_abilities": [
+            "wisdom"
+          ],
+          "saving_throws": [
+            "intelligence",
+            "wisdom"
+          ],
+          "subclass_level": 3,
+          "level_1_features": [
+            "spellcasting",
+            "druidic",
+            "primal_order"
+          ]
+        }
+      },
+      {
+        "id": "fighter",
+        "name": "Fighter",
+        "summary": "Master of arms, armor, Weapon Mastery, and tactical surges (d10 hit die).",
+        "rules": "Primary: Strength or Dexterity. Saves: Strength, Constitution. Armor: Light, Medium, Heavy, Shields. Weapons: Simple, Martial. Core features: Fighting Style, Second Wind (Bonus Action heal 1d10 + Fighter level), Weapon Mastery, Action Surge (extra Action), Tactical Mind, Extra Attack (2/3/4 attacks), Indomitable (reroll failed save + Fighter level).",
+        "data": {
+          "hit_die": 10,
+          "primary_abilities": [
+            "strength",
+            "dexterity"
+          ],
+          "saving_throws": [
+            "strength",
+            "constitution"
+          ],
+          "subclass_level": 3,
+          "level_1_features": [
+            "fighting_style",
+            "second_wind",
+            "weapon_mastery"
+          ]
+        }
+      },
+      {
+        "id": "monk",
+        "name": "Monk",
+        "summary": "Unarmored martial artist channeling Focus Points and unmatched speed (d8 hit die).",
+        "rules": "Primary: Dexterity, Wisdom. Saves: Strength, Dexterity. Armor: None. Weapons: Simple, Light Martial. Core features: Martial Arts (d6->d12 die, Dex for unarmed/monk weapons, Bonus Action unarmed strike), Unarmored Defense (10 + Dex + Wis), Monk's Focus (Flurry of Blows, Patient Defense, Step of the Wind), Unarmored Movement, Deflect Attacks, Stunning Strike.",
+        "data": {
+          "hit_die": 8,
+          "primary_abilities": [
+            "dexterity",
+            "wisdom"
+          ],
+          "saving_throws": [
+            "strength",
+            "dexterity"
+          ],
+          "subclass_level": 3,
+          "level_1_features": [
+            "martial_arts",
+            "unarmored_defense"
+          ]
+        }
+      },
+      {
+        "id": "paladin",
+        "name": "Paladin",
+        "summary": "Oath-bound warrior combining heavy armor, Lay on Hands, Auras, and Smites (d10 hit die).",
+        "rules": "Primary: Strength, Charisma. Saves: Wisdom, Charisma. Armor: Light, Medium, Heavy, Shields. Weapons: Simple, Martial. Core features: Lay on Hands (5 * level HP pool, Bonus Action heal or cure Poisoned), Spellcasting (Charisma, half caster from level 1), Weapon Mastery, Paladin's Smite (Divine Smite always prepared), Fighting Style, Channel Divinity, Extra Attack, Aura of Protection (+Cha mod to saves within 10/30 ft).",
+        "data": {
+          "hit_die": 10,
+          "primary_abilities": [
+            "strength",
+            "charisma"
+          ],
+          "saving_throws": [
+            "wisdom",
+            "charisma"
+          ],
+          "subclass_level": 3,
+          "level_1_features": [
+            "lay_on_hands",
+            "spellcasting",
+            "weapon_mastery"
+          ]
+        }
+      },
+      {
+        "id": "ranger",
+        "name": "Ranger",
+        "summary": "Wilderness hunter blending martial tracking, Weapon Mastery, and primal spells (d10 hit die).",
+        "rules": "Primary: Dexterity, Wisdom. Saves: Strength, Dexterity. Armor: Light, Medium, Shields. Weapons: Simple, Martial. Core features: Spellcasting (Wisdom, half caster from level 1), Favored Enemy (Hunter's Mark always prepared + free casts), Weapon Mastery, Deft Explorer, Fighting Style, Extra Attack, Roving.",
+        "data": {
+          "hit_die": 10,
+          "primary_abilities": [
+            "dexterity",
+            "wisdom"
+          ],
+          "saving_throws": [
+            "strength",
+            "dexterity"
+          ],
+          "subclass_level": 3,
+          "level_1_features": [
+            "spellcasting",
+            "favored_enemy",
+            "weapon_mastery"
+          ]
+        }
+      },
+      {
+        "id": "rogue",
+        "name": "Rogue",
+        "summary": "Stealthy, agile specialist relying on Sneak Attack, Expertise, and Cunning Action (d8 hit die).",
+        "rules": "Primary: Dexterity. Saves: Dexterity, Intelligence. Armor: Light. Weapons: Simple, Finesse/Light Martial. Core features: Expertise, Sneak Attack (extra d6s once per turn with Advantage or adjacent ally), Thieves' Cant, Weapon Mastery, Cunning Action (Bonus Action Dash/Disengage/Hide), Uncanny Dodge, Cunning Strike, Evasion, Reliable Talent.",
+        "data": {
+          "hit_die": 8,
+          "primary_abilities": [
+            "dexterity"
+          ],
+          "saving_throws": [
+            "dexterity",
+            "intelligence"
+          ],
+          "subclass_level": 3,
+          "level_1_features": [
+            "expertise",
+            "sneak_attack",
+            "thieves_cant",
+            "weapon_mastery"
+          ]
+        }
+      },
+      {
+        "id": "sorcerer",
+        "name": "Sorcerer",
+        "summary": "Innate Charisma full spellcaster reshaping spells with Metamagic (d6 hit die).",
+        "rules": "Primary: Charisma. Saves: Constitution, Charisma. Armor: None. Weapons: Simple. Core features: Spellcasting (Charisma), Innate Sorcery (Bonus Action +1 spell save DC and Advantage on sorcerer spell attacks for 1 minute), Font of Magic (Sorcery Points), Metamagic, Sorcerous Restoration.",
+        "data": {
+          "hit_die": 6,
+          "primary_abilities": [
+            "charisma"
+          ],
+          "saving_throws": [
+            "constitution",
+            "charisma"
+          ],
+          "subclass_level": 3,
+          "level_1_features": [
+            "spellcasting",
+            "innate_sorcery"
+          ]
+        }
+      },
+      {
+        "id": "warlock",
+        "name": "Warlock",
+        "summary": "Pact-bound arcane caster with Short-Rest Pact Magic slots and Eldritch Invocations (d8 hit die).",
+        "rules": "Primary: Charisma. Saves: Wisdom, Charisma. Armor: Light. Weapons: Simple. Core features: Eldritch Invocations, Pact Magic (Charisma, slots cast at highest pact level and recharge on Short Rest), Magical Cunning, Contact Patron, Mystic Arcanum (6th-9th level 1/Long Rest spells).",
+        "data": {
+          "hit_die": 8,
+          "primary_abilities": [
+            "charisma"
+          ],
+          "saving_throws": [
+            "wisdom",
+            "charisma"
+          ],
+          "subclass_level": 3,
+          "level_1_features": [
+            "eldritch_invocations",
+            "pact_magic"
+          ]
+        }
+      },
+      {
+        "id": "wizard",
+        "name": "Wizard",
+        "summary": "Scholarly Intelligence full spellcaster preparing spells from a spellbook (d6 hit die).",
+        "rules": "Primary: Intelligence. Saves: Intelligence, Wisdom. Armor: None. Weapons: Simple. Core features: Spellcasting (Intelligence, spellbook), Ritual Adept, Arcane Recovery (recover spell slots up to half Wizard level rounded up on Short Rest), Scholar (Expertise in 1 academic skill), Memorize Spell, Spell Mastery.",
+        "data": {
+          "hit_die": 6,
+          "primary_abilities": [
+            "intelligence"
+          ],
+          "saving_throws": [
+            "intelligence",
+            "wisdom"
+          ],
+          "subclass_level": 3,
+          "level_1_features": [
+            "spellcasting",
+            "ritual_adept",
+            "arcane_recovery"
+          ]
+        }
+      }
+    ],
+    "subclass": [
+      {
+        "id": "path_of_the_berserker",
+        "name": "Path of the Berserker",
+        "summary": "Barbarian subclass channeling untamed fury into Frenzy and Mindless Rage.",
+        "rules": "Class: Barbarian (level 3). Grants Frenzy (extra d6 damage on first Reckless Attack hit while Raging), Mindless Rage (immune to Charmed and Frightened while Raging), Retaliation (Reaction attack when damaged within 5 ft), and Intimidating Presence.",
+        "data": {
+          "parent_class": "barbarian"
+        }
+      },
+      {
+        "id": "college_of_lore",
+        "name": "College of Lore",
+        "summary": "Bard subclass mastering knowledge, Cutting Words, and Magical Discoveries.",
+        "rules": "Class: Bard (level 3). Grants Bonus Proficiencies (3 skills), Cutting Words (Reaction to subtract Bardic Inspiration from an enemy roll), Magical Discoveries (learn spells from Cleric/Druid/Wizard lists), and Peerless Skill.",
+        "data": {
+          "parent_class": "bard"
+        }
+      },
+      {
+        "id": "life_domain",
+        "name": "Life Domain",
+        "summary": "Cleric subclass amplifying restorative healing magic.",
+        "rules": "Class: Cleric (level 3). Always-prepared healing spells, Disciple of Life (+2 + spell level bonus healing), Preserve Life (Channel Divinity AoE healing up to half max HP), Blessed Healer, and Supreme Healing.",
+        "data": {
+          "parent_class": "cleric"
+        }
+      },
+      {
+        "id": "circle_of_the_land",
+        "name": "Circle of the Land",
+        "summary": "Druid subclass drawing elemental terrain spells and Natural Recovery.",
+        "rules": "Class: Druid (level 3). Choose Arid, Polar, Temperate, or Tropical circle spells after each Long Rest; grants Land's Aid (Channel Wild Shape for AoE Necrotic + heal), Natural Recovery, Nature's Ward, and Nature's Sanctuary.",
+        "data": {
+          "parent_class": "druid"
+        }
+      },
+      {
+        "id": "champion",
+        "name": "Champion",
+        "summary": "Fighter subclass focused on raw martial precision and athleticism.",
+        "rules": "Class: Fighter (level 3). Grants Improved Critical (crit on 19-20), Remarkable Athlete (Advantage on Initiative and Athletics, move half speed without provoking on crit), Additional Fighting Style, Heroic Warrior (Heroic Inspiration each turn), Superior Critical (18-20), and Survivor.",
+        "data": {
+          "parent_class": "fighter"
+        }
+      },
+      {
+        "id": "warrior_of_the_open_hand",
+        "name": "Warrior of the Open Hand",
+        "summary": "Monk subclass mastering unarmed control, pushes, topples, and self-healing.",
+        "rules": "Class: Monk (level 3). Grants Open Hand Technique (Flurry of Blows can Addle, Push 15 ft, or Topple), Wholeness of Body (Bonus Action heal Martial Arts die + Wis mod), Fleet Step, and Quivering Palm.",
+        "data": {
+          "parent_class": "monk"
+        }
+      },
+      {
+        "id": "oath_of_devotion",
+        "name": "Oath of Devotion",
+        "summary": "Paladin subclass sworn to honesty, courage, and radiant Sacred Weapon strikes.",
+        "rules": "Class: Paladin (level 3). Always-prepared devotion spells, Sacred Weapon (Channel Divinity adds Cha mod to attack rolls and optional Radiant damage + bright light), Aura of Devotion (allies immune to Charmed), Smite of Protection, and Holy Nimbus.",
+        "data": {
+          "parent_class": "paladin"
+        }
+      },
+      {
+        "id": "hunter",
+        "name": "Hunter",
+        "summary": "Ranger subclass specializing in quarry analysis and lethal weapon tactics.",
+        "rules": "Class: Ranger (level 3). Grants Hunter's Lore (learn Hunter's Mark target's immunities/resistances/vulnerabilities), Hunter's Prey (Colossus Slayer +1d8 or Horde Breaker), Defensive Tactics, Superior Hunter's Prey, and Superior Hunter's Defense.",
+        "data": {
+          "parent_class": "ranger"
+        }
+      },
+      {
+        "id": "thief",
+        "name": "Thief",
+        "summary": "Rogue subclass excelling at Fast Hands, climbing, and magic device use.",
+        "rules": "Class: Rogue (level 3). Grants Fast Hands (Cunning Action Sleight of Hand or Utilize), Second-Story Work (Climb speed equal to Walk speed, Dex-based jumps), Supreme Sneak, Use Magic Device (4 attunement slots, scroll use), and Thief's Reflexes.",
+        "data": {
+          "parent_class": "rogue"
+        }
+      },
+      {
+        "id": "draconic_sorcery",
+        "name": "Draconic Sorcery",
+        "summary": "Sorcerer subclass imbued with draconic resilience, scales, and elemental affinity.",
+        "rules": "Class: Sorcerer (level 3). Grants Draconic Resilience (+1 HP/level and unarmored AC 10 + Dex + Cha), Draconic Spells, Elemental Affinity (add Cha mod to matching damage type + resistance), Dragon Wings (60 ft Fly speed), and Dragon Companion.",
+        "data": {
+          "parent_class": "sorcerer"
+        }
+      },
+      {
+        "id": "fiend_patron",
+        "name": "Fiend Patron",
+        "summary": "Warlock subclass drawing dark resilience and fire magic from a lower-plane pact.",
+        "rules": "Class: Warlock (level 3). Grants Dark One's Blessing (Temp HP equal to Cha mod + Warlock level on nearby kill), Fiend Spells, Dark One's Own Luck (+1d10 to ability check or save), Fiendish Resilience (changeable damage resistance), and Hurl Through Hell.",
+        "data": {
+          "parent_class": "warlock"
+        }
+      },
+      {
+        "id": "evoker",
+        "name": "Evoker",
+        "summary": "Wizard subclass sculpting explosive elemental spells safely around allies.",
+        "rules": "Class: Wizard (level 3). Grants Evocation Savant, Potent Cantrip (targets take half damage on saved cantrips), Sculpt Spells (allies auto-succeed and take 0 damage from AoE evocations), Empowered Evocation (+Int mod to 1 damage roll), and Overchannel.",
+        "data": {
+          "parent_class": "wizard"
+        }
+      }
+    ],
+    "species": [
+      {
+        "id": "dragonborn",
+        "name": "Dragonborn",
+        "summary": "Medium draconic humanoid with Breath Weapon, Damage Resistance, and Darkvision.",
+        "rules": "Size: Medium. Speed: 30 ft. Traits: Draconic Ancestry (choose damage type), Breath Weapon (replace 1 attack, 15 ft cone or 30 ft line, Dex save, 1d10 scaling to 4d10, PB/Long Rest), Damage Resistance (matching ancestry), Darkvision 60 ft, Draconic Flight (level 5, 10 min fly speed).",
+        "data": {
+          "size": "medium",
+          "speed": 30,
+          "darkvision": 60
+        }
+      },
+      {
+        "id": "dwarf",
+        "name": "Dwarf",
+        "summary": "Medium stout humanoid with 120 ft Darkvision, poison resilience, extra HP, and Stonecunning.",
+        "rules": "Size: Medium. Speed: 30 ft. Traits: Darkvision 120 ft, Dwarven Resilience (Resistance to Poison damage and Advantage on saves to avoid/end Poisoned), Dwarven Toughness (+1 max HP per level), Stonecunning (Bonus Action Tremorsense 60 ft on stone for 10 min, PB/Long Rest).",
+        "data": {
+          "size": "medium",
+          "speed": 30,
+          "darkvision": 120
+        }
+      },
+      {
+        "id": "elf",
+        "name": "Elf",
+        "summary": "Medium keen-sensed humanoid with Darkvision, Fey Ancestry, Trance, and Elven Lineage spells.",
+        "rules": "Size: Medium. Speed: 30 ft. Traits: Darkvision 60 ft, Elven Lineage (Drow/High Elf/Wood Elf spells & traits), Fey Ancestry (Advantage on saves against Charmed), Keen Senses (proficiency in Insight, Perception, or Survival), Trance (4-hour Long Rest, immune to magical sleep).",
+        "data": {
+          "size": "medium",
+          "speed": 30,
+          "darkvision": 60
+        }
+      },
+      {
+        "id": "gnome",
+        "name": "Gnome",
+        "summary": "Small inventive humanoid with Gnomish Cunning and lineage cantrips.",
+        "rules": "Size: Small. Speed: 30 ft. Traits: Darkvision 60 ft, Gnomish Cunning (Advantage on Intelligence, Wisdom, and Charisma saving throws), Gnomish Lineage (Forest Gnome or Rock Gnome innate traits).",
+        "data": {
+          "size": "small",
+          "speed": 30,
+          "darkvision": 60
+        }
+      },
+      {
+        "id": "goliath",
+        "name": "Goliath",
+        "summary": "Medium giant-kin humanoid with 35 ft speed, Powerful Build, and Giant Ancestry.",
+        "rules": "Size: Medium. Speed: 35 ft. Traits: Giant Ancestry (Cloud/Fire/Frost/Hill/Stone/Storm trait, PB/Long Rest), Large Form (level 5, become Large for 10 min with +10 ft speed and Advantage on Strength checks), Powerful Build (Advantage on checks to end Grappled, count as 1 size larger for carrying).",
+        "data": {
+          "size": "medium",
+          "speed": 35,
+          "darkvision": 0
+        }
+      },
+      {
+        "id": "halfling",
+        "name": "Halfling",
+        "summary": "Small nimble humanoid blessed with Brave, Halfling Nimbleness, Luck, and Naturally Stealthy.",
+        "rules": "Size: Small. Speed: 30 ft. Traits: Brave (Advantage on saves against Frightened), Halfling Nimbleness (move through space of larger creatures), Luck (reroll natural 1 on a D20 Test), Naturally Stealthy (can Hide behind a creature 1 size larger).",
+        "data": {
+          "size": "small",
+          "speed": 30,
+          "darkvision": 0
+        }
+      },
+      {
+        "id": "human",
+        "name": "Human",
+        "summary": "Medium or Small adaptable humanoid with Resourceful Heroic Inspiration, Skillful, and Versatile.",
+        "rules": "Size: Medium or Small. Speed: 30 ft. Traits: Resourceful (gain Heroic Inspiration after every Long Rest), Skillful (proficiency in 1 skill of choice), Versatile (gain 1 Origin feat of choice).",
+        "data": {
+          "size": "medium",
+          "speed": 30,
+          "darkvision": 0
+        }
+      },
+      {
+        "id": "orc",
+        "name": "Orc",
+        "summary": "Medium resilient humanoid with Adrenaline Rush, 120 ft Darkvision, and Relentless Endurance.",
+        "rules": "Size: Medium. Speed: 30 ft. Traits: Adrenaline Rush (Bonus Action Dash + Temp HP equal to PB, PB/Short or Long Rest), Darkvision 120 ft, Relentless Endurance (drop to 1 HP instead of 0 once per Long Rest).",
+        "data": {
+          "size": "medium",
+          "speed": 30,
+          "darkvision": 120
+        }
+      },
+      {
+        "id": "tiefling",
+        "name": "Tiefling",
+        "summary": "Medium or Small planar-touched humanoid with Darkvision, Fiendish Legacy, and Otherworldly Presence.",
+        "rules": "Size: Medium or Small. Speed: 30 ft. Traits: Darkvision 60 ft, Fiendish Legacy (Abyssal/Chthonic/Infernal damage resistance and innate leveled spells), Otherworldly Presence (Thaumaturgy cantrip).",
+        "data": {
+          "size": "medium",
+          "speed": 30,
+          "darkvision": 60
+        }
+      }
+    ],
+    "background": [
+      {
+        "id": "acolyte",
+        "name": "Acolyte",
+        "summary": "Temple-trained devotee skilled in Insight and Religion with Magic Initiate (Cleric).",
+        "rules": "Ability Scores: Intelligence, Wisdom, Charisma. Feat: Magic Initiate (Cleric). Skills: Insight, Religion. Tool: Calligrapher's Supplies."
+      },
+      {
+        "id": "criminal",
+        "name": "Criminal",
+        "summary": "Streetwise outlaw skilled in Sleight of Hand and Stealth with the Alert feat.",
+        "rules": "Ability Scores: Dexterity, Constitution, Intelligence. Feat: Alert. Skills: Sleight of Hand, Stealth. Tool: Thieves' Tools."
+      },
+      {
+        "id": "sage",
+        "name": "Sage",
+        "summary": "Scholar skilled in Arcana and History with Magic Initiate (Wizard).",
+        "rules": "Ability Scores: Constitution, Intelligence, Wisdom. Feat: Magic Initiate (Wizard). Skills: Arcana, History. Tool: Calligrapher's Supplies."
+      },
+      {
+        "id": "soldier",
+        "name": "Soldier",
+        "summary": "Trained combatant skilled in Athletics and Intimidation with Savage Attacker.",
+        "rules": "Ability Scores: Strength, Dexterity, Constitution. Feat: Savage Attacker. Skills: Athletics, Intimidation. Tool: Gaming Set."
+      }
+    ],
+    "condition": [
+      {
+        "id": "blinded",
+        "name": "Blinded",
+        "summary": "Cannot see and automatically fails sight-based ability checks.",
+        "rules": "Can't See: automatically fail any ability check requiring sight. Attacks Affected: attack rolls against you have Advantage, and your attack rolls have Disadvantage."
+      },
+      {
+        "id": "charmed",
+        "name": "Charmed",
+        "summary": "Cannot attack or harm the charmer, who has social Advantage against you.",
+        "rules": "Can't Harm the Charmer: cannot attack the charmer or target the charmer with damaging abilities or magical effects. Social Advantage: the charmer has Advantage on any ability check to interact socially with you."
+      },
+      {
+        "id": "deafened",
+        "name": "Deafened",
+        "summary": "Cannot hear and automatically fails hearing-based ability checks.",
+        "rules": "Can't Hear: automatically fail any ability check requiring hearing."
+      },
+      {
+        "id": "exhaustion",
+        "name": "Exhaustion",
+        "summary": "Cumulative fatigue (levels 1-6) penalizing D20 Tests by -2/level and Speed by -5 ft/level.",
+        "rules": "Levels 1-6 (death at level 6). D20 Tests reduced by 2 * level. Speed reduced by 5 * level feet. Finishing a Long Rest removes 1 level; reaching 0 ends the condition."
+      },
+      {
+        "id": "frightened",
+        "name": "Frightened",
+        "summary": "Disadvantage on checks and attacks while source of fear is in line of sight; cannot move closer.",
+        "rules": "Ability Checks and Attacks Affected: Disadvantage on ability checks and attack rolls while the source of fear is within line of sight. Can't Approach: cannot willingly move closer to the source of fear."
+      },
+      {
+        "id": "grappled",
+        "name": "Grappled",
+        "summary": "Speed is 0, Disadvantage on attacks against non-grapplers, and movable by the grappler.",
+        "rules": "Speed 0 (cannot benefit from speed bonuses). Attacks Affected: Disadvantage on attack rolls against any target other than the grappler. Movable: grappler can drag or carry you at half speed unless you are Tiny or 2+ sizes smaller."
+      },
+      {
+        "id": "incapacitated",
+        "name": "Incapacitated",
+        "summary": "Cannot take Actions, Bonus Actions, or Reactions; breaks Concentration and prevents speech.",
+        "rules": "Inactive: cannot take any Action, Bonus Action, or Reaction. No Concentration: Concentration ends immediately. Speechless: cannot speak. Surprised: Disadvantage on Initiative if Incapacitated when rolling."
+      },
+      {
+        "id": "invisible",
+        "name": "Invisible",
+        "summary": "Concealed from ordinary sight with Advantage on Initiative and attacks.",
+        "rules": "Surprise: Advantage on Initiative rolls. Concealed: not affected by effects requiring sight unless the source can see you (Truesight/Blindsight). Attacks Affected: your attack rolls have Advantage, and attack rolls against you have Disadvantage unless the attacker can see you."
+      },
+      {
+        "id": "paralyzed",
+        "name": "Paralyzed",
+        "summary": "Incapacitated, Speed 0, auto-fails Str/Dex saves, and melee hits within 5 ft are critical hits.",
+        "rules": "Incapacitated and Speed 0. Saving Throws Affected: automatically fail Strength and Dexterity saving throws. Attacks Affected: attack rolls against you have Advantage, and any attack roll that hits from within 5 feet is a Critical Hit."
+      },
+      {
+        "id": "petrified",
+        "name": "Petrified",
+        "summary": "Turned to solid inanimate stone; weight x10, Incapacitated, Speed 0, Resistance to all damage.",
+        "rules": "Transformed into solid inanimate substance (weight x10, stops aging). Incapacitated and Speed 0. Attacks against have Advantage; auto-fail Str/Dex saves. Resistance to all damage. Immunity to Poisoned condition."
+      },
+      {
+        "id": "poisoned",
+        "name": "Poisoned",
+        "summary": "Disadvantage on all attack rolls and ability checks.",
+        "rules": "Ability Checks and Attacks Affected: Disadvantage on attack rolls and ability checks."
+      },
+      {
+        "id": "prone",
+        "name": "Prone",
+        "summary": "Lying flat; can only crawl or stand using half Speed; melee within 5 ft has Advantage.",
+        "rules": "Restricted Movement: only movement options are crawling (costs 1 extra foot per foot) or spending movement equal to half Speed to stand. Attacks Affected: Disadvantage on your attack rolls; attack rolls against you have Advantage within 5 ft and Disadvantage beyond 5 ft."
+      },
+      {
+        "id": "restrained",
+        "name": "Restrained",
+        "summary": "Speed 0, Disadvantage on attacks and Dexterity saves, attacks against have Advantage.",
+        "rules": "Speed 0 (no speed bonuses). Attacks Affected: attack rolls against you have Advantage, and your attack rolls have Disadvantage. Saving Throws Affected: Disadvantage on Dexterity saving throws."
+      },
+      {
+        "id": "stunned",
+        "name": "Stunned",
+        "summary": "Incapacitated (breaks Concentration, cannot speak), auto-fails Str/Dex saves, attacks against have Advantage.",
+        "rules": "Incapacitated (cannot take Actions, Bonus Actions, Reactions, or speak; breaks Concentration). Note: in 2024 5e, Stunned does NOT reduce Speed to 0. Saving Throws Affected: automatically fail Strength and Dexterity saves. Attacks Affected: attack rolls against you have Advantage."
+      },
+      {
+        "id": "unconscious",
+        "name": "Unconscious",
+        "summary": "Incapacitated, Prone, Speed 0, drops held items, auto-fails Str/Dex saves, hits within 5 ft crit.",
+        "rules": "Inert: Incapacitated and Prone, drops whatever held, unaware of surroundings. Speed 0. Attacks Affected: Advantage on attacks against you; hits within 5 ft are Critical Hits. Saving Throws Affected: auto-fail Strength and Dexterity saves."
+      }
+    ],
+    "hazard": [
+      {
+        "id": "burning",
+        "name": "Burning",
+        "summary": "On fire; takes 1d4 Fire damage at the start of each turn until extinguished.",
+        "rules": "A burning creature or object takes 1d4 Fire damage at the start of each of its turns. As an Action, a creature can extinguish fire on itself by dropping Prone and rolling, or by dousing or submerging the flame."
+      },
+      {
+        "id": "dehydration",
+        "name": "Dehydration",
+        "summary": "Insufficient water intake imposing Exhaustion levels that cannot be removed until hydrated.",
+        "rules": "Drinking less than half daily water requirement imposes 1 Exhaustion level at the end of the day; exhaustion from dehydration cannot be removed until the creature drinks the full daily amount."
+      },
+      {
+        "id": "malnutrition",
+        "name": "Malnutrition",
+        "summary": "Insufficient food intake imposing Exhaustion after Con-mod days without adequate rations.",
+        "rules": "Going without half daily food for 3 + Con mod (minimum 1) days imposes 1 Exhaustion level per day; exhaustion from malnutrition cannot be removed until the creature eats full rations."
+      },
+      {
+        "id": "suffocation",
+        "name": "Suffocation",
+        "summary": "Out of breathable air; gains 1 Exhaustion level at the end of each turn until breathing again.",
+        "rules": "A creature holds breath for 1 + Con mod minutes (minimum 30 seconds). When out of breath or choking, it gains 1 Exhaustion level at the end of each of its turns; when it can breathe again, it loses all Exhaustion levels gained from suffocation."
+      }
+    ],
+    "ability": [
+      {
+        "id": "strength",
+        "name": "Strength",
+        "summary": "Physical might, carrying capacity, Athletics, and melee force.",
+        "rules": "Governs Athletics checks, melee weapon attacks (unless Finesse), jump distance, carrying capacity (15 * STR lbs for Medium), and breaking restraints."
+      },
+      {
+        "id": "dexterity",
+        "name": "Dexterity",
+        "summary": "Agility, reflexes, balance, Initiative, AC, and ranged or finesse attacks.",
+        "rules": "Governs Acrobatics, Sleight of Hand, Stealth, Initiative rolls, finesse and ranged weapon attacks, and Light/Medium/unarmored AC."
+      },
+      {
+        "id": "constitution",
+        "name": "Constitution",
+        "summary": "Health, stamina, hit points per level, and Concentration saves.",
+        "rules": "Adds modifier to Hit Points gained at every level, determines breath-holding duration, and governs Concentration saving throws and resilience against poison/cold."
+      },
+      {
+        "id": "intelligence",
+        "name": "Intelligence",
+        "summary": "Reasoning, memory, deduction, and Wizard spellcasting.",
+        "rules": "Governs Arcana, History, Investigation, Nature, Religion, and Wizard spellcasting."
+      },
+      {
+        "id": "wisdom",
+        "name": "Wisdom",
+        "summary": "Perceptiveness, intuition, survival instinct, and Cleric/Druid/Ranger spellcasting.",
+        "rules": "Governs Animal Handling, Insight, Medicine, Perception (and Passive Perception), Survival, and Cleric/Druid/Ranger spellcasting."
+      },
+      {
+        "id": "charisma",
+        "name": "Charisma",
+        "summary": "Force of personality, persuasion, leadership, and Bard/Paladin/Sorcerer/Warlock spellcasting.",
+        "rules": "Governs Deception, Intimidation, Performance, Persuasion, and Bard/Paladin/Sorcerer/Warlock spellcasting."
+      }
+    ],
+    "skill": [
+      {
+        "id": "acrobatics",
+        "name": "Acrobatics",
+        "summary": "Dexterity check for balance, tumbling, flips, and escaping grapples.",
+        "rules": "Governing ability: Dexterity. Stay on your feet in tricky situations or perform acrobatic stunts.",
+        "data": {
+          "ability": "dexterity"
+        }
+      },
+      {
+        "id": "animal_handling",
+        "name": "Animal Handling",
+        "summary": "Wisdom check to calm, guide, or read a beast or mount.",
+        "rules": "Governing ability: Wisdom. Calm a domesticated animal, intuit an animal's intentions, or control a mount.",
+        "data": {
+          "ability": "wisdom"
+        }
+      },
+      {
+        "id": "arcana",
+        "name": "Arcana",
+        "summary": "Intelligence check to recall lore about spells, magic items, symbols, and planes.",
+        "rules": "Governing ability: Intelligence. Recall lore about spells, eldritch symbols, magical traditions, and planes of existence.",
+        "data": {
+          "ability": "intelligence"
+        }
+      },
+      {
+        "id": "athletics",
+        "name": "Athletics",
+        "summary": "Strength check for climbing, jumping, swimming, grappling, and shoving.",
+        "rules": "Governing ability: Strength. Climb sheer surfaces, swim rough water, jump far, or resist physical force.",
+        "data": {
+          "ability": "strength"
+        }
+      },
+      {
+        "id": "deception",
+        "name": "Deception",
+        "summary": "Charisma check to hide the truth convincingly through speech or disguise.",
+        "rules": "Governing ability: Charisma. Mislead others through ambiguity, fast-talk, or outright lies.",
+        "data": {
+          "ability": "charisma"
+        }
+      },
+      {
+        "id": "history",
+        "name": "History",
+        "summary": "Intelligence check to recall historical events, legends, wars, and kingdoms.",
+        "rules": "Governing ability: Intelligence. Recall lore about historical events, legendary people, ancient kingdoms, and past disputes.",
+        "data": {
+          "ability": "intelligence"
+        }
+      },
+      {
+        "id": "insight",
+        "name": "Insight",
+        "summary": "Wisdom check to read true intentions, body language, and honesty.",
+        "rules": "Governing ability: Wisdom. Discern a creature's true intentions, detect lies, or predict someone's next move.",
+        "data": {
+          "ability": "wisdom"
+        }
+      },
+      {
+        "id": "intimidation",
+        "name": "Intimidation",
+        "summary": "Charisma check to influence others through threats or hostile presence.",
+        "rules": "Governing ability: Charisma. Pry information or deter foes through overt threats, hostile actions, or force of will.",
+        "data": {
+          "ability": "charisma"
+        }
+      },
+      {
+        "id": "investigation",
+        "name": "Investigation",
+        "summary": "Intelligence check to search clues and deduce hidden mechanisms or facts.",
+        "rules": "Governing ability: Intelligence. Look around for clues and make logical deductions from evidence.",
+        "data": {
+          "ability": "intelligence"
+        }
+      },
+      {
+        "id": "medicine",
+        "name": "Medicine",
+        "summary": "Wisdom check to stabilize the dying, diagnose illness, or examine wounds.",
+        "rules": "Governing ability: Wisdom. Stabilize a dying companion (DC 10) or diagnose an illness or cause of death.",
+        "data": {
+          "ability": "wisdom"
+        }
+      },
+      {
+        "id": "nature",
+        "name": "Nature",
+        "summary": "Intelligence check to recall lore about terrain, plants, animals, and weather.",
+        "rules": "Governing ability: Intelligence. Recall lore about natural environments, beasts, plants, and weather cycles.",
+        "data": {
+          "ability": "intelligence"
+        }
+      },
+      {
+        "id": "perception",
+        "name": "Perception",
+        "summary": "Wisdom check to spot, hear, or detect the presence of hidden threats.",
+        "rules": "Governing ability: Wisdom. Notice hidden creatures, traps, whispers, or details; Passive Perception = 10 + modifier.",
+        "data": {
+          "ability": "wisdom"
+        }
+      },
+      {
+        "id": "performance",
+        "name": "Performance",
+        "summary": "Charisma check to entertain an audience with music, dance, acting, or story.",
+        "rules": "Governing ability: Charisma. Delight an audience through song, poetry, drama, or storytelling.",
+        "data": {
+          "ability": "charisma"
+        }
+      },
+      {
+        "id": "persuasion",
+        "name": "Persuasion",
+        "summary": "Charisma check to influence others honestly with tact, diplomacy, or grace.",
+        "rules": "Governing ability: Charisma. Negotiate, foster goodwill, or persuade through honest appeal.",
+        "data": {
+          "ability": "charisma"
+        }
+      },
+      {
+        "id": "religion",
+        "name": "Religion",
+        "summary": "Intelligence check to recall lore about deities, rites, prayers, and cults.",
+        "rules": "Governing ability: Intelligence. Recall lore about religious traditions, holy symbols, rituals, and planar hierarchies.",
+        "data": {
+          "ability": "intelligence"
+        }
+      },
+      {
+        "id": "sleight_of_hand",
+        "name": "Sleight of Hand",
+        "summary": "Dexterity check for legerdemain, pickpocketing, and concealing small items.",
+        "rules": "Governing ability: Dexterity. Plant or steal an object, pick a pocket, or palm something unnoticed.",
+        "data": {
+          "ability": "dexterity"
+        }
+      },
+      {
+        "id": "stealth",
+        "name": "Stealth",
+        "summary": "Dexterity check to conceal yourself and move silently past observers.",
+        "rules": "Governing ability: Dexterity. Take the Hide action (DC 15 baseline to gain Invisible condition while concealed) or slip past guards.",
+        "data": {
+          "ability": "dexterity"
+        }
+      },
+      {
+        "id": "survival",
+        "name": "Survival",
+        "summary": "Wisdom check to track, forage, navigate wilderness, and predict weather.",
+        "rules": "Governing ability: Wisdom. Follow tracks, hunt wild game, navigate hazards, or guide a party through wilderness.",
+        "data": {
+          "ability": "wisdom"
+        }
+      }
+    ],
+    "damage_type": [
+      {
+        "id": "bludgeoning",
+        "name": "Bludgeoning",
+        "summary": "Blunt force trauma from hammers, falls, constriction, or crushing impacts.",
+        "rules": "Physical impact damage from blunt weapons, falling, or crushing traps."
+      },
+      {
+        "id": "piercing",
+        "name": "Piercing",
+        "summary": "Puncturing and impaling damage from spears, arrows, fangs, and daggers.",
+        "rules": "Physical puncture damage from arrows, spears, rapiers, and bites."
+      },
+      {
+        "id": "slashing",
+        "name": "Slashing",
+        "summary": "Cutting and cleaving damage from swords, axes, and claws.",
+        "rules": "Physical cutting damage from blades, axes, and talons."
+      },
+      {
+        "id": "acid",
+        "name": "Acid",
+        "summary": "Corrosive chemical dissolution.",
+        "rules": "Corrosive burns from acid sprays, black dragon breath, or oozes."
+      },
+      {
+        "id": "cold",
+        "name": "Cold",
+        "summary": "Freezing numbness and frostbite.",
+        "rules": "Infernal ice, arctic exposure, and frost magic."
+      },
+      {
+        "id": "fire",
+        "name": "Fire",
+        "summary": "Flames, scorching heat, and burning hazards.",
+        "rules": "Flames, magma, burning oil, and fire spells; ignites flammable unattended objects."
+      },
+      {
+        "id": "force",
+        "name": "Force",
+        "summary": "Pure magical energy focused into damaging form.",
+        "rules": "Pure arcane impact such as Magic Missile or Eldritch Blast; rarely resisted."
+      },
+      {
+        "id": "lightning",
+        "name": "Lightning",
+        "summary": "Electrical arcs and thunderbolts.",
+        "rules": "Electrical shock from lightning bolts and storm creatures."
+      },
+      {
+        "id": "necrotic",
+        "name": "Necrotic",
+        "summary": "Withering decay that saps life force.",
+        "rules": "Life-draining decay wielded by undead and necromantic magic."
+      },
+      {
+        "id": "poison",
+        "name": "Poison",
+        "summary": "Venoms, toxins, and noxious fumes.",
+        "rules": "Biological toxins; objects, constructs, and most undead are immune."
+      },
+      {
+        "id": "psychic",
+        "name": "Psychic",
+        "summary": "Mental assault directly against a mind.",
+        "rules": "Telepathic trauma; objects and mindless constructs are immune."
+      },
+      {
+        "id": "radiant",
+        "name": "Radiant",
+        "summary": "Searing celestial or luminous energy.",
+        "rules": "Burning radiance from divine smites and celestial power."
+      },
+      {
+        "id": "thunder",
+        "name": "Thunder",
+        "summary": "Concussive shockwaves of sound.",
+        "rules": "Acoustic shockwaves that shatter brittle objects and push foes."
+      }
+    ],
+    "size": [
+      {
+        "id": "tiny",
+        "name": "Tiny",
+        "summary": "2.5 x 2.5 ft space; half carrying capacity.",
+        "rules": "Occupies 2.5 x 2.5 ft (4 can share a 5-ft square). Object HP baseline: 2 fragile / 5 resilient."
+      },
+      {
+        "id": "small",
+        "name": "Small",
+        "summary": "5 x 5 ft space; normal carrying capacity.",
+        "rules": "Occupies 1 5-ft square. Object HP baseline: 3 fragile / 10 resilient."
+      },
+      {
+        "id": "medium",
+        "name": "Medium",
+        "summary": "5 x 5 ft space; standard baseline (15 * STR lbs carrying).",
+        "rules": "Occupies 1 5-ft square. Object HP baseline: 4 fragile / 18 resilient."
+      },
+      {
+        "id": "large",
+        "name": "Large",
+        "summary": "10 x 10 ft space (2 x 2 squares); double carrying capacity.",
+        "rules": "Occupies 2 x 2 squares. Object HP baseline: 5 fragile / 27 resilient."
+      },
+      {
+        "id": "huge",
+        "name": "Huge",
+        "summary": "15 x 15 ft space (3 x 3 squares); quadruple carrying capacity.",
+        "rules": "Occupies 3 x 3 squares."
+      },
+      {
+        "id": "gargantuan",
+        "name": "Gargantuan",
+        "summary": "20 x 20 ft space (4 x 4 squares) or larger; 8x carrying capacity.",
+        "rules": "Occupies 4 x 4 squares or more."
+      }
+    ],
+    "creature_type": [
+      {
+        "id": "aberration",
+        "name": "Aberration",
+        "summary": "Utterly alien beings with bizarre anatomies or minds.",
+        "rules": "Includes strange extraplanar or warped entities."
+      },
+      {
+        "id": "beast",
+        "name": "Beast",
+        "summary": "Nonhumanoid natural animals of the ordinary ecology.",
+        "rules": "Eligible targets for Druid Wild Shape and Animal Friendship."
+      },
+      {
+        "id": "celestial",
+        "name": "Celestial",
+        "summary": "Radiant beings formed from upper-plane Luminifory.",
+        "rules": "Naturally linked to upper outer realms."
+      },
+      {
+        "id": "construct",
+        "name": "Construct",
+        "summary": "Made creatures animated by magic or craft rather than biology.",
+        "rules": "Typically immune to Poison and Psychic; unaffected by many healing spells."
+      },
+      {
+        "id": "dragon",
+        "name": "Dragon",
+        "summary": "Ancient winged reptilian creatures of immense elemental power.",
+        "rules": "Classic apex elemental creatures."
+      },
+      {
+        "id": "elemental",
+        "name": "Elemental",
+        "summary": "Beings condensed from raw air, earth, fire, or water.",
+        "rules": "Native to the inner elemental planes."
+      },
+      {
+        "id": "fey",
+        "name": "Fey",
+        "summary": "Magical creatures tied to wild Lustre and echo realms.",
+        "rules": "Includes sprites, dryads, and echo-plane spirits."
+      },
+      {
+        "id": "fiend",
+        "name": "Fiend",
+        "summary": "Malicious beings formed from lower-plane Umbrifory.",
+        "rules": "Includes devils, demons, and lower-plane spirits."
+      },
+      {
+        "id": "giant",
+        "name": "Giant",
+        "summary": "Towering humanoid-shaped beings of mythic scale.",
+        "rules": "Includes hill, frost, fire, cloud, and storm giants."
+      },
+      {
+        "id": "humanoid",
+        "name": "Humanoid",
+        "summary": "Bipedal mortal peoples, including playable species and goblins.",
+        "rules": "Eligible targets for spells like Hold Person and Charm Person."
+      },
+      {
+        "id": "monstrosity",
+        "name": "Monstrosity",
+        "summary": "Unnatural predatory creatures outside ordinary nature.",
+        "rules": "Includes owlbears, basilisks, and manticores."
+      },
+      {
+        "id": "ooze",
+        "name": "Ooze",
+        "summary": "Gelatinous, amorphous creatures of subterranean spaces.",
+        "rules": "Often immune to multiple conditions and able to squeeze through cracks."
+      },
+      {
+        "id": "plant",
+        "name": "Plant",
+        "summary": "Sentient or animated vegetable creatures.",
+        "rules": "Distinct from ordinary non-creature flora."
+      },
+      {
+        "id": "undead",
+        "name": "Undead",
+        "summary": "Once-living creatures animated by necrotic force.",
+        "rules": "Affected by Turn Undead and immune to many biological hazards."
+      }
+    ],
+    "language": [
+      {
+        "id": "common",
+        "name": "Common",
+        "summary": "Standard trade tongue spoken across settled lands.",
+        "rules": "Standard language known by nearly all characters."
+      },
+      {
+        "id": "common_sign_language",
+        "name": "Common Sign Language",
+        "summary": "Manual visual language paired with Common.",
+        "rules": "Standard silent sign language."
+      },
+      {
+        "id": "draconic",
+        "name": "Draconic",
+        "summary": "Ancient tongue of dragons and arcane inscriptions.",
+        "rules": "Standard language."
+      },
+      {
+        "id": "dwarvish",
+        "name": "Dwarvish",
+        "summary": "Runic language of dwarven holds and stonecraft.",
+        "rules": "Standard language."
+      },
+      {
+        "id": "elvish",
+        "name": "Elvish",
+        "summary": "Fluid, melodic tongue of elves and old ballads.",
+        "rules": "Standard language."
+      },
+      {
+        "id": "giant",
+        "name": "Giant",
+        "summary": "Resonant tongue of giants and goliaths.",
+        "rules": "Standard language."
+      },
+      {
+        "id": "gnomish",
+        "name": "Gnomish",
+        "summary": "Technical, brisk tongue of gnomes.",
+        "rules": "Standard language."
+      },
+      {
+        "id": "goblin",
+        "name": "Goblin",
+        "summary": "Clipped tongue of goblins and kin.",
+        "rules": "Standard language."
+      },
+      {
+        "id": "halfling",
+        "name": "Halfling",
+        "summary": "Warm hearth-tongue of halflings.",
+        "rules": "Standard language."
+      },
+      {
+        "id": "orc",
+        "name": "Orc",
+        "summary": "Direct, forceful tongue of orcs.",
+        "rules": "Standard language."
+      },
+      {
+        "id": "abyssal",
+        "name": "Abyssal",
+        "summary": "Harsh rare tongue of chaotic lower planes.",
+        "rules": "Rare language."
+      },
+      {
+        "id": "celestial",
+        "name": "Celestial",
+        "summary": "Harmonic rare tongue of upper planes.",
+        "rules": "Rare language."
+      },
+      {
+        "id": "deep_speech",
+        "name": "Deep Speech",
+        "summary": "Alien rare tongue of aberrations.",
+        "rules": "Rare language."
+      },
+      {
+        "id": "druidic",
+        "name": "Druidic",
+        "summary": "Secret rare tongue of druids.",
+        "rules": "Rare language granted by Druid class."
+      },
+      {
+        "id": "infernal",
+        "name": "Infernal",
+        "summary": "Precise rare tongue of lawful lower planes.",
+        "rules": "Rare language."
+      },
+      {
+        "id": "primordial",
+        "name": "Primordial",
+        "summary": "Elemental rare tongue encompassing Aquan, Auran, Ignan, and Terran.",
+        "rules": "Rare language."
+      },
+      {
+        "id": "sylvan",
+        "name": "Sylvan",
+        "summary": "Lilting rare tongue of fey and echo wilds.",
+        "rules": "Rare language."
+      },
+      {
+        "id": "thieves_cant",
+        "name": "Thieves' Cant",
+        "summary": "Coded jargon and hidden signs used by rogues.",
+        "rules": "Rare language granted by Rogue class."
+      },
+      {
+        "id": "undercommon",
+        "name": "Undercommon",
+        "summary": "Subterranean trade tongue.",
+        "rules": "Rare language."
+      }
+    ],
+    "feat": [
+      {
+        "id": "alert",
+        "name": "Alert",
+        "summary": "Origin feat adding Proficiency Bonus to Initiative and allowing Initiative swaps.",
+        "rules": "Add Proficiency Bonus to Initiative rolls. Immediately after rolling Initiative, you can swap your Initiative with 1 willing ally in the same combat.",
+        "data": {
+          "category": "origin"
+        }
+      },
+      {
+        "id": "magic_initiate",
+        "name": "Magic Initiate",
+        "summary": "Origin feat granting 2 cantrips and 1 prepared 1st-level spell (1 free cast/Long Rest).",
+        "rules": "Choose Cleric, Druid, or Wizard list; choose Int, Wis, or Cha as casting ability. Gain 2 cantrips and 1 1st-level spell always prepared with 1 free cast per Long Rest.",
+        "data": {
+          "category": "origin"
+        }
+      },
+      {
+        "id": "savage_attacker",
+        "name": "Savage Attacker",
+        "summary": "Origin feat letting you roll weapon damage twice once per turn and use either.",
+        "rules": "Once per turn when you hit a target with a weapon, roll the weapon's damage dice twice and use either roll.",
+        "data": {
+          "category": "origin"
+        }
+      },
+      {
+        "id": "skilled",
+        "name": "Skilled",
+        "summary": "Origin feat granting proficiency in any 3 skills or tools.",
+        "rules": "Gain proficiency in any combination of 3 skills or tools of your choice.",
+        "data": {
+          "category": "origin"
+        }
+      },
+      {
+        "id": "ability_score_improvement",
+        "name": "Ability Score Improvement",
+        "summary": "General feat increasing 1 ability by +2 or 2 abilities by +1 (max 20).",
+        "rules": "Prerequisite: Level 4+. Increase 1 ability score by 2, or 2 ability scores by 1 each, up to a maximum of 20. Repeatable.",
+        "data": {
+          "category": "general"
+        }
+      },
+      {
+        "id": "grappler",
+        "name": "Grappler",
+        "summary": "General feat enhancing unarmed strikes and grappling control.",
+        "rules": "Prerequisite: Level 4+, STR or DEX 13+. +1 STR or DEX (max 20). Punch and Grab on Unarmed Strike, Advantage on attacks against grappled target, no speed penalty dragging a creature your size or smaller.",
+        "data": {
+          "category": "general"
+        }
+      },
+      {
+        "id": "archery",
+        "name": "Archery",
+        "summary": "Fighting Style feat granting +2 to attack rolls with Ranged weapons.",
+        "rules": "Prerequisite: Fighting Style feature. Gain a +2 bonus to attack rolls you make with Ranged weapons.",
+        "data": {
+          "category": "fighting_style"
+        }
+      },
+      {
+        "id": "defense",
+        "name": "Defense",
+        "summary": "Fighting Style feat granting +1 AC while wearing Light, Medium, or Heavy armor.",
+        "rules": "Prerequisite: Fighting Style feature. While wearing Light, Medium, or Heavy armor, gain a +1 bonus to Armor Class.",
+        "data": {
+          "category": "fighting_style"
+        }
+      },
+      {
+        "id": "great_weapon_fighting",
+        "name": "Great Weapon Fighting",
+        "summary": "Fighting Style feat treating 1s and 2s on two-handed melee weapon damage dice as 3s.",
+        "rules": "Prerequisite: Fighting Style feature. When rolling damage for a Melee weapon held with 2 hands (Two-Handed or Versatile), treat any 1 or 2 on a damage die as a 3.",
+        "data": {
+          "category": "fighting_style"
+        }
+      },
+      {
+        "id": "two_weapon_fighting",
+        "name": "Two-Weapon Fighting",
+        "summary": "Fighting Style feat adding ability modifier to Light off-hand extra attack damage.",
+        "rules": "Prerequisite: Fighting Style feature. Add your ability modifier to the damage of the extra attack granted by the Light weapon property.",
+        "data": {
+          "category": "fighting_style"
+        }
+      },
+      {
+        "id": "boon_of_combat_prowess",
+        "name": "Boon of Combat Prowess",
+        "summary": "Epic Boon letting you turn 1 missed attack roll per turn into a hit.",
+        "rules": "Prerequisite: Level 19+. +1 to 1 ability (max 30). Once per turn when you miss with an attack roll, you can hit instead.",
+        "data": {
+          "category": "epic_boon"
+        }
+      },
+      {
+        "id": "boon_of_dimensional_travel",
+        "name": "Boon of Dimensional Travel",
+        "summary": "Epic Boon granting a 30-ft teleport immediately after Attack or Magic actions.",
+        "rules": "Prerequisite: Level 19+. +1 to 1 ability (max 30). Immediately after taking the Attack or Magic action, teleport up to 30 ft to an unoccupied space you can see.",
+        "data": {
+          "category": "epic_boon"
+        }
+      },
+      {
+        "id": "boon_of_fate",
+        "name": "Boon of Fate",
+        "summary": "Epic Boon adding or subtracting 2d4 to a nearby D20 Test once per Initiative/rest.",
+        "rules": "Prerequisite: Level 19+. +1 to 1 ability (max 30). Add or subtract 2d4 to a D20 Test within 60 ft; regains use on rolling Initiative or Short/Long Rest.",
+        "data": {
+          "category": "epic_boon"
+        }
+      },
+      {
+        "id": "boon_of_irresistible_offense",
+        "name": "Boon of Irresistible Offense",
+        "summary": "Epic Boon bypassing Bludgeoning/Piercing/Slashing resistance and boosting crits.",
+        "rules": "Prerequisite: Level 19+. +1 STR or DEX (max 30). Your B/P/S damage ignores Resistance; on a natural 20 attack roll, deal extra damage equal to the chosen ability score.",
+        "data": {
+          "category": "epic_boon"
+        }
+      },
+      {
+        "id": "boon_of_spell_recall",
+        "name": "Boon of Spell Recall",
+        "summary": "Epic Boon giving a 25% chance not to expend a 1st-4th level spell slot.",
+        "rules": "Prerequisite: Level 19+, Spellcasting. +1 INT, WIS, or CHA (max 30). When casting a 1st-4th level spell, roll 1d4; if it equals the slot level, the slot is not expended.",
+        "data": {
+          "category": "epic_boon"
+        }
+      },
+      {
+        "id": "boon_of_the_night_spirit",
+        "name": "Boon of the Night Spirit",
+        "summary": "Epic Boon granting Bonus Action invisibility and damage resistance in dim light/darkness.",
+        "rules": "Prerequisite: Level 19+. +1 to 1 ability (max 30). While in Dim Light or Darkness, gain Invisible as a Bonus Action and Resistance to all damage except Psychic and Radiant.",
+        "data": {
+          "category": "epic_boon"
+        }
+      },
+      {
+        "id": "boon_of_truesight",
+        "name": "Boon of Truesight",
+        "summary": "Epic Boon granting 60-ft Truesight.",
+        "rules": "Prerequisite: Level 19+. +1 to 1 ability (max 30). Gain Truesight out to 60 feet.",
+        "data": {
+          "category": "epic_boon"
+        }
+      }
+    ],
+    "resource": [
+      {
+        "id": "rage",
+        "name": "Rage",
+        "summary": "Barbarian combat fury uses (recharges 1 on Short Rest, all on Long Rest).",
+        "rules": "Bonus Action to enter Rage for up to 10 minutes (maintained by attacking, forcing a save, or using a Bonus Action). Grants Bludgeoning/Piercing/Slashing resistance, melee Strength damage bonus (+2 to +4), and Advantage on Strength checks/saves."
+      },
+      {
+        "id": "bardic_inspiration",
+        "name": "Bardic Inspiration",
+        "summary": "Bard inspiration dice pool (Charisma modifier uses, minimum 1).",
+        "rules": "Bonus Action to grant 1 creature within 60 ft a d6-d12 die to add to a failed D20 Test within 1 hour. Recharges on Long Rest (Short Rest at level 5+)."
+      },
+      {
+        "id": "channel_divinity",
+        "name": "Channel Divinity",
+        "summary": "Divine power uses for Clerics and Paladins (recharges 1 on Short Rest, all on Long Rest).",
+        "rules": "Fuels class and subclass sacred powers such as Divine Spark, Turn Undead, or Sacred Weapon."
+      },
+      {
+        "id": "wild_shape",
+        "name": "Wild Shape",
+        "summary": "Druid beast transformation uses (recharges 1 on Short Rest, all on Long Rest).",
+        "rules": "Bonus Action to assume a known Beast form, gaining Temp HP equal to Druid level while keeping mental scores."
+      },
+      {
+        "id": "second_wind",
+        "name": "Second Wind",
+        "summary": "Fighter self-recovery uses (recharges 1 on Short Rest, all on Long Rest).",
+        "rules": "Bonus Action to regain 1d10 + Fighter level HP, or spend via Tactical Mind to add 1d10 to a failed ability check."
+      },
+      {
+        "id": "action_surge",
+        "name": "Action Surge",
+        "summary": "Fighter burst uses granting 1 extra Action on your turn (Short/Long Rest).",
+        "rules": "Take 1 additional Action on your turn (cannot be used for the Magic action in 2024 5e)."
+      },
+      {
+        "id": "indomitable",
+        "name": "Indomitable",
+        "summary": "Fighter saving-throw reroll uses (Long Rest).",
+        "rules": "Reroll a failed saving throw and add your Fighter level to the new roll."
+      },
+      {
+        "id": "focus_points",
+        "name": "Focus Points",
+        "summary": "Monk ki/focus pool equal to Monk level (recharges on Short or Long Rest).",
+        "rules": "Spend 1 Focus Point for Flurry of Blows, Patient Defense (Disengage + Dodge), Step of the Wind, or Stunning Strike."
+      },
+      {
+        "id": "lay_on_hands",
+        "name": "Lay on Hands",
+        "summary": "Paladin healing pool equal to 5 * Paladin level (recharges on Long Rest).",
+        "rules": "Bonus Action to restore up to remaining pool HP on a touched creature, or spend 5 points to remove the Poisoned condition."
+      },
+      {
+        "id": "favored_enemy",
+        "name": "Favored Enemy",
+        "summary": "Ranger free Hunter's Mark casts without expending a spell slot (Long Rest).",
+        "rules": "Cast Hunter's Mark without expending a spell slot (2 uses at level 1, scaling up to 6 uses)."
+      },
+      {
+        "id": "sorcery_points",
+        "name": "Sorcery Points",
+        "summary": "Sorcerer Metamagic and slot-conversion pool equal to Sorcerer level (Long Rest).",
+        "rules": "Fuel Metamagic options or convert between spell slots and Sorcery Points."
+      },
+      {
+        "id": "arcane_recovery",
+        "name": "Arcane Recovery",
+        "summary": "Wizard once-per-Long-Rest Short Rest spell slot recovery.",
+        "rules": "Once per Long Rest during a Short Rest, recover expended spell slots with combined level up to half Wizard level rounded up (none 6th+ level)."
+      },
+      {
+        "id": "legendary_resistance",
+        "name": "Legendary Resistance",
+        "summary": "Monster uses to turn a failed saving throw into a success (Long Rest).",
+        "rules": "When the monster fails a saving throw, it can choose to succeed instead."
+      },
+      {
+        "id": "legendary_actions",
+        "name": "Legendary Actions",
+        "summary": "Monster off-turn action points (recharges at start of monster's turn).",
+        "rules": "Spent at the end of another creature's turn to take listed Legendary Actions."
+      },
+      {
+        "id": "recharge_trait",
+        "name": "Recharge Trait",
+        "summary": "Monster limited special action recharged on a 1d6 roll at turn start.",
+        "rules": "Used for breath weapons and signature monster abilities with Recharge 5-6 or 6."
+      }
+    ],
+    "feature": [
+      {
+        "id": "rage",
+        "name": "Rage",
+        "summary": "Barbarian level 1 primal fury.",
+        "rules": "Bonus Action: gain Resistance to Bludgeoning, Piercing, and Slashing damage, +2/+3/+4 Strength melee damage, and Advantage on Strength checks and saves."
+      },
+      {
+        "id": "unarmored_defense",
+        "name": "Unarmored Defense",
+        "summary": "Armorless AC formula (Barbarian: 10 + Dex + Con; Monk: 10 + Dex + Wis).",
+        "rules": "While wearing no armor, use the class's unarmored AC calculation (Barbarian may still use a Shield; Monk may not)."
+      },
+      {
+        "id": "weapon_mastery",
+        "name": "Weapon Mastery",
+        "summary": "2024 5e tactical weapon property mastery (Cleave, Graze, Nick, Push, Sap, Slow, Topple, Vex).",
+        "rules": "Apply the Mastery property of prepared weapons on qualifying attacks."
+      },
+      {
+        "id": "second_wind",
+        "name": "Second Wind",
+        "summary": "Fighter level 1 Bonus Action self-heal.",
+        "rules": "Bonus Action: spend 1 Second Wind use to regain 1d10 + Fighter level HP."
+      },
+      {
+        "id": "fighting_style",
+        "name": "Fighting Style",
+        "summary": "Martial specialization granting 1 Fighting Style feat.",
+        "rules": "Choose Archery, Defense, Great Weapon Fighting, or Two-Weapon Fighting."
+      },
+      {
+        "id": "action_surge",
+        "name": "Action Surge",
+        "summary": "Fighter level 2 extra Action once per Short or Long Rest.",
+        "rules": "Take 1 additional Action on your turn (excluding the Magic action)."
+      },
+      {
+        "id": "spellcasting",
+        "name": "Spellcasting",
+        "summary": "Class ability to prepare and cast spells using spell slots.",
+        "rules": "Follows class preparation rules, Spell Save DC = 8 + PB + casting ability modifier, Spell Attack = PB + casting ability modifier."
+      },
+      {
+        "id": "pact_magic",
+        "name": "Pact Magic",
+        "summary": "Warlock Short-Rest spellcasting at a shared Pact Slot level.",
+        "rules": "All Pact Magic slots are cast at the highest available pact slot level and recover on a Short or Long Rest."
+      },
+      {
+        "id": "sneak_attack",
+        "name": "Sneak Attack",
+        "summary": "Rogue level 1 precision strike dealing extra d6 damage once per turn.",
+        "rules": "Once per turn, deal extra d6 damage (1d6 at level 1, scaling +1d6 every 2 Rogue levels) with a Finesse or Ranged weapon when you have Advantage or an active ally is within 5 ft of the target without Disadvantage."
+      },
+      {
+        "id": "lay_on_hands",
+        "name": "Lay on Hands",
+        "summary": "Paladin level 1 healing pool (5 * Paladin level HP).",
+        "rules": "Bonus Action touch to heal HP from pool or spend 5 points to end the Poisoned condition."
+      },
+      {
+        "id": "martial_arts",
+        "name": "Martial Arts",
+        "summary": "Monk level 1 unarmed and monk-weapon mastery.",
+        "rules": "Use Dexterity for Unarmed Strikes and Monk weapons, scale damage die (d6 -> d12), and make 1 Unarmed Strike as a Bonus Action."
+      },
+      {
+        "id": "bardic_inspiration",
+        "name": "Bardic Inspiration",
+        "summary": "Bard level 1 Bonus Action inspiration die.",
+        "rules": "Grant an ally within 60 ft a die (d6 -> d12) to add to a failed D20 Test."
+      },
+      {
+        "id": "eldritch_invocations",
+        "name": "Eldritch Invocations",
+        "summary": "Warlock level 1 customizable arcane boons.",
+        "rules": "Permanent magical enhancements chosen from the Warlock invocation list."
+      },
+      {
+        "id": "arcane_recovery",
+        "name": "Arcane Recovery",
+        "summary": "Wizard level 1 Short Rest spell slot recovery.",
+        "rules": "Recover spell slots totaling up to ceil(Wizard level / 2) once per Long Rest."
+      },
+      {
+        "id": "expertise",
+        "name": "Expertise",
+        "summary": "Double Proficiency Bonus on chosen trained skills.",
+        "rules": "Apply ProficiencyLevel::Expertise to selected proficient skills."
+      },
+      {
+        "id": "innate_sorcery",
+        "name": "Innate Sorcery",
+        "summary": "Sorcerer level 1 Bonus Action arcane surge.",
+        "rules": "For 1 minute, +1 to Sorcerer spell save DC and Advantage on Sorcerer spell attack rolls (2/Long Rest)."
+      },
+      {
+        "id": "divine_order",
+        "name": "Divine Order",
+        "summary": "Cleric level 1 sacred specialization (Protector or Thaumaturge).",
+        "rules": "Protector grants Martial weapons and Heavy armor; Thaumaturge grants 1 extra cantrip and +Wis mod to Arcana/Religion."
+      },
+      {
+        "id": "primal_order",
+        "name": "Primal Order",
+        "summary": "Druid level 1 primal specialization (Magician or Warden).",
+        "rules": "Magician grants 1 extra cantrip and +Wis mod to Arcana/Nature; Warden grants Martial weapons and Medium armor."
+      },
+      {
+        "id": "druidic",
+        "name": "Druidic",
+        "summary": "Druid secret language and always-prepared Speak with Animals.",
+        "rules": "Know Druidic and always have Speak with Animals prepared."
+      },
+      {
+        "id": "favored_enemy",
+        "name": "Favored Enemy",
+        "summary": "Ranger level 1 Hunter's Mark mastery.",
+        "rules": "Always have Hunter's Mark prepared with free daily casts tracked in ResourceId::FavoredEnemy."
+      },
+      {
+        "id": "thieves_cant",
+        "name": "Thieves' Cant",
+        "summary": "Rogue level 1 coded underworld speech and symbols.",
+        "rules": "Know Thieves' Cant plus 1 additional language."
+      },
+      {
+        "id": "ritual_adept",
+        "name": "Ritual Adept",
+        "summary": "Wizard level 1 ritual casting directly from a spellbook.",
+        "rules": "Cast any spell with the Ritual tag in your spellbook as a Ritual without expending a spell slot."
+      },
+      {
+        "id": "darkvision",
+        "name": "Darkvision",
+        "summary": "See in dim light as bright light and in darkness as dim light (shades of gray).",
+        "rules": "Range stored in Senses::darkvision."
+      },
+      {
+        "id": "bless",
+        "name": "Bless",
+        "summary": "1st-level Concentration spell adding +1d4 to Attack Rolls and Saving Throws.",
+        "rules": "Up to 3 creatures add 1d4 to every Attack Roll and Saving Throw for up to 1 minute (Concentration)."
+      },
+      {
+        "id": "guidance",
+        "name": "Guidance",
+        "summary": "Cantrip adding +1d4 to checks with 1 chosen skill.",
+        "rules": "Touch 1 willing creature and choose a skill; target adds 1d4 to ability checks using that skill for up to 1 minute (Concentration)."
+      },
+      {
+        "id": "healing_word",
+        "name": "Healing Word",
+        "summary": "1st-level Bonus Action ranged healing spell.",
+        "rules": "1 creature within 60 ft regains 2d4 + spellcasting ability modifier HP (scales +2d4 per slot above 1st in 2024 5e)."
+      },
+      {
+        "id": "shield",
+        "name": "Shield",
+        "summary": "1st-level Reaction spell granting +5 AC until your next turn.",
+        "rules": "Reaction when hit by an attack or targeted by Magic Missile: +5 AC (including against the triggering attack) and immunity to Magic Missile until the start of your next turn."
+      }
+    ]
+  }
+}

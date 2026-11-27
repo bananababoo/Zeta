@@ -149,6 +149,7 @@ mod tests {
             passable: false,
             description: "A test actor.".into(),
             player_character: true,
+            properties: None,
         };
         EventCause::FreeformAction(FreeformActionCause {
             actor: EntityId(1),

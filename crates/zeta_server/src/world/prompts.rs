@@ -685,6 +685,7 @@ mod tests {
                 passable: false,
                 description: "An adventurer.".into(),
                 player_character: true,
+                properties: None,
             },
             std::iter::empty(),
             |_| false,

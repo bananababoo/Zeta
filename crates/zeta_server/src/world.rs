@@ -1305,4 +1305,100 @@ mod tests {
         assert_eq!(held(&app, pile, "longsword"), 0);
         assert_eq!(records(&app).len(), 1);
     }
+
+    #[test]
+    fn five_e_property_effects_enforce_rules_across_creatures_and_objects() {
+        use zeta_core::protocol::properties::{
+            ActiveEffects, CharacterTraits, ClassId, ClassLevels, Concentration, ConditionId,
+            Conditions, Health, ResourceId, ResourcePools, RulesetId,
+        };
+
+        let mut app = test_app(&[10]);
+        let (connection, character) = connect(&mut app);
+        let barrel = named(&mut app, "Oil Barrel");
+        let goblin = named(&mut app, "Goblin");
+        let snapshot = snapshot_of(&mut app, character);
+        let barrel_local = local_id(&snapshot, barrel);
+        let goblin_local = local_id(&snapshot, goblin);
+        assert!(snapshot.entities()[0].properties.is_some());
+        assert!(
+            snapshot
+                .get(barrel_local)
+                .and_then(|e| e.properties.as_ref())
+                .and_then(|p| p.health)
+                .is_some()
+        );
+
+        let response = format!(
+            r#"{{"ok": true, "chk": null, "fail": [], "fx": [
+                {{"op": "damage", "id": {barrel_local}, "amount": 10, "damage_type": "poison"}},
+                {{"op": "damage", "id": {barrel_local}, "amount": 6, "damage_type": "fire"}},
+                {{"op": "apply_effect", "id": 0, "effect": {{"id": "bless", "name": "Bless", "source": "bless", "duration_rounds": 10, "modifiers": [{{"kind": "ac_bonus", "value": 1}}]}}, "concentrate": true}},
+                {{"op": "temp_hp", "id": 0, "amount": 5}},
+                {{"op": "damage", "id": 0, "amount": 20, "damage_type": "slashing"}},
+                {{"op": "heal", "id": 0, "amount": 4}},
+                {{"op": "condition", "id": {goblin_local}, "add": ["prone"], "exhaustion_delta": 2, "add_hazards": ["burning"]}},
+                {{"op": "spend_resource", "id": 0, "target": {{"kind": "class_pool", "resource": "second_wind"}}, "amount": 1}},
+                {{"op": "advance_level", "id": 0, "class": "cleric", "subclass": null}}
+            ]}}"#
+        );
+        let first = exchange(&mut app, character, "Test 5e property effects.", &response);
+        replay(&mut app, vec![first]);
+        prompt(&mut app, connection, "Test 5e property effects.");
+        run_until(&mut app, |world| finished_count(world, connection) == 1);
+
+        let barrel_entity = engine(&app, barrel).expect("indexed");
+        assert_eq!(
+            app.world().get::<Health>(barrel_entity).map(|h| h.current),
+            Some(12)
+        );
+
+        let pc_entity = engine(&app, character).expect("indexed");
+        let world = app.world();
+        let pc_hp = *world.get::<Health>(pc_entity).expect("pc health");
+        assert_eq!((pc_hp.current, pc_hp.max, pc_hp.temporary), (12, 21, 0));
+        assert_eq!(
+            world
+                .get::<Concentration>(pc_entity)
+                .and_then(|c| c.active_effect_id.as_deref()),
+            None
+        );
+        assert_eq!(
+            world
+                .get::<ActiveEffects>(pc_entity)
+                .expect("effects")
+                .effects,
+            Vec::new()
+        );
+        assert!(
+            !world
+                .get::<Conditions>(pc_entity)
+                .expect("conds")
+                .active
+                .contains(&ConditionId::Unconscious)
+        );
+        assert_eq!(
+            world
+                .get::<ResourcePools>(pc_entity)
+                .expect("pools")
+                .class_pools[&ResourceId::SecondWind]
+                .current,
+            1
+        );
+        let classes = world.get::<ClassLevels>(pc_entity).expect("class levels");
+        assert_eq!(classes.total_level(), 2);
+        assert_eq!(classes.entries[1].class, ClassId::Cleric);
+        let traits = world.get::<CharacterTraits>(pc_entity).expect("traits");
+        assert!(
+            traits
+                .features
+                .contains(&RulesetId::new("divine_order").expect("id"))
+        );
+
+        let goblin_entity = engine(&app, goblin).expect("indexed");
+        let goblin_conds = world.get::<Conditions>(goblin_entity).expect("goblin");
+        assert!(goblin_conds.active.contains(&ConditionId::Prone));
+        assert!(goblin_conds.active.contains(&ConditionId::Exhaustion));
+        assert_eq!(goblin_conds.exhaustion_level, 2);
+    }
 }

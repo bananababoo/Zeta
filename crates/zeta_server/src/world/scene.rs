@@ -10,6 +10,10 @@
 use bevy_ecs::prelude::{Bundle, Commands, ResMut};
 use zeta_core::entity::EntityId;
 use zeta_core::grid::{GridPos, MapBounds};
+use zeta_core::protocol::properties::{
+    AbilityScores, ArmorClass, Conditions, CreatureType, DamageAffinities, Health, MonsterProfile,
+    Senses, Size, Speed,
+};
 use zeta_core::protocol::{Collider, EntityName, MapArea, Tags, Visual};
 use zeta_core::world::FACE_TILES;
 
@@ -154,13 +158,54 @@ pub(crate) fn spawn_test_scene(
     commands.spawn((MapArea(TEST_SCENE_BOUNDS), Networked));
     for spec in test_scene_entities() {
         let id = next_id.allocate();
-        let is_goblin = spec.name == GOBLIN_NAME;
+        let name = spec.name.clone();
         let mut entity = commands.spawn(spec.into_bundle(id));
-        if is_goblin {
-            entity.insert((
-                zeta_core::protocol::Creature,
-                starting_inventory(GOBLIN_STARTING_ITEMS),
-            ));
+        match name.as_str() {
+            GOBLIN_NAME => {
+                entity.insert((
+                    zeta_core::protocol::Creature,
+                    starting_inventory(GOBLIN_STARTING_ITEMS),
+                    Health::full(10),
+                    ArmorClass::new(15),
+                    Size::Small,
+                    CreatureType::Fey,
+                    AbilityScores {
+                        strength: 8,
+                        dexterity: 15,
+                        constitution: 10,
+                        intelligence: 10,
+                        wisdom: 8,
+                        charisma: 8,
+                    },
+                    Speed::walk_only(30),
+                    Senses {
+                        darkvision: 60,
+                        ..Senses::default()
+                    },
+                    Conditions::default(),
+                    MonsterProfile {
+                        challenge_rating_eighths: 2,
+                        initiative_bonus: 2,
+                    },
+                ));
+            }
+            "Oil Barrel" => {
+                entity.insert((
+                    Health::full(18),
+                    ArmorClass::new(15),
+                    Size::Medium,
+                    DamageAffinities::object_default(),
+                ));
+            }
+            "Wooden Bridge" => {
+                entity.insert((
+                    Health::full(27),
+                    ArmorClass::new(15),
+                    Size::Large,
+                    DamageAffinities::object_default(),
+                ));
+            }
+            _ => {}
         }
         index.0.insert(id, entity.id());
     }

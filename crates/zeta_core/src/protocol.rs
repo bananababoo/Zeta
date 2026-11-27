@@ -20,6 +20,7 @@
 pub mod actions;
 pub mod inventory;
 pub mod log;
+pub mod properties;
 pub mod turn;
 pub mod world;
 
@@ -31,6 +32,17 @@ pub use inventory::{
     ItemVerbRequest, StackId,
 };
 pub use log::{DiceRollShown, LogEntryKind, NarrationLogEntry};
+pub use properties::{
+    AbilityScores, ActiveEffect, ActiveEffects, ArmorClass, Background, BackgroundId, CharacterBio,
+    CharacterTraits, ClassId, ClassLevelEntry, ClassLevels, CoinPurse, Concentration, ConditionId,
+    ConditionImmunities, Conditions, CreatureType, DamageAffinities, DamageOutcome, DeathSaves,
+    FeatId, HazardId, Health, HitDiePool, InvalidRulesetId, LanguageId, MAX_ATTUNED_ITEMS,
+    MAX_CHARACTER_LEVEL, MAX_EXHAUSTION_LEVEL, MonsterProfile, PactSlotPool, Proficiencies,
+    ProficiencyLevel, RechargeSchedule, ResourceId, ResourcePool, ResourcePools, ResourceTarget,
+    ResourceTargetKind, RollScope, RulesetId, Senses, Size, SlotPool, Species, SpeciesId, Speed,
+    SpellEntry, SpellPrepState, SpellSourceKind, Spellbook, StatModifier, StatModifierKind,
+    SubclassId,
+};
 pub use turn::{EndTurnRequest, TurnBubble};
 pub use world::{Collider, Creature, EntityName, MapArea, PlayerCharacter, Tags, Visual};
 
@@ -93,6 +105,29 @@ pub fn register_protocol(registrar: &mut impl ProtocolRegistrar) {
     registrar.component::<Inventory>();
     registrar.client_message::<ItemVerbRequest>(Delivery::Ordered);
     registrar.component::<Creature>();
+    registrar.component::<Health>();
+    registrar.component::<ArmorClass>();
+    registrar.component::<Size>();
+    registrar.component::<DamageAffinities>();
+    registrar.component::<ConditionImmunities>();
+    registrar.component::<CreatureType>();
+    registrar.component::<AbilityScores>();
+    registrar.component::<Speed>();
+    registrar.component::<Senses>();
+    registrar.component::<Proficiencies>();
+    registrar.component::<Species>();
+    registrar.component::<Background>();
+    registrar.component::<ClassLevels>();
+    registrar.component::<CharacterTraits>();
+    registrar.component::<Spellbook>();
+    registrar.component::<CoinPurse>();
+    registrar.component::<CharacterBio>();
+    registrar.component::<Conditions>();
+    registrar.component::<DeathSaves>();
+    registrar.component::<Concentration>();
+    registrar.component::<ActiveEffects>();
+    registrar.component::<ResourcePools>();
+    registrar.component::<MonsterProfile>();
 }
 
 /// Shared by the submodule tests: serializes to JSON and back, and expects the same value.
@@ -174,6 +209,29 @@ mod tests {
                 "component Inventory",
                 "client ItemVerbRequest Ordered",
                 "component Creature",
+                "component Health",
+                "component ArmorClass",
+                "component Size",
+                "component DamageAffinities",
+                "component ConditionImmunities",
+                "component CreatureType",
+                "component AbilityScores",
+                "component Speed",
+                "component Senses",
+                "component Proficiencies",
+                "component Species",
+                "component Background",
+                "component ClassLevels",
+                "component CharacterTraits",
+                "component Spellbook",
+                "component CoinPurse",
+                "component CharacterBio",
+                "component Conditions",
+                "component DeathSaves",
+                "component Concentration",
+                "component ActiveEffects",
+                "component ResourcePools",
+                "component MonsterProfile",
             ]
         );
     }

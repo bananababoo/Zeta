@@ -10,8 +10,98 @@ use serde::{Deserialize, Serialize};
 
 use crate::entity::EntityId;
 use crate::grid::{GridPos, has_line_of_sight};
+use crate::protocol::properties::{
+    AbilityScores, ActiveEffects, ArmorClass, BackgroundId, CharacterBio, CharacterTraits,
+    ClassLevels, CoinPurse, Concentration, ConditionImmunities, Conditions, CreatureType,
+    DamageAffinities, DeathSaves, Health, MonsterProfile, Proficiencies, ResourcePools, Senses,
+    Size, SpeciesId, Speed, Spellbook,
+};
 use crate::resolution::LocalId;
 use crate::settings::{HEARING_RANGE_SQUARES, SNAPSHOT_MAX_COUNT};
+
+/// Optional 2024 5e ECS property summary attached to a [`SnapshotEntity`].
+///
+/// Only components actually present on the entity are serialized, so simple props omit
+/// character fields and non-breakable terrain omits combat vitals.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SnapshotProperties {
+    /// Hit points.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub health: Option<Health>,
+    /// Armor Class and optional structural damage threshold.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub armor_class: Option<ArmorClass>,
+    /// Size category.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size: Option<Size>,
+    /// Damage resistances, immunities, and vulnerabilities.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub damage_affinities: Option<DamageAffinities>,
+    /// Condition immunities.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub condition_immunities: Option<ConditionImmunities>,
+    /// Creature type.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub creature_type: Option<CreatureType>,
+    /// Core ability scores.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ability_scores: Option<AbilityScores>,
+    /// Movement speeds in feet.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub speed: Option<Speed>,
+    /// Special perception ranges.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub senses: Option<Senses>,
+    /// Saving throw, skill, weapon, armor, tool, and language proficiencies.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proficiencies: Option<Proficiencies>,
+    /// Playable species.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub species: Option<SpeciesId>,
+    /// Character background.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub background: Option<BackgroundId>,
+    /// Class levels and hit dice pools.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub class_levels: Option<ClassLevels>,
+    /// Features, feats, attunement, and Heroic Inspiration.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub traits: Option<CharacterTraits>,
+    /// Accessible spells across classes, species, feats, and items.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spellbook: Option<Spellbook>,
+    /// Carried coinage.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub coin_purse: Option<CoinPurse>,
+    /// Roleplay bio notes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bio: Option<CharacterBio>,
+    /// Active conditions, exhaustion level, and hazards.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conditions: Option<Conditions>,
+    /// Death saving throw progress.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub death_saves: Option<DeathSaves>,
+    /// Active Concentration state.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub concentration: Option<Concentration>,
+    /// Active buffs, debuffs, stances, and cover modifiers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_effects: Option<ActiveEffects>,
+    /// Spell slots, class pools, feature uses, and item charges.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resource_pools: Option<ResourcePools>,
+    /// Monster challenge rating and initiative bonus.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub monster_profile: Option<MonsterProfile>,
+}
+
+impl SnapshotProperties {
+    /// True when no 5e property component is present.
+    pub fn is_empty(&self) -> bool {
+        self == &Self::default()
+    }
+}
 
 /// 1 entity as the Snapshot records it: the fixed field set plus server-only fields.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -31,6 +121,9 @@ pub struct SnapshotEntity {
     /// Whether a player controls the entity. Server-only; player characters stay free to
     /// move while locked.
     pub player_character: bool,
+    /// Optional 2024 5e ECS properties attached to this entity.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub properties: Option<SnapshotProperties>,
 }
 
 /// How far perception reaches when building a Snapshot.
@@ -78,6 +171,9 @@ pub struct AiSnapshotEntity<'a> {
     pub passable: bool,
     /// 1-sentence description.
     pub description: &'a str,
+    /// Optional 2024 5e ECS property summary when attached to the entity.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub properties: Option<&'a SnapshotProperties>,
 }
 
 impl Snapshot {
@@ -156,6 +252,7 @@ impl Snapshot {
                 tags: &entity.tags,
                 passable: entity.passable,
                 description: &entity.description,
+                properties: entity.properties.as_ref(),
             })
             .collect()
     }
@@ -174,6 +271,7 @@ pub(crate) mod tests {
             passable: true,
             description: "A test entity.".into(),
             player_character: false,
+            properties: None,
         }
     }
 
@@ -255,6 +353,25 @@ pub(crate) mod tests {
                 "passable": true,
                 "description": "A test entity."
             }])
+        );
+    }
+
+    #[test]
+    fn ai_view_includes_only_attached_5e_properties() {
+        let mut actor = entity(1, 4, 2);
+        actor.properties = Some(SnapshotProperties {
+            health: Some(Health::full(18)),
+            armor_class: Some(ArmorClass::new(15)),
+            ..SnapshotProperties::default()
+        });
+        let snapshot = Snapshot::build(actor, [], |_| false, settings(0, 10));
+        let json = serde_json::to_value(snapshot.ai_view()).expect("serializes");
+        assert_eq!(
+            json[0]["properties"],
+            serde_json::json!({
+                "health": { "current": 18, "max": 18, "temporary": 0 },
+                "armor_class": { "base": 15, "damage_threshold": 0 }
+            })
         );
     }
 }

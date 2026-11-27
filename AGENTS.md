@@ -21,6 +21,7 @@ Decisions live in `docs/`; this file only points to them and records working kno
 | Code & dependency rules | `docs/architecture/code_style.md` |
 | Stack: Bevy, bevy_replicon, client modules | `docs/architecture/technical_architecture.md` |
 | AI DM loop, response schema, catalog lookup | `docs/architecture/ai_orchestration.md` |
+| 2024 5e ECS properties & ruleset lookup | `docs/architecture/entity_properties.md` |
 | Database (`sqlx`, PostgreSQL + PostGIS) | `docs/architecture/persistence.md` |
 | Continuous planet geography & cube-sphere | `docs/architecture/world_geography.md` |
 | Looking up third-party crate interfaces | `docs/architecture/library_documentation.md` |

@@ -7,7 +7,11 @@
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+use crate::catalog::{Ability, DamageType, Skill};
 use crate::protocol::inventory::CustomItem;
+use crate::protocol::properties::{
+    ActiveEffect, ClassId, ConditionId, HazardId, ResourceId, ResourceTarget, SubclassId,
+};
 
 /// Local integer identifier assigned per request in the Snapshot.
 pub type LocalId = u32;
@@ -72,7 +76,7 @@ pub struct Settle {
     reason = "each variant documents its fields with its JSON example"
 )]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
-#[serde(tag = "op", rename_all = "lowercase", deny_unknown_fields)]
+#[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
 pub enum WorldEffect {
     /// `{"op": "narrate", "text": "The rope snaps."}`
     Narrate { text: String },
@@ -136,6 +140,58 @@ pub enum WorldEffect {
         custom_name: Option<String>,
         qty: u32,
     },
+    /// `{"op": "damage", "id": 3, "amount": 8, "damage_type": "fire"}`: deals raw typed damage.
+    Damage {
+        id: LocalId,
+        amount: u16,
+        damage_type: DamageType,
+    },
+    /// `{"op": "heal", "id": 0, "amount": 6}`: restores up to `amount` hit points.
+    Heal { id: LocalId, amount: u16 },
+    /// `{"op": "temp_hp", "id": 0, "amount": 5}`: sets temporary hit points (`max(existing, amount)`).
+    TempHp { id: LocalId, amount: u16 },
+    /// `{"op": "condition", "id": 3, "add": ["prone"], "remove": [], "exhaustion_delta": 0, "add_hazards": [], "remove_hazards": []}`
+    Condition {
+        id: LocalId,
+        #[serde(default)]
+        add: Vec<ConditionId>,
+        #[serde(default)]
+        remove: Vec<ConditionId>,
+        #[serde(default)]
+        exhaustion_delta: i8,
+        #[serde(default)]
+        add_hazards: Vec<HazardId>,
+        #[serde(default)]
+        remove_hazards: Vec<HazardId>,
+    },
+    /// `{"op": "apply_effect", "id": 0, "effect": {...}, "concentrate": true}`: attaches a buff/debuff.
+    ApplyEffect {
+        id: LocalId,
+        effect: ActiveEffect,
+        #[serde(default)]
+        concentrate: bool,
+    },
+    /// `{"op": "remove_effect", "id": 0, "effect_id": "bless"}`: removes an active effect by id.
+    RemoveEffect { id: LocalId, effect_id: String },
+    /// `{"op": "spend_resource", "id": 0, "target": {...}, "amount": 1}`: spends from a pool.
+    SpendResource {
+        id: LocalId,
+        target: ResourceTarget,
+        amount: u16,
+    },
+    /// `{"op": "restore_resource", "id": 0, "target": {...}, "amount": 1}`: restores to a pool.
+    RestoreResource {
+        id: LocalId,
+        target: ResourceTarget,
+        amount: u16,
+    },
+    /// `{"op": "advance_level", "id": 0, "class": "fighter", "subclass": null}`: adds 1 class level.
+    AdvanceLevel {
+        id: LocalId,
+        class: ClassId,
+        #[serde(default)]
+        subclass: Option<SubclassId>,
+    },
 }
 
 impl WorldEffect {
@@ -152,6 +208,15 @@ impl WorldEffect {
             Self::Bubble { .. } => "bubble",
             Self::Award { .. } => "award",
             Self::Take { .. } => "take",
+            Self::Damage { .. } => "damage",
+            Self::Heal { .. } => "heal",
+            Self::TempHp { .. } => "temp_hp",
+            Self::Condition { .. } => "condition",
+            Self::ApplyEffect { .. } => "apply_effect",
+            Self::RemoveEffect { .. } => "remove_effect",
+            Self::SpendResource { .. } => "spend_resource",
+            Self::RestoreResource { .. } => "restore_resource",
+            Self::AdvanceLevel { .. } => "advance_level",
         }
     }
 
@@ -163,7 +228,16 @@ impl WorldEffect {
             | Self::Modify { id, .. }
             | Self::Destroy { id, .. }
             | Self::Award { id, .. }
-            | Self::Take { id, .. } => std::slice::from_ref(id),
+            | Self::Take { id, .. }
+            | Self::Damage { id, .. }
+            | Self::Heal { id, .. }
+            | Self::TempHp { id, .. }
+            | Self::Condition { id, .. }
+            | Self::ApplyEffect { id, .. }
+            | Self::RemoveEffect { id, .. }
+            | Self::SpendResource { id, .. }
+            | Self::RestoreResource { id, .. }
+            | Self::AdvanceLevel { id, .. } => std::slice::from_ref(id),
             Self::History { ids, .. } | Self::Bubble { ids, .. } => ids,
             Self::Narrate { .. } | Self::Spawn { .. } => &[],
         }
@@ -325,11 +399,130 @@ impl AiResolution {
                     "type": "string",
                     "enum": ["whisper", "normal", "shout"]
                 },
+                "DamageType": string_enum_schema(&DamageType::ALL.map(DamageType::as_str)),
+                "ConditionId": string_enum_schema(&ConditionId::ALL.map(ConditionId::as_str)),
+                "HazardId": string_enum_schema(&HazardId::ALL.map(HazardId::as_str)),
+                "ClassId": string_enum_schema(&ClassId::ALL.map(ClassId::as_str)),
+                "SubclassId": string_enum_schema(&SubclassId::ALL.map(SubclassId::as_str)),
+                "Ability": string_enum_schema(&Ability::ALL.map(Ability::as_str)),
+                "Skill": string_enum_schema(&Skill::ALL.map(Skill::as_str)),
+                "ResourceId": string_enum_schema(&ResourceId::ALL.map(ResourceId::as_str)),
+                "Dice": object_schema(
+                    &serde_json::json!({
+                        "count": { "type": "integer" },
+                        "sides": { "type": "integer" }
+                    }),
+                    &["count", "sides"],
+                ),
+                "StatModifier": stat_modifier_json_schema(),
+                "ActiveEffect": active_effect_json_schema(),
+                "ResourceTarget": resource_target_json_schema(),
                 "Settle": settle_json_schema(),
                 "WorldEffect": world_effect_json_schema(),
             }
         })
     }
+}
+
+fn string_enum_schema(values: &[&str]) -> serde_json::Value {
+    serde_json::json!({
+        "type": "string",
+        "enum": values,
+    })
+}
+
+fn nullable_ref(def: &str) -> serde_json::Value {
+    serde_json::json!({
+        "anyOf": [
+            { "$ref": format!("#/$defs/{def}") },
+            { "type": "null" }
+        ]
+    })
+}
+
+fn stat_modifier_json_schema() -> serde_json::Value {
+    object_schema(
+        &serde_json::json!({
+            "kind": {
+                "type": "string",
+                "enum": [
+                    "ac_bonus",
+                    "speed_bonus_ft",
+                    "roll_bonus",
+                    "advantage",
+                    "disadvantage",
+                    "ability_score_min",
+                    "ability_score_bonus",
+                    "damage_resistance",
+                    "damage_immunity",
+                    "damage_vulnerability"
+                ]
+            },
+            "value": { "type": "integer" },
+            "dice": nullable_ref("Dice"),
+            "dice_negative": { "type": "boolean" },
+            "roll_scope": {
+                "anyOf": [
+                    {
+                        "type": "string",
+                        "enum": [
+                            "all_d20_tests",
+                            "attack_rolls",
+                            "ability_checks",
+                            "saving_throws",
+                            "saving_throws_vs_magic",
+                            "concentration_saves",
+                            "initiative",
+                            "death_saves"
+                        ]
+                    },
+                    { "type": "null" }
+                ]
+            },
+            "ability": nullable_ref("Ability"),
+            "skill": nullable_ref("Skill"),
+            "damage_type": nullable_ref("DamageType")
+        }),
+        &["kind"],
+    )
+}
+
+fn active_effect_json_schema() -> serde_json::Value {
+    object_schema(
+        &serde_json::json!({
+            "id": { "type": "string" },
+            "name": { "type": "string" },
+            "source": { "type": ["string", "null"] },
+            "duration_rounds": { "type": ["integer", "null"] },
+            "modifiers": {
+                "type": "array",
+                "items": { "$ref": "#/$defs/StatModifier" }
+            }
+        }),
+        &["id", "name"],
+    )
+}
+
+fn resource_target_json_schema() -> serde_json::Value {
+    object_schema(
+        &serde_json::json!({
+            "kind": {
+                "type": "string",
+                "enum": [
+                    "spell_slot",
+                    "pact_slot",
+                    "class_pool",
+                    "feature_use",
+                    "item_charge"
+                ]
+            },
+            "spell_level": { "type": ["integer", "null"] },
+            "resource": nullable_ref("ResourceId"),
+            "feature_id": { "type": ["string", "null"] },
+            "stack_id": { "type": ["integer", "null"] }
+        }),
+        &["kind"],
+    )
 }
 
 fn object_schema(properties: &serde_json::Value, required: &[&str]) -> serde_json::Value {
@@ -412,7 +605,94 @@ fn world_effect_json_schema() -> serde_json::Value {
         ),
     ]);
     variants.extend(item_effect_schemas());
+    variants.extend(property_effect_schemas());
     serde_json::json!({ "anyOf": variants })
+}
+
+fn property_effect_schemas() -> [serde_json::Value; 9] {
+    [
+        object_schema(
+            &serde_json::json!({
+                "op": { "type": "string", "enum": ["damage"] },
+                "id": { "type": "integer" },
+                "amount": { "type": "integer" },
+                "damage_type": { "$ref": "#/$defs/DamageType" }
+            }),
+            &["op", "id", "amount", "damage_type"],
+        ),
+        object_schema(
+            &serde_json::json!({
+                "op": { "type": "string", "enum": ["heal"] },
+                "id": { "type": "integer" },
+                "amount": { "type": "integer" }
+            }),
+            &["op", "id", "amount"],
+        ),
+        object_schema(
+            &serde_json::json!({
+                "op": { "type": "string", "enum": ["temp_hp"] },
+                "id": { "type": "integer" },
+                "amount": { "type": "integer" }
+            }),
+            &["op", "id", "amount"],
+        ),
+        object_schema(
+            &serde_json::json!({
+                "op": { "type": "string", "enum": ["condition"] },
+                "id": { "type": "integer" },
+                "add": { "type": "array", "items": { "$ref": "#/$defs/ConditionId" } },
+                "remove": { "type": "array", "items": { "$ref": "#/$defs/ConditionId" } },
+                "exhaustion_delta": { "type": "integer" },
+                "add_hazards": { "type": "array", "items": { "$ref": "#/$defs/HazardId" } },
+                "remove_hazards": { "type": "array", "items": { "$ref": "#/$defs/HazardId" } }
+            }),
+            &["op", "id"],
+        ),
+        object_schema(
+            &serde_json::json!({
+                "op": { "type": "string", "enum": ["apply_effect"] },
+                "id": { "type": "integer" },
+                "effect": { "$ref": "#/$defs/ActiveEffect" },
+                "concentrate": { "type": "boolean" }
+            }),
+            &["op", "id", "effect"],
+        ),
+        object_schema(
+            &serde_json::json!({
+                "op": { "type": "string", "enum": ["remove_effect"] },
+                "id": { "type": "integer" },
+                "effect_id": { "type": "string" }
+            }),
+            &["op", "id", "effect_id"],
+        ),
+        object_schema(
+            &serde_json::json!({
+                "op": { "type": "string", "enum": ["spend_resource"] },
+                "id": { "type": "integer" },
+                "target": { "$ref": "#/$defs/ResourceTarget" },
+                "amount": { "type": "integer" }
+            }),
+            &["op", "id", "target", "amount"],
+        ),
+        object_schema(
+            &serde_json::json!({
+                "op": { "type": "string", "enum": ["restore_resource"] },
+                "id": { "type": "integer" },
+                "target": { "$ref": "#/$defs/ResourceTarget" },
+                "amount": { "type": "integer" }
+            }),
+            &["op", "id", "target", "amount"],
+        ),
+        object_schema(
+            &serde_json::json!({
+                "op": { "type": "string", "enum": ["advance_level"] },
+                "id": { "type": "integer" },
+                "class": { "$ref": "#/$defs/ClassId" },
+                "subclass": nullable_ref("SubclassId")
+            }),
+            &["op", "id", "class"],
+        ),
+    ]
 }
 
 fn item_effect_schemas() -> [serde_json::Value; 2] {
@@ -714,12 +994,50 @@ mod tests {
         assert_eq!(
             ops,
             [
-                "narrate", "speak", "move", "modify", "spawn", "destroy", "history", "bubble",
-                "award", "take"
+                "narrate",
+                "speak",
+                "move",
+                "modify",
+                "spawn",
+                "destroy",
+                "history",
+                "bubble",
+                "award",
+                "take",
+                "damage",
+                "heal",
+                "temp_hp",
+                "condition",
+                "apply_effect",
+                "remove_effect",
+                "spend_resource",
+                "restore_resource",
+                "advance_level",
             ]
         );
         for variant in variants {
             assert_eq!(variant["additionalProperties"], false);
+        }
+    }
+
+    #[test]
+    fn documented_property_effects_parse_and_match_wire_ops() {
+        let samples = [
+            r#"{"op": "damage", "id": 2, "amount": 8, "damage_type": "fire"}"#,
+            r#"{"op": "heal", "id": 0, "amount": 6}"#,
+            r#"{"op": "temp_hp", "id": 0, "amount": 5}"#,
+            r#"{"op": "condition", "id": 2, "add": ["prone"], "exhaustion_delta": 1, "add_hazards": ["burning"]}"#,
+            r#"{"op": "apply_effect", "id": 0, "effect": {"id": "bless", "name": "Bless", "source": "bless", "duration_rounds": 10, "modifiers": [{"kind": "roll_bonus", "dice": {"count": 1, "sides": 4}, "roll_scope": "attack_rolls"}]}, "concentrate": true}"#,
+            r#"{"op": "remove_effect", "id": 0, "effect_id": "bless"}"#,
+            r#"{"op": "spend_resource", "id": 0, "target": {"kind": "class_pool", "resource": "second_wind"}, "amount": 1}"#,
+            r#"{"op": "restore_resource", "id": 0, "target": {"kind": "spell_slot", "spell_level": 1}, "amount": 1}"#,
+            r#"{"op": "advance_level", "id": 0, "class": "fighter", "subclass": "champion"}"#,
+        ];
+        for raw in samples {
+            let parsed = effect(raw);
+            let value = serde_json::to_value(&parsed).expect("serializes");
+            assert_eq!(value["op"], parsed.op());
+            assert_eq!(parsed.referenced_ids().len(), 1);
         }
     }
 

@@ -4,7 +4,7 @@
 |---|---|
 | **Status** | `Draft` |
 | **Scope** | AI DM request contents, Snapshot, inspect tool, output schema, dice resolution, output validation, prompt injection, and provider interface |
-| **Last Updated** | `2026-11-22` |
+| **Last Updated** | `2026-11-26` |
 | **Decision Authority** | Game Director (Project Owner) |
 
 ---
@@ -17,7 +17,7 @@ This document defines how the server builds AI DM requests, validates and applie
 ## 1. Request Contents & Snapshot
 
 ### What
-For each Freeform Action Prompt, the server builds a **Snapshot** of every entity the acting character could plausibly perceive (line of sight plus hearing range), capped at a maximum count. Every entity in the Snapshot uses the same fixed field set: local integer identifier, name, grid position, tags, passable, and a 1-sentence description. Local integer identifiers (`0, 1, 2...`) are assigned per request.
+For each Freeform Action Prompt, the server builds a **Snapshot** of every entity the acting character could plausibly perceive (line of sight plus hearing range), capped at a maximum count. Every entity in the Snapshot uses the same fixed field set: local integer identifier, name, grid position, tags, passable, a 1-sentence description, and an optional summary of any attached 5e property components defined in [`entity_properties.md`](entity_properties.md) Section 1 (such as hit points, armor class, conditions, size, creature type, species, and class levels). Local integer identifiers (`0, 1, 2...`) are assigned per request.
 
 Besides the system prompt, the player text, and the Snapshot, every request includes exactly 2 more parts, both in fixed fields. The first is a short summary of the acting character (name, level, class, current hit points and conditions, key abilities, and carried items with the catalog entries of only those items). The second is the setting essentials (current Place name, time of day from the World Clock or Area Clock, and whether a Turn Bubble is active). Requests include no recent events, Lore, history, or full rulebooks by default, and the AI DM fetches them through the inspect tool in Section 2.
 
@@ -190,6 +190,24 @@ pub enum WorldEffect {
     /// {"op": "take", "id": 3, "item": "rope", "custom_name": null, "qty": 1}
     /// Set exactly 1 of item (a catalog id) and custom_name.
     Take { id: LocalId, item: Option<String>, custom_name: Option<String>, qty: u32 },
+    /// {"op": "damage", "id": 3, "amount": 8, "damage_type": "fire"}
+    Damage { id: LocalId, amount: u16, damage_type: DamageType },
+    /// {"op": "heal", "id": 0, "amount": 6}
+    Heal { id: LocalId, amount: u16 },
+    /// {"op": "temp_hp", "id": 0, "amount": 5}
+    TempHp { id: LocalId, amount: u16 },
+    /// {"op": "condition", "id": 3, "add": ["prone"], "remove": [], "exhaustion_delta": 0, "add_hazards": [], "remove_hazards": []}
+    Condition { id: LocalId, add: Vec<ConditionId>, remove: Vec<ConditionId>, exhaustion_delta: i8, add_hazards: Vec<HazardId>, remove_hazards: Vec<HazardId> },
+    /// {"op": "apply_effect", "id": 0, "effect": {...}, "concentrate": false}
+    ApplyEffect { id: LocalId, effect: ActiveEffect, concentrate: bool },
+    /// {"op": "remove_effect", "id": 0, "effect_id": "bless"}
+    RemoveEffect { id: LocalId, effect_id: String },
+    /// {"op": "spend_resource", "id": 0, "target": {...}, "amount": 1}
+    SpendResource { id: LocalId, target: ResourceTarget, amount: u16 },
+    /// {"op": "restore_resource", "id": 0, "target": {...}, "amount": 1}
+    RestoreResource { id: LocalId, target: ResourceTarget, amount: u16 },
+    /// {"op": "advance_level", "id": 0, "class": "fighter", "subclass": null}
+    AdvanceLevel { id: LocalId, class: ClassId, subclass: Option<SubclassId> },
 }
 
 /// Narrative-only item outside the catalog, with no combat stats or crafting recipes.

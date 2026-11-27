@@ -395,6 +395,7 @@ mod tests {
             passable: true,
             description: "An adventurer.".to_owned(),
             player_character: true,
+            properties: None,
         };
         EventCause::FreeformAction(FreeformActionCause {
             actor: EntityId(actor_id),

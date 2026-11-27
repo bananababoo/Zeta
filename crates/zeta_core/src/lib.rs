@@ -18,6 +18,7 @@ pub mod movement;
 pub mod pending_resolution;
 pub mod protocol;
 pub mod resolution;
+pub mod ruleset;
 pub mod settings;
 pub mod snapshot;
 pub mod time;

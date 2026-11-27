@@ -44,20 +44,7 @@ fn main() -> ExitCode {
         }
     };
 
-    let snapshot = Snapshot::build(
-        SnapshotEntity {
-            world_id: EntityId(1),
-            name: "Alden".to_owned(),
-            position: GridPos::new(0, 0),
-            tags: vec!["human".to_owned()],
-            passable: true,
-            description: "An adventurer standing in a stone courtyard.".to_owned(),
-            player_character: true,
-        },
-        [],
-        |_| false,
-        PerceptionSettings::default(),
-    );
+    let snapshot = sample_snapshot();
     let bounds = MapBounds {
         width: 5,
         height: 5,
@@ -123,4 +110,22 @@ fn main() -> ExitCode {
     }
 
     ExitCode::SUCCESS
+}
+
+fn sample_snapshot() -> Snapshot {
+    Snapshot::build(
+        SnapshotEntity {
+            world_id: EntityId(1),
+            name: "Alden".to_owned(),
+            position: GridPos::new(0, 0),
+            tags: vec!["human".to_owned()],
+            passable: true,
+            description: "An adventurer standing in a stone courtyard.".to_owned(),
+            player_character: true,
+            properties: None,
+        },
+        [],
+        |_| false,
+        PerceptionSettings::default(),
+    )
 }

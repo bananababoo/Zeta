@@ -261,6 +261,7 @@ mod tests {
             passable: true,
             description: "A test entity.".into(),
             player_character: false,
+            properties: None,
         }
     }
 

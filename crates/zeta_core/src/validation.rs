@@ -12,6 +12,7 @@ use thiserror::Error;
 use crate::catalog::{Catalog, CatalogId};
 use crate::grid::MapBounds;
 use crate::protocol::inventory::CustomItem;
+use crate::protocol::properties::{MAX_EXHAUSTION_LEVEL, ResourceTarget, ResourceTargetKind};
 use crate::resolution::{AiResolution, Branch, LocalId, WorldEffect};
 use crate::settings::{
     CUSTOM_ITEM_DESCRIPTION_MAX_CHARACTERS, CUSTOM_ITEM_MAX_WEIGHT_THOUSANDTHS_OF_POUND,
@@ -92,6 +93,61 @@ pub enum ValidationError {
         op: &'static str,
         /// What is wrong with the item.
         problem: ItemProblem,
+    },
+    /// A 5e property effect breaks a structural rules invariant.
+    #[error("{location} ({op}): {problem}")]
+    Property {
+        /// The effect.
+        location: EffectLocation,
+        /// The effect's `op` tag.
+        op: &'static str,
+        /// What is wrong with the property effect.
+        problem: PropertyProblem,
+    },
+}
+
+/// What is wrong with a 5e property `WorldEffect` (`docs/architecture/entity_properties.md`).
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+pub enum PropertyProblem {
+    /// A numeric amount was 0 when at least 1 is required.
+    #[error("{field} must be at least 1")]
+    ZeroAmount {
+        /// Name of the field.
+        field: &'static str,
+    },
+    /// `exhaustion_delta` exceeds the 2024 5e exhaustion range (`-6..=6`).
+    #[error("exhaustion_delta {delta} must be between -6 and 6")]
+    ExhaustionDeltaOutOfRange {
+        /// Requested delta.
+        delta: i8,
+    },
+    /// A required identifier or label was empty.
+    #[error("{field} must not be empty")]
+    EmptyText {
+        /// Name of the field.
+        field: &'static str,
+    },
+    /// A `ResourceTarget` omitted the selector required by its `kind`.
+    #[error("target must set {expected} for its resource kind")]
+    InvalidResourceTarget {
+        /// Name of the required target field.
+        expected: &'static str,
+    },
+    /// `target.spell_level` was outside `1..=9`.
+    #[error("target.spell_level {level} must be from 1 to 9")]
+    InvalidSpellLevel {
+        /// Requested spell level.
+        level: u8,
+    },
+    /// `advance_level` paired a subclass with a different class.
+    #[error("subclass \"{subclass}\" belongs to \"{expected_class}\", not \"{class}\"")]
+    SubclassMismatch {
+        /// Subclass provided.
+        subclass: &'static str,
+        /// Class provided.
+        class: &'static str,
+        /// Owning class of the subclass.
+        expected_class: &'static str,
     },
 }
 
@@ -236,12 +292,119 @@ pub fn validate(
                     problem,
                 }
             }));
+            errors.extend(property_problems(effect).into_iter().map(|problem| {
+                ValidationError::Property {
+                    location,
+                    op: effect.op(),
+                    problem,
+                }
+            }));
         }
     }
     if errors.is_empty() {
         Ok(())
     } else {
         Err(ValidationErrors(errors))
+    }
+}
+
+/// Property rule problems in 1 5e property effect; empty for every other effect.
+fn property_problems(effect: &WorldEffect) -> Vec<PropertyProblem> {
+    let mut problems = Vec::new();
+    let max_exhaustion = i8::try_from(MAX_EXHAUSTION_LEVEL).unwrap_or(6);
+    match effect {
+        WorldEffect::Damage { amount, .. }
+        | WorldEffect::Heal { amount, .. }
+        | WorldEffect::TempHp { amount, .. } => {
+            if *amount == 0 {
+                problems.push(PropertyProblem::ZeroAmount { field: "amount" });
+            }
+        }
+        WorldEffect::Condition {
+            exhaustion_delta, ..
+        } => {
+            if !(-max_exhaustion..=max_exhaustion).contains(exhaustion_delta) {
+                problems.push(PropertyProblem::ExhaustionDeltaOutOfRange {
+                    delta: *exhaustion_delta,
+                });
+            }
+        }
+        WorldEffect::ApplyEffect { effect, .. } => {
+            if effect.id.trim().is_empty() {
+                problems.push(PropertyProblem::EmptyText { field: "effect.id" });
+            }
+            if effect.name.trim().is_empty() {
+                problems.push(PropertyProblem::EmptyText {
+                    field: "effect.name",
+                });
+            }
+        }
+        WorldEffect::RemoveEffect { effect_id, .. } => {
+            if effect_id.trim().is_empty() {
+                problems.push(PropertyProblem::EmptyText { field: "effect_id" });
+            }
+        }
+        WorldEffect::SpendResource { target, amount, .. }
+        | WorldEffect::RestoreResource { target, amount, .. } => {
+            if *amount == 0 {
+                problems.push(PropertyProblem::ZeroAmount { field: "amount" });
+            }
+            problems.extend(resource_target_problem(target));
+        }
+        WorldEffect::AdvanceLevel {
+            class, subclass, ..
+        } => {
+            if let Some(sub) = subclass
+                && sub.parent_class() != *class
+            {
+                problems.push(PropertyProblem::SubclassMismatch {
+                    subclass: sub.as_str(),
+                    class: class.as_str(),
+                    expected_class: sub.parent_class().as_str(),
+                });
+            }
+        }
+        _ => {}
+    }
+    problems
+}
+
+fn resource_target_problem(target: &ResourceTarget) -> Option<PropertyProblem> {
+    match target.kind {
+        ResourceTargetKind::SpellSlot => match target.spell_level {
+            None => Some(PropertyProblem::InvalidResourceTarget {
+                expected: "spell_level",
+            }),
+            Some(level) if !(1..=9).contains(&level) => {
+                Some(PropertyProblem::InvalidSpellLevel { level })
+            }
+            Some(_) => None,
+        },
+        ResourceTargetKind::PactSlot => None,
+        ResourceTargetKind::ClassPool => {
+            target
+                .resource
+                .is_none()
+                .then_some(PropertyProblem::InvalidResourceTarget {
+                    expected: "resource",
+                })
+        }
+        ResourceTargetKind::FeatureUse => {
+            target
+                .feature_id
+                .is_none()
+                .then_some(PropertyProblem::InvalidResourceTarget {
+                    expected: "feature_id",
+                })
+        }
+        ResourceTargetKind::ItemCharge => {
+            target
+                .stack_id
+                .is_none()
+                .then_some(PropertyProblem::InvalidResourceTarget {
+                    expected: "stack_id",
+                })
+        }
     }
 }
 
@@ -579,5 +742,40 @@ mod tests {
         .to_string();
         assert_eq!(joined.lines().count(), 2);
         assert!(joined.lines().all(|line| line.starts_with("- ")));
+    }
+
+    #[test]
+    fn valid_property_effects_are_accepted() {
+        let text = with_effects(
+            r#"{"op": "damage", "id": 1, "amount": 7, "damage_type": "slashing"},
+            {"op": "heal", "id": 0, "amount": 5},
+            {"op": "temp_hp", "id": 0, "amount": 4},
+            {"op": "condition", "id": 1, "add": ["prone"], "exhaustion_delta": 1},
+            {"op": "apply_effect", "id": 0, "effect": {"id": "bless", "name": "Bless"}, "concentrate": true},
+            {"op": "remove_effect", "id": 0, "effect_id": "bless"},
+            {"op": "spend_resource", "id": 0, "target": {"kind": "class_pool", "resource": "second_wind"}, "amount": 1},
+            {"op": "restore_resource", "id": 0, "target": {"kind": "spell_slot", "spell_level": 1}, "amount": 1},
+            {"op": "advance_level", "id": 0, "class": "fighter", "subclass": "champion"}"#,
+        );
+        assert!(parse_and_validate(&text, &snapshot(), BOUNDS, Catalog::srd()).is_ok());
+    }
+
+    #[test]
+    fn invalid_property_effects_report_exact_problems() {
+        let messages = item_messages(
+            r#"{"op": "damage", "id": 1, "amount": 0, "damage_type": "fire"},
+            {"op": "condition", "id": 1, "exhaustion_delta": 9},
+            {"op": "spend_resource", "id": 0, "target": {"kind": "spell_slot", "spell_level": 10}, "amount": 1},
+            {"op": "advance_level", "id": 0, "class": "wizard", "subclass": "champion"}"#,
+        );
+        assert_eq!(
+            messages,
+            [
+                "fx[0] (damage): amount must be at least 1",
+                "fx[1] (condition): exhaustion_delta 9 must be between -6 and 6",
+                "fx[2] (spend_resource): target.spell_level 10 must be from 1 to 9",
+                "fx[3] (advance_level): subclass \"champion\" belongs to \"fighter\", not \"wizard\"",
+            ]
+        );
     }
 }

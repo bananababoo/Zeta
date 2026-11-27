@@ -3,10 +3,17 @@
 //! Rules: `docs/prototypes/realism_prototype.md` Section 1 (2 or more players share the
 //! test scene) and `docs/architecture/technical_architecture.md` Section 5.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
-use bevy_ecs::prelude::{Commands, MessageReader, MessageWriter, Query, Res, ResMut};
+use bevy_ecs::prelude::{Bundle, Commands, MessageReader, MessageWriter, Query, Res, ResMut};
+use zeta_core::catalog::{Ability, ArmorCategory, Skill, WeaponCategory};
 use zeta_core::grid::{GridPos, MapBounds};
+use zeta_core::protocol::properties::{
+    AbilityScores, ActiveEffects, ArmorClass, Background, BackgroundId, CharacterTraits, ClassId,
+    ClassLevels, CoinPurse, Concentration, Conditions, CreatureType, DeathSaves, FeatId, Health,
+    LanguageId, Proficiencies, ProficiencyLevel, RechargeSchedule, ResourceId, ResourcePool,
+    ResourcePools, RulesetId, Size, Species, SpeciesId, Speed,
+};
 use zeta_core::protocol::{Collider, Creature, PlayerAssigned, PlayerCharacter, TurnBubble};
 
 use super::inventory::starting_inventory;
@@ -68,6 +75,7 @@ pub(crate) fn connect_players(
                 Creature,
                 PlayerCharacter,
                 starting_inventory(PLAYER_STARTING_ITEMS),
+                starter_character_properties(),
             ))
             .id();
         index.0.insert(id, entity);
@@ -77,6 +85,84 @@ pub(crate) fn connect_players(
             message: PlayerAssigned { character: id },
         });
     }
+}
+
+/// Default 2024 SRD 5.2.1 Level 1 Human Soldier Fighter property bundle for new players.
+fn starter_character_properties() -> impl Bundle {
+    let mut features = BTreeSet::new();
+    for id in ["second_wind", "weapon_mastery", "fighting_style"] {
+        if let Ok(ruleset_id) = RulesetId::new(id) {
+            features.insert(ruleset_id);
+        }
+    }
+    let mut pools = ResourcePools::default();
+    pools.class_pools.insert(
+        ResourceId::SecondWind,
+        ResourcePool {
+            current: 2,
+            max: 2,
+            recharge: RechargeSchedule::ShortRest,
+        },
+    );
+    (
+        (
+            Health::full(13),
+            ArmorClass::new(16),
+            Size::Medium,
+            CreatureType::Humanoid,
+            AbilityScores {
+                strength: 16,
+                dexterity: 14,
+                constitution: 16,
+                intelligence: 10,
+                wisdom: 12,
+                charisma: 8,
+            },
+            Speed::walk_only(30),
+            Species {
+                id: SpeciesId::Human,
+            },
+            Background {
+                id: BackgroundId::Soldier,
+            },
+        ),
+        (
+            ClassLevels::single(ClassId::Fighter, 1, None),
+            Proficiencies {
+                saving_throws: BTreeSet::from([Ability::Strength, Ability::Constitution]),
+                skills: BTreeMap::from([
+                    (Skill::Athletics, ProficiencyLevel::Proficient),
+                    (Skill::Perception, ProficiencyLevel::Proficient),
+                ]),
+                armor: BTreeSet::from([
+                    ArmorCategory::Light,
+                    ArmorCategory::Medium,
+                    ArmorCategory::Heavy,
+                    ArmorCategory::Shield,
+                ]),
+                weapons: BTreeSet::from([WeaponCategory::Simple, WeaponCategory::Martial]),
+                weapon_ids: BTreeSet::new(),
+                weapon_masteries: BTreeSet::new(),
+                tools: BTreeSet::new(),
+                languages: BTreeSet::from([LanguageId::Common]),
+            },
+            CharacterTraits {
+                features,
+                feats: BTreeSet::from([FeatId::Defense]),
+                attuned_items: Vec::new(),
+                heroic_inspiration: true,
+            },
+            CoinPurse {
+                gp: 15,
+                ..CoinPurse::default()
+            },
+            Conditions::default(),
+            DeathSaves::default(),
+            Concentration::default(),
+            ActiveEffects::default(),
+            pools,
+        ),
+    )
 }
 
 /// Update system: removes a departing player's character from the world and Turn Bubbles.
