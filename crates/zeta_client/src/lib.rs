@@ -7,6 +7,7 @@ pub mod chunk_splat;
 pub mod dice;
 pub mod focus;
 pub mod frame_pacing;
+pub mod ground_clutter;
 pub mod inspect;
 pub mod inventory;
 pub mod layout;
@@ -40,6 +41,7 @@ impl PluginGroup for ClientPlugins {
             .add(player::LocalPlayerPlugin)
             .add(map::MapPlugin)
             .add(planet_stream::PlanetStreamPlugin)
+            .add(ground_clutter::GroundClutterPlugin)
             .add(movement_input::MovementInputPlugin)
             .add(prompt::FreeformActionPromptPlugin)
             .add(turn_banner::TurnBubbleBannerPlugin)
