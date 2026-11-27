@@ -18,12 +18,12 @@ use zeta_server::ai::ConfiguredProvider;
 use zeta_server::bridge::{AiBridge, AiBridgePlugin};
 use zeta_server::config::{
     ALLOW_IN_MEMORY_LOG_VARIABLE, AiConfig, DatabaseConfig, allow_in_memory_log_from_environment,
-    listen_address_from_environment,
+    debug_ai_log_from_environment, listen_address_from_environment,
 };
 use zeta_server::db::EventLogStore;
 use zeta_server::net::ServerNetPlugin;
 use zeta_server::settings::{SERVER_TICKS_PER_SECOND, TEST_SCENE_MAP_PARTITION_ID};
-use zeta_server::world::{EventLogWriter, WorldPlugin};
+use zeta_server::world::{AiDebugLogEnabled, EventLogWriter, WorldPlugin};
 
 fn main() -> ExitCode {
     let listen_address = match listen_address_from_environment() {
@@ -46,6 +46,13 @@ fn main() -> ExitCode {
     };
     let allow_in_memory = match allow_in_memory_log_from_environment() {
         Ok(allow) => allow,
+        Err(error) => {
+            eprintln!("{error}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let debug_ai_log = match debug_ai_log_from_environment() {
+        Ok(enabled) => enabled,
         Err(error) => {
             eprintln!("{error}");
             return ExitCode::FAILURE;
@@ -80,7 +87,8 @@ fn main() -> ExitCode {
     .add_plugins(AiBridgePlugin::<ConfiguredProvider>::new())
     .add_plugins(WorldPlugin::<ConfiguredProvider>::new())
     .insert_resource(bridge)
-    .insert_resource(event_log);
+    .insert_resource(event_log)
+    .insert_resource(AiDebugLogEnabled(debug_ai_log));
 
     eprintln!("Zeta server listening on {listen_address}");
     match app.run() {

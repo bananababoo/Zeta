@@ -37,14 +37,14 @@ pub(crate) const DEFEATED_TAG: &str = "defeated";
 #[derive(Component, Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Settling(pub(crate) Settle);
 
-/// Sends 1 line of the shared narration and speech log to every player.
+/// Sends 1 line of the shared narration and speech log to every player and returns its sequence.
 pub(crate) fn broadcast_line(
     world: &mut World,
     kind: LogEntryKind,
     speaker: Option<EntityId>,
     text: String,
     vol: Option<Volume>,
-) {
+) -> u64 {
     let speaker_name = speaker.and_then(|id| live_name(world, id));
     let sequence = world.resource_mut::<LogSequence>().next();
     world.write_message(ToPlayers {
@@ -58,6 +58,7 @@ pub(crate) fn broadcast_line(
             vol,
         },
     });
+    sequence
 }
 
 /// The display name of a world entity now.
@@ -73,6 +74,8 @@ pub(crate) struct AppliedEffects {
     pub(crate) spawned: Vec<EntityId>,
     /// Items gained and lost.
     pub(crate) items: Vec<ItemChange>,
+    /// Log sequence numbers emitted by `Narrate` and `Speak` effects.
+    pub(crate) log_sequences: Vec<u64>,
 }
 
 /// Applies `effects` in order and returns what they spawned and which items changed hands.
@@ -101,30 +104,37 @@ fn apply_effect(
     let spawned = &mut applied.spawned;
     match effect {
         WorldEffect::Narrate { text } => {
-            broadcast_line(world, LogEntryKind::Narration, None, text.clone(), None);
+            let seq = broadcast_line(world, LogEntryKind::Narration, None, text.clone(), None);
+            applied.log_sequences.push(seq);
         }
         WorldEffect::Speak { id, text, vol } => {
             if let Some(speaker) = world_id(snapshot, *id) {
-                broadcast_line(
+                let seq = broadcast_line(
                     world,
                     LogEntryKind::Speech,
                     Some(speaker),
                     text.clone(),
                     Some(*vol),
                 );
+                applied.log_sequences.push(seq);
             }
         }
         WorldEffect::Move { id, x, y, .. } => {
-            let in_bounds = world
-                .get_resource::<MapBounds>()
-                .is_some_and(|bounds| bounds.contains(*x, *y));
-            if in_bounds {
+            let world_pos = snapshot.to_world_pos(*x, *y);
+            let in_bounds = world_pos.is_some_and(|pos| {
+                world
+                    .get_resource::<MapBounds>()
+                    .is_some_and(|bounds| bounds.contains(pos.x, pos.y))
+            });
+            if let Some(pos) = world_pos
+                && in_bounds
+            {
                 with_component::<GridPos>(world, snapshot, *id, |position| {
-                    *position = GridPos::new(*x, *y);
+                    *position = pos;
                 });
             } else {
                 eprintln!(
-                    "warning: skipped out-of-bounds move effect for local id {id} to ({x}, {y})"
+                    "warning: skipped out-of-bounds move effect for local id {id} to local ({x}, {y})"
                 );
             }
         }
@@ -168,10 +178,16 @@ fn apply_effect(
             visual,
             settle,
         } => {
+            let Some(position) = snapshot.to_world_pos(*x, *y) else {
+                eprintln!(
+                    "warning: skipped spawn effect for \"{name}\" at overflowing local ({x}, {y})"
+                );
+                return;
+            };
             let id = world.resource_mut::<NextEntityId>().allocate();
             let spec = EntitySpec {
                 name: name.clone(),
-                position: GridPos::new(*x, *y),
+                position,
                 visual: visual.clone(),
                 tags: tags.clone(),
                 passable: *passable,

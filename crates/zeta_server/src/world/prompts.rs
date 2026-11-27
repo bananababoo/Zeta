@@ -20,8 +20,8 @@ use zeta_core::grid::{GridPos, MapBounds};
 use zeta_core::item_rules::{display_name, items_summary, utilize_checks};
 use zeta_core::pending_resolution::{Admission, PromptTicket};
 use zeta_core::protocol::{
-    DiceRollShown, FreeformActionPrompt, Inventory, LogEntryKind, PromptState, PromptStatusUpdate,
-    StackId,
+    AiResolutionDebug, DiceRollShown, FreeformActionPrompt, Inventory, LogEntryKind, PromptState,
+    PromptStatusUpdate, StackId,
 };
 use zeta_core::resolution::{AiResolution, CheckRoll};
 use zeta_core::settings::VALIDATION_RETRY_CAP;
@@ -31,7 +31,8 @@ use super::effects::{apply_effects, broadcast_line};
 use super::scene::TEST_SCENE_PLACE_NAME;
 use super::snapshot::{build_snapshot, live_position};
 use super::{
-    DiceRoller, EntityIndex, EventLogWriter, LogSequence, PlayerCharacters, notice, turn_bubble,
+    AiDebugLogEnabled, DiceRoller, EntityIndex, EventLogWriter, LogSequence, PlayerCharacters,
+    notice, turn_bubble,
 };
 use crate::bridge::{
     AiBridge, BridgeFailure, CompletedAiResolutions, CompletedResolution, ResolutionJob,
@@ -544,8 +545,8 @@ fn apply(world: &mut World, record: &PromptRecord, snapshot: Snapshot, resolved:
         resolution,
         exchanges,
     } = resolved;
-    let roll = match &resolution.chk {
-        None => None,
+    let (roll, roll_sequence) = match &resolution.chk {
+        None => (None, None),
         Some(check) => {
             let natural = match world.resource_mut::<DiceRoller>().0.roll() {
                 Ok(natural) => natural,
@@ -572,7 +573,7 @@ fn apply(world: &mut World, record: &PromptRecord, snapshot: Snapshot, resolved:
                     success: roll.meets(check.dc),
                 },
             });
-            Some(roll)
+            (Some(roll), Some(sequence))
         }
     };
     let branch = match resolution.branch(roll) {
@@ -588,6 +589,16 @@ fn apply(world: &mut World, record: &PromptRecord, snapshot: Snapshot, resolved:
     };
     let effects = resolution.effects(branch).to_vec();
     let applied = apply_effects(world, &snapshot, &effects);
+    broadcast_ai_debug(
+        world,
+        record,
+        &snapshot,
+        roll,
+        roll_sequence,
+        branch,
+        &resolution,
+        &applied.log_sequences,
+    );
     if resolution.ok {
         send_status(world, record.connection, PromptState::Applied, None);
     } else {
@@ -617,6 +628,53 @@ fn apply(world: &mut World, record: &PromptRecord, snapshot: Snapshot, resolved:
     world
         .resource_mut::<EventLogWriter>()
         .record(position, cause, change);
+}
+
+/// Sends pretty-printed AI DM resolution debug JSON when `ZETA_DEBUG_AI_LOG=1` is enabled.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "helper formats the resolution audit record from apply()'s local values"
+)]
+fn broadcast_ai_debug(
+    world: &mut World,
+    record: &PromptRecord,
+    snapshot: &Snapshot,
+    roll: Option<CheckRoll>,
+    roll_sequence: Option<u64>,
+    branch: zeta_core::resolution::Branch,
+    resolution: &AiResolution,
+    log_sequences: &[u64],
+) {
+    if !world
+        .get_resource::<AiDebugLogEnabled>()
+        .is_some_and(|enabled| enabled.0)
+    {
+        return;
+    }
+    let mut sequences = Vec::with_capacity(log_sequences.len() + 1);
+    if let Some(seq) = roll_sequence {
+        sequences.push(seq);
+    }
+    sequences.extend(log_sequences);
+    if sequences.is_empty() {
+        return;
+    }
+    if let Ok(payload_json) = serde_json::to_string_pretty(&json!({
+        "player_action": &record.text,
+        "snapshot_origin": snapshot.origin(),
+        "snapshot": snapshot.ai_view(),
+        "roll": roll,
+        "branch": branch,
+        "resolution": resolution,
+    })) {
+        world.write_message(ToPlayers {
+            recipients: Recipients::All,
+            message: AiResolutionDebug {
+                sequences,
+                payload_json,
+            },
+        });
+    }
 }
 
 /// Rejects a prompt with its exact failure reason, then ends it.

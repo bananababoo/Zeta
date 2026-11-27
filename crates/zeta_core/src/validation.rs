@@ -552,16 +552,17 @@ fn check_effect(
             });
         }
     }
+    let local_bounds = snapshot.local_bounds(bounds);
     if let Some((x, y)) = effect.target_square()
-        && !bounds.contains(x, y)
+        && !local_bounds.contains(x, y)
     {
         errors.push(ValidationError::OutOfBounds {
             location,
             op: effect.op(),
             x,
             y,
-            width: bounds.width,
-            height: bounds.height,
+            width: local_bounds.width,
+            height: local_bounds.height,
         });
     }
 }

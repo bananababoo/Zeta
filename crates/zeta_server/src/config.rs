@@ -45,6 +45,10 @@ pub const LISTEN_ADDRESS_VARIABLE: &str = "ZETA_LISTEN_ADDRESS";
 /// PostgreSQL is unavailable (`docs/architecture/persistence.md` Section 1).
 pub const ALLOW_IN_MEMORY_LOG_VARIABLE: &str = "ZETA_ALLOW_IN_MEMORY_LOG";
 
+/// Environment variable that sends AI DM resolution debug JSON to connected clients so
+/// clicking an AI narration or speech line copies the raw resolution payload to the clipboard.
+pub const DEBUG_AI_LOG_VARIABLE: &str = "ZETA_DEBUG_AI_LOG";
+
 const DEFAULT_POSTGRES_HOST: &str = "127.0.0.1";
 const DEFAULT_POSTGRES_PORT: u16 = 5432;
 
@@ -124,15 +128,39 @@ pub fn allow_in_memory_log_from_environment() -> Result<bool, ConfigError> {
 pub fn allow_in_memory_log_from_lookup(
     lookup: impl Fn(&'static str) -> Result<String, VarError>,
 ) -> Result<bool, ConfigError> {
-    match optional_variable(&lookup, ALLOW_IN_MEMORY_LOG_VARIABLE)? {
+    boolean_variable(lookup, ALLOW_IN_MEMORY_LOG_VARIABLE)
+}
+
+/// Reads whether [`DEBUG_AI_LOG_VARIABLE`] enables sending AI resolution debug JSON to
+/// clients, defaulting to `false`.
+///
+/// # Errors
+/// [`ConfigError`] if the variable is set but not Unicode or not a valid boolean flag.
+pub fn debug_ai_log_from_environment() -> Result<bool, ConfigError> {
+    let dotenv = load_dotenv_file();
+    debug_ai_log_from_lookup(|variable| lookup_with_dotenv(&dotenv, variable))
+}
+
+/// Reads [`DEBUG_AI_LOG_VARIABLE`] through `lookup`.
+///
+/// # Errors
+/// [`ConfigError`] if the variable is set but not Unicode or not a valid boolean flag.
+pub fn debug_ai_log_from_lookup(
+    lookup: impl Fn(&'static str) -> Result<String, VarError>,
+) -> Result<bool, ConfigError> {
+    boolean_variable(lookup, DEBUG_AI_LOG_VARIABLE)
+}
+
+fn boolean_variable(
+    lookup: impl Fn(&'static str) -> Result<String, VarError>,
+    variable: &'static str,
+) -> Result<bool, ConfigError> {
+    match optional_variable(&lookup, variable)? {
         None => Ok(false),
         Some(value) => match value.to_ascii_lowercase().as_str() {
             "1" | "true" | "yes" => Ok(true),
             "0" | "false" | "no" => Ok(false),
-            _ => Err(ConfigError::InvalidBoolean {
-                variable: ALLOW_IN_MEMORY_LOG_VARIABLE,
-                value,
-            }),
+            _ => Err(ConfigError::InvalidBoolean { variable, value }),
         },
     }
 }

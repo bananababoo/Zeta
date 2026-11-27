@@ -35,6 +35,11 @@ pub use scene::{RIVER_CROSSING_ORIGIN, TEST_SCENE_BOUNDS, TEST_SCENE_PLACE_NAME}
 #[cfg(doc)]
 use crate::net::messages::Networked;
 
+/// Enables sending pretty-printed AI DM resolution debug JSON to connected clients
+/// (`ZETA_DEBUG_AI_LOG=1`). Off by default.
+#[derive(Resource, Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct AiDebugLogEnabled(pub bool);
+
 /// Adds the server world: the test scene, player characters, movement, Freeform Action
 /// Prompts resolved through the AI DM bridge for provider `P`, and Turn Bubbles.
 ///
@@ -74,6 +79,7 @@ impl<P: AiProvider + Send + Sync + 'static> Plugin for WorldPlugin<P> {
             .init_resource::<prompts::IncomingPrompts>()
             .init_resource::<DiceRoller>()
             .init_resource::<EventLogWriter>()
+            .init_resource::<AiDebugLogEnabled>()
             .init_resource::<inventory::IncomingItemVerbs>()
             .add_systems(Startup, scene::spawn_test_scene)
             .add_systems(
@@ -217,9 +223,10 @@ mod tests {
     use zeta_core::event_log::{ItemChange, ItemChangeKind};
     use zeta_core::grid::{GridPos, MapBounds};
     use zeta_core::protocol::{
-        Collider, DiceRollShown, EndTurnRequest, EntityName, FreeformActionPrompt, Inventory, Item,
-        ItemStack, ItemVerb, ItemVerbRequest, MapArea, MoveRequest, PlayerAssigned,
-        PlayerCharacter, PromptState, PromptStatusUpdate, StackId, Tags, TurnBubble, Visual,
+        AiResolutionDebug, Collider, DiceRollShown, EndTurnRequest, EntityName,
+        FreeformActionPrompt, Inventory, Item, ItemStack, ItemVerb, ItemVerbRequest, MapArea,
+        MoveRequest, PlayerAssigned, PlayerCharacter, PromptState, PromptStatusUpdate, StackId,
+        Tags, TurnBubble, Visual,
     };
     use zeta_core::resolution::{D20, Volume};
     use zeta_core::snapshot::Snapshot;
@@ -238,6 +245,7 @@ mod tests {
         lines: Vec<ToPlayers<NarrationLogEntry>>,
         rolls: Vec<ToPlayers<DiceRollShown>>,
         statuses: Vec<ToPlayers<PromptStatusUpdate>>,
+        debug: Vec<ToPlayers<AiResolutionDebug>>,
     }
 
     impl Sent {
@@ -262,11 +270,13 @@ mod tests {
         mut lines: MessageReader<ToPlayers<NarrationLogEntry>>,
         mut rolls: MessageReader<ToPlayers<DiceRollShown>>,
         mut statuses: MessageReader<ToPlayers<PromptStatusUpdate>>,
+        mut debug: MessageReader<ToPlayers<AiResolutionDebug>>,
     ) {
         sent.assigned.extend(assigned.read().cloned());
         sent.lines.extend(lines.read().cloned());
         sent.rolls.extend(rolls.read().cloned());
         sent.statuses.extend(statuses.read().cloned());
+        sent.debug.extend(debug.read().cloned());
     }
 
     fn face(value: u8) -> D20 {
@@ -606,22 +616,27 @@ mod tests {
             [barrel, goblin, bridge].map(|id| local_id(&snapshot, id));
         let goblin_dest = scene::river_crossing_pos(14, 10);
         let smoke_pos = scene::river_crossing_pos(7, 9);
+        let (goblin_local_x, goblin_local_y) = snapshot
+            .to_local_pos(goblin_dest)
+            .expect("goblin dest fits inside snapshot local frame");
+        let (smoke_local_x, smoke_local_y) = snapshot
+            .to_local_pos(smoke_pos)
+            .expect("smoke pos fits inside snapshot local frame");
         let response = format!(
             r#"{{"ok": true, "chk": null, "fail": [], "fx": [
             {{"op": "narrate", "text": "Flames leap up."}},
             {{"op": "speak", "id": {goblin_local}, "text": "Fire!", "vol": "shout"}},
-            {{"op": "move", "id": {goblin_local}, "x": {}, "y": {}, "style": "runs"}},
+            {{"op": "move", "id": {goblin_local}, "x": {goblin_local_x}, "y": {goblin_local_y}, "style": "runs"}},
             {{"op": "modify", "id": {barrel_local}, "add": ["burning"], "passable": true,
               "visual": "A burning barrel.",
               "settle": {{"minutes": 5, "add": ["charred"], "remove": ["burning"]}}}},
-            {{"op": "spawn", "name": "Smoke", "x": {}, "y": {}, "passable": true,
+            {{"op": "spawn", "name": "Smoke", "x": {smoke_local_x}, "y": {smoke_local_y}, "passable": true,
               "tags": ["obscuring"], "visual": "Thick grey smoke."}},
             {{"op": "destroy", "id": {bridge_local}, "reason": "burned away"}},
             {{"op": "history", "ids": [{barrel_local}], "summary": "The barrel burned.",
               "preserved": false}},
             {{"op": "bubble", "active": true, "ids": [0, {goblin_local}]}}
-            ]}}"#,
-            goblin_dest.x, goblin_dest.y, smoke_pos.x, smoke_pos.y
+            ]}}"#
         );
         let first = exchange(&mut app, character, "I light the barrel.", &response);
         replay(&mut app, vec![first]);
@@ -1452,5 +1467,43 @@ mod tests {
         assert!(goblin_conds.active.contains(&ConditionId::Prone));
         assert!(goblin_conds.active.contains(&ConditionId::Exhaustion));
         assert_eq!(goblin_conds.exhaustion_level, 2);
+    }
+
+    #[test]
+    fn ai_debug_log_flag_controls_sending_resolution_debug_payloads() {
+        let mut app = test_app(&[10]);
+        let (connection, character) = connect(&mut app);
+        let narrate = r#"{"ok": true, "chk": null, "fx": [{"op": "narrate", "text": "The barrel rolls east."}], "fail": []}"#;
+        let first = exchange(&mut app, character, "I push the barrel.", narrate);
+        replay(&mut app, vec![first]);
+        prompt(&mut app, connection, "I push the barrel.");
+        run_until(&mut app, |world| finished_count(world, connection) == 1);
+        assert_eq!(app.world().resource::<Sent>().debug, Vec::new());
+
+        app.insert_resource(AiDebugLogEnabled(true));
+        let second = exchange(&mut app, character, "I push it again.", narrate);
+        replay(&mut app, vec![second]);
+        prompt(&mut app, connection, "I push it again.");
+        run_until(&mut app, |world| finished_count(world, connection) == 2);
+
+        let sent = app.world().resource::<Sent>();
+        assert_eq!(sent.debug.len(), 1);
+        let debug_msg = &sent.debug[0].message;
+        let narration_seq = sent
+            .lines
+            .iter()
+            .rev()
+            .find(|line| line.message.kind == LogEntryKind::Narration)
+            .expect("narration line")
+            .message
+            .sequence;
+        assert_eq!(debug_msg.sequences, vec![narration_seq]);
+        let parsed: serde_json::Value =
+            serde_json::from_str(&debug_msg.payload_json).expect("valid debug JSON");
+        assert_eq!(parsed["player_action"], "I push it again.");
+        assert_eq!(
+            parsed["resolution"]["fx"][0]["text"],
+            "The barrel rolls east."
+        );
     }
 }

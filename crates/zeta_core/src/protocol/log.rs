@@ -60,6 +60,17 @@ pub struct DiceRollShown {
     pub success: bool,
 }
 
+/// Server to clients (only when `ZETA_DEBUG_AI_LOG=1`): debug JSON for 1 AI DM resolution,
+/// linked to every narration, speech, and dice roll sequence it produced.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "bevy", derive(bevy_ecs::prelude::Message))]
+pub struct AiResolutionDebug {
+    /// Log sequence numbers (`NarrationLogEntry` and `DiceRollShown`) produced by this action.
+    pub sequences: Vec<u64>,
+    /// Pretty-printed JSON holding the prompt, Snapshot, roll, and AI DM resolution.
+    pub payload_json: String,
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::assert_json_round_trip;

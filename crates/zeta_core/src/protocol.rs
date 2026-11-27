@@ -31,7 +31,7 @@ pub use inventory::{
     CustomItem, InvalidItemStack, Inventory, InventoryError, Item, ItemStack, ItemVerb,
     ItemVerbRequest, StackId,
 };
-pub use log::{DiceRollShown, LogEntryKind, NarrationLogEntry};
+pub use log::{AiResolutionDebug, DiceRollShown, LogEntryKind, NarrationLogEntry};
 pub use properties::{
     AbilityScores, ActiveEffect, ActiveEffects, ArmorClass, Background, BackgroundId, CharacterBio,
     CharacterTraits, ClassId, ClassLevelEntry, ClassLevels, CoinPurse, Concentration, ConditionId,
@@ -128,6 +128,7 @@ pub fn register_protocol(registrar: &mut impl ProtocolRegistrar) {
     registrar.component::<ActiveEffects>();
     registrar.component::<ResourcePools>();
     registrar.component::<MonsterProfile>();
+    registrar.server_message::<AiResolutionDebug>(Delivery::Ordered);
 }
 
 /// Shared by the submodule tests: serializes to JSON and back, and expects the same value.
@@ -232,6 +233,7 @@ mod tests {
                 "component ActiveEffects",
                 "component ResourcePools",
                 "component MonsterProfile",
+                "server AiResolutionDebug Ordered",
             ]
         );
     }

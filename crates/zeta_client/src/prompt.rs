@@ -221,7 +221,8 @@ pub fn prompt_status_text(status: Option<&PromptStatusUpdate>) -> String {
     match (status.state, status.reason.as_deref()) {
         (PromptState::Resolving, _) => "The AI DM is resolving your action.".to_owned(),
         (PromptState::Queued, _) => "Your action waits for another action to resolve.".to_owned(),
-        (PromptState::Applied, _) => "Your action was resolved.".to_owned(),
+        (PromptState::Applied, Some(reason)) => reason.to_owned(),
+        (PromptState::Applied, None) => "Your action was resolved.".to_owned(),
         (PromptState::Rejected, Some(reason)) => format!("Your action was rejected: {reason}"),
         (PromptState::Rejected, None) => "Your action was rejected.".to_owned(),
     }

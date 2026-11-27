@@ -9,7 +9,7 @@ use std::collections::BTreeSet;
 use serde::{Deserialize, Serialize};
 
 use crate::entity::EntityId;
-use crate::grid::{GridPos, has_line_of_sight};
+use crate::grid::{GridPos, MapBounds, has_line_of_sight};
 use crate::protocol::properties::{
     AbilityScores, ActiveEffects, ArmorClass, BackgroundId, CharacterBio, CharacterTraits,
     ClassLevels, CoinPurse, Concentration, ConditionImmunities, Conditions, CreatureType,
@@ -144,13 +144,33 @@ impl Default for PerceptionSettings {
     }
 }
 
+/// Padding in squares around the Snapshot's perceived entities when computing the local
+/// coordinate origin and local validation window on large (planetary) maps.
+const LOCAL_ORIGIN_PADDING_SQUARES: u32 = 10;
+/// Maps whose width and height are both at most this many squares keep origin `(0, 0)` and
+/// validate against the full map bounds directly.
+const DIRECT_COORDINATE_MAX_EXTENT: u32 = 128;
+/// Minimum local validation window width and height on planetary maps.
+const MIN_LOCAL_WINDOW_EXTENT: u32 = 40;
+
 /// The entities sent to the AI DM with 1 Freeform Action Prompt.
 ///
-/// The position of an entity in the list is its [`LocalId`]. Recorded in the Event Log, so
-/// any stored effect can be traced back to the entity it named.
+/// The position of an entity in the list is its [`LocalId`]. On large planetary maps,
+/// coordinates exposed to the AI DM via [`Self::ai_view`] are shifted by [`Self::origin`] so
+/// the model works with small 2-digit integers instead of 7-digit planetary coordinates, and
+/// `move`/`spawn` effects are validated against the local window before translating back to
+/// world coordinates via [`Self::to_world_pos`]. Recorded in the Event Log, so any stored
+/// effect can be traced back to the entity and world square it named.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Snapshot {
     entities: Vec<SnapshotEntity>,
+    /// World square corresponding to local coordinate `(0, 0)` in [`Self::ai_view`].
+    #[serde(default = "default_origin")]
+    origin: GridPos,
+}
+
+const fn default_origin() -> GridPos {
+    GridPos::new(0, 0)
 }
 
 /// 1 entity in the form the AI DM receives: the fixed field set from
@@ -206,7 +226,75 @@ impl Snapshot {
         let mut entities = Vec::with_capacity(perceived.len() + 1);
         entities.push(actor);
         entities.extend(perceived);
-        Self { entities }
+        let origin = compute_local_origin(&entities);
+        Self { entities, origin }
+    }
+
+    /// World square corresponding to local `(0, 0)` in [`Self::ai_view`].
+    pub const fn origin(&self) -> GridPos {
+        self.origin
+    }
+
+    /// Translates a world square into Snapshot-local coordinates, if inside the shifted frame.
+    pub const fn to_local_pos(&self, world: GridPos) -> Option<(u32, u32)> {
+        let Some(x) = world.x.checked_sub(self.origin.x) else {
+            return None;
+        };
+        let Some(y) = world.y.checked_sub(self.origin.y) else {
+            return None;
+        };
+        Some((x, y))
+    }
+
+    /// Translates Snapshot-local coordinates from an AI DM effect back to a world [`GridPos`].
+    pub const fn to_world_pos(&self, local_x: u32, local_y: u32) -> Option<GridPos> {
+        let Some(x) = self.origin.x.checked_add(local_x) else {
+            return None;
+        };
+        let Some(y) = self.origin.y.checked_add(local_y) else {
+            return None;
+        };
+        Some(GridPos::new(x, y))
+    }
+
+    /// Valid local coordinate bounds for `move` and `spawn` effects against `world_bounds`.
+    ///
+    /// Small maps (at most `128x128` at origin `(0, 0)`) return `world_bounds` directly.
+    /// Large planetary maps bound effects to a tight window around the Snapshot's entities so
+    /// coordinate transcription typos are rejected and retried instead of teleporting entities
+    /// across the planet.
+    pub fn local_bounds(&self, world_bounds: MapBounds) -> MapBounds {
+        if self.origin == GridPos::new(0, 0)
+            && world_bounds.width <= DIRECT_COORDINATE_MAX_EXTENT
+            && world_bounds.height <= DIRECT_COORDINATE_MAX_EXTENT
+        {
+            return world_bounds;
+        }
+        let max_local_x = self
+            .entities
+            .iter()
+            .map(|entity| entity.position.x.saturating_sub(self.origin.x))
+            .max()
+            .unwrap_or(0);
+        let max_local_y = self
+            .entities
+            .iter()
+            .map(|entity| entity.position.y.saturating_sub(self.origin.y))
+            .max()
+            .unwrap_or(0);
+        let avail_w = world_bounds.width.saturating_sub(self.origin.x);
+        let avail_h = world_bounds.height.saturating_sub(self.origin.y);
+        let width = max_local_x
+            .saturating_add(LOCAL_ORIGIN_PADDING_SQUARES)
+            .saturating_add(1)
+            .max(MIN_LOCAL_WINDOW_EXTENT)
+            .min(avail_w);
+        let height = max_local_y
+            .saturating_add(LOCAL_ORIGIN_PADDING_SQUARES)
+            .saturating_add(1)
+            .max(MIN_LOCAL_WINDOW_EXTENT)
+            .min(avail_h);
+        MapBounds { width, height }
     }
 
     /// Number of entities, including the acting character.
@@ -239,7 +327,7 @@ impl Snapshot {
         &self.entities
     }
 
-    /// The Snapshot as the AI DM receives it.
+    /// The Snapshot as the AI DM receives it (coordinates shifted by [`Self::origin`]).
     pub fn ai_view(&self) -> Vec<AiSnapshotEntity<'_>> {
         // `build` caps the Snapshot at `LocalId::MAX` entities, so the range never runs out.
         (0..LocalId::MAX)
@@ -247,8 +335,8 @@ impl Snapshot {
             .map(|(id, entity)| AiSnapshotEntity {
                 id,
                 name: &entity.name,
-                x: entity.position.x,
-                y: entity.position.y,
+                x: entity.position.x.saturating_sub(self.origin.x),
+                y: entity.position.y.saturating_sub(self.origin.y),
                 tags: &entity.tags,
                 passable: entity.passable,
                 description: &entity.description,
@@ -256,6 +344,22 @@ impl Snapshot {
             })
             .collect()
     }
+}
+
+/// Keeps origin `(0, 0)` when all Snapshot entities already live near the world origin;
+/// shifts planetary coordinates so the AI DM sees small 2-digit coordinates.
+fn compute_local_origin(entities: &[SnapshotEntity]) -> GridPos {
+    let max_x = entities.iter().map(|e| e.position.x).max().unwrap_or(0);
+    let max_y = entities.iter().map(|e| e.position.y).max().unwrap_or(0);
+    if max_x < DIRECT_COORDINATE_MAX_EXTENT && max_y < DIRECT_COORDINATE_MAX_EXTENT {
+        return GridPos::new(0, 0);
+    }
+    let min_x = entities.iter().map(|e| e.position.x).min().unwrap_or(0);
+    let min_y = entities.iter().map(|e| e.position.y).min().unwrap_or(0);
+    GridPos::new(
+        min_x.saturating_sub(LOCAL_ORIGIN_PADDING_SQUARES),
+        min_y.saturating_sub(LOCAL_ORIGIN_PADDING_SQUARES),
+    )
 }
 
 #[cfg(test)]
@@ -373,5 +477,29 @@ pub(crate) mod tests {
                 "armor_class": { "base": 15, "damage_threshold": 0 }
             })
         );
+    }
+
+    #[test]
+    fn planetary_coordinates_shift_into_small_local_window_and_round_trip() {
+        let actor = entity(1, 1_819_652, 318_474);
+        let barrel = entity(2, 1_819_656, 318_473);
+        let snapshot = Snapshot::build(actor, [barrel], |_| false, settings(10, 20));
+        assert_eq!(snapshot.origin(), GridPos::new(1_819_642, 318_463));
+
+        let view = snapshot.ai_view();
+        assert_eq!((view[0].x, view[0].y), (10, 11));
+        assert_eq!((view[1].x, view[1].y), (14, 10));
+        assert_eq!(
+            snapshot.to_world_pos(view[1].x, view[1].y),
+            Some(GridPos::new(1_819_656, 318_473))
+        );
+
+        let face = MapBounds {
+            width: 2_097_152,
+            height: 2_097_152,
+        };
+        let local = snapshot.local_bounds(face);
+        assert!(local.contains(15, 10));
+        assert!(!local.contains(1_819_656, 1_819_656));
     }
 }

@@ -4,6 +4,10 @@
 //! Rules: `docs/prototypes/realism_prototype.md` and `docs/architecture/technical_architecture.md`
 //! Section 5. Dice rolls share the log sequence, so they appear as log lines in order too.
 
+use std::collections::BTreeMap;
+use std::io::Write;
+use std::process::{Command, Stdio};
+
 use bevy::input::mouse::{MouseScrollUnit, MouseWheel};
 use bevy::prelude::*;
 use bevy::sprite::Anchor;
@@ -12,13 +16,17 @@ use bevy::ui::UiGlobalTransform;
 use bevy::window::PrimaryWindow;
 use zeta_core::entity::EntityId;
 use zeta_core::grid::GridPos;
-use zeta_core::protocol::{DiceRollShown, EntityName, LogEntryKind, NarrationLogEntry};
+use zeta_core::protocol::{
+    AiResolutionDebug, DiceRollShown, EntityName, LogEntryKind, NarrationLogEntry, PromptState,
+    PromptStatusUpdate,
+};
 use zeta_core::resolution::Volume;
 
-use crate::focus::{UiPanel, cursor_is_over_any};
+use crate::focus::{UiClickConsumed, UiClickUpdate, UiPanel, cursor_is_over, cursor_is_over_any};
 use crate::layout::{FloatingOrigin, square_center_at, tile_point_at};
 use crate::map::VisualTilePos;
 use crate::planet_stream::PlanetFocusSync;
+use crate::prompt::LatestPromptStatus;
 use crate::settings::ClientSettings;
 use crate::theme::{SPEECH_BUBBLE_COLOR, TEXT_ON_PARCHMENT, UiTheme};
 
@@ -115,11 +123,23 @@ pub fn roll_text(roll: &DiceRollShown, actor_name: Option<&str>) -> String {
     )
 }
 
+/// Debug JSON payloads keyed by log sequence number, populated only when the server runs
+/// with `ZETA_DEBUG_AI_LOG=1`. Clicking a matching log line copies its payload to the clipboard.
+#[derive(Resource, Clone, Debug, Default, PartialEq, Eq)]
+pub struct AiDebugPayloads(pub BTreeMap<u64, String>);
+
+/// Marks 1 clickable row of the scrolling log panel, linked to its server log sequence.
+#[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct NarrationLogLine {
+    /// Server log sequence number of this line.
+    pub sequence: u64,
+}
+
 /// Marks the scrolling log panel.
 #[derive(Component, Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct NarrationLogPanel;
 
-/// Marks the log text.
+/// Marks 1 log line's text node.
 #[derive(Component, Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct NarrationLogText;
 
@@ -141,12 +161,15 @@ impl Plugin for NarrationLogPlugin {
         app.init_resource::<ClientSettings>()
             .init_resource::<FloatingOrigin>()
             .init_resource::<NarrationLog>()
+            .init_resource::<AiDebugPayloads>()
+            .init_resource::<UiClickConsumed>()
             .init_resource::<UiTheme>()
             .add_systems(Startup, spawn_log_panel)
+            .add_systems(Update, click_ai_debug_line.in_set(UiClickUpdate))
             .add_systems(
                 Update,
                 (
-                    (record_entries, record_rolls),
+                    (record_entries, record_rolls, record_ai_debug),
                     show_log,
                     scroll_log,
                     spawn_speech_bubbles,
@@ -163,30 +186,24 @@ impl Plugin for NarrationLogPlugin {
     reason = "Bevy system parameters are passed by value"
 )]
 fn spawn_log_panel(mut commands: Commands, theme: Res<UiTheme>) {
-    commands
-        .spawn((
-            NarrationLogPanel,
-            UiPanel,
-            Node {
-                position_type: PositionType::Absolute,
-                top: Val::Px(8.0),
-                right: Val::Px(8.0),
-                bottom: Val::Px(104.0),
-                width: Val::Percent(28.0),
-                flex_direction: FlexDirection::Column,
-                padding: UiRect::all(Val::Px(14.0)),
-                overflow: Overflow::scroll_y(),
-                ..default()
-            },
-            ScrollPosition::default(),
-            theme.parchment_panel(),
-        ))
-        .with_child((
-            NarrationLogText,
-            Text::new(""),
-            theme.narration_font(LOG_FONT_SIZE),
-            TextColor(TEXT_ON_PARCHMENT),
-        ));
+    commands.spawn((
+        NarrationLogPanel,
+        UiPanel,
+        Node {
+            position_type: PositionType::Absolute,
+            top: Val::Px(8.0),
+            right: Val::Px(8.0),
+            bottom: Val::Px(104.0),
+            width: Val::Percent(28.0),
+            flex_direction: FlexDirection::Column,
+            row_gap: Val::Px(2.0),
+            padding: UiRect::all(Val::Px(14.0)),
+            overflow: Overflow::scroll_y(),
+            ..default()
+        },
+        ScrollPosition::default(),
+        theme.parchment_panel(),
+    ));
 }
 
 #[allow(
@@ -230,26 +247,151 @@ fn record_rolls(
     }
 }
 
-/// Rewrites the log text and scrolls to the newest line when the log changes. Scrolling past
-/// the end is clamped by the layout, so the largest value shows the bottom.
+fn record_ai_debug(
+    mut messages: Option<MessageReader<AiResolutionDebug>>,
+    mut payloads: ResMut<AiDebugPayloads>,
+) {
+    let Some(messages) = messages.as_mut() else {
+        return;
+    };
+    for debug in messages.read() {
+        for &sequence in &debug.sequences {
+            payloads.0.insert(sequence, debug.payload_json.clone());
+        }
+    }
+}
+
+/// Rebuilds the per-line log entries and scrolls to the newest line when the log or debug
+/// payload table changes.
 #[allow(
     clippy::needless_pass_by_value,
     reason = "Bevy system parameters are passed by value"
 )]
 fn show_log(
+    mut commands: Commands,
     log: Res<NarrationLog>,
-    mut texts: Query<&mut Text, With<NarrationLogText>>,
-    mut panels: Query<&mut ScrollPosition, With<NarrationLogPanel>>,
+    debug_payloads: Res<AiDebugPayloads>,
+    theme: Res<UiTheme>,
+    existing_lines: Query<Entity, With<NarrationLogLine>>,
+    mut panels: Query<(Entity, &mut ScrollPosition), With<NarrationLogPanel>>,
 ) {
-    if !log.is_changed() {
+    if !log.is_changed() && !debug_payloads.is_changed() {
         return;
     }
-    let wanted = log.text();
-    for mut text in &mut texts {
-        text.0.clone_from(&wanted);
+    for entity in &existing_lines {
+        commands.entity(entity).despawn();
     }
-    for mut scroll in &mut panels {
-        scroll.y = f32::MAX;
+    for (panel_entity, mut scroll) in &mut panels {
+        commands.entity(panel_entity).with_children(|panel| {
+            for line in log.lines() {
+                let has_debug = debug_payloads.0.contains_key(&line.sequence);
+                let display = if has_debug {
+                    format!("{} [debug]", line.text)
+                } else {
+                    line.text.clone()
+                };
+                panel.spawn((
+                    NarrationLogLine {
+                        sequence: line.sequence,
+                    },
+                    NarrationLogText,
+                    Node {
+                        max_width: Val::Percent(100.0),
+                        ..default()
+                    },
+                    Text::new(display),
+                    theme.narration_font(LOG_FONT_SIZE),
+                    TextColor(TEXT_ON_PARCHMENT),
+                ));
+            }
+        });
+        if log.is_changed() {
+            scroll.y = f32::MAX;
+        }
+    }
+}
+
+/// Copies the raw AI DM resolution JSON to the clipboard when the player left-clicks a log
+/// line that carries an [`AiResolutionDebug`] payload (`ZETA_DEBUG_AI_LOG=1`).
+#[allow(
+    clippy::needless_pass_by_value,
+    clippy::too_many_arguments,
+    reason = "Bevy system parameters are passed by value"
+)]
+fn click_ai_debug_line(
+    buttons: Option<Res<ButtonInput<MouseButton>>>,
+    window: Option<Single<&Window, With<PrimaryWindow>>>,
+    debug_payloads: Res<AiDebugPayloads>,
+    lines: Query<(&NarrationLogLine, &ComputedNode, &UiGlobalTransform)>,
+    mut click_consumed: ResMut<UiClickConsumed>,
+    mut prompt_status: Option<ResMut<LatestPromptStatus>>,
+) {
+    let Some(buttons) = buttons else {
+        return;
+    };
+    if debug_payloads.0.is_empty() || !buttons.just_pressed(MouseButton::Left) {
+        return;
+    }
+    let Some(window) = window else {
+        return;
+    };
+    let clicked = lines.iter().find_map(|(line, node, transform)| {
+        if debug_payloads.0.contains_key(&line.sequence)
+            && cursor_is_over(&window, node, *transform)
+        {
+            Some(line.sequence)
+        } else {
+            None
+        }
+    });
+    let Some(sequence) = clicked else {
+        return;
+    };
+    let Some(payload) = debug_payloads.0.get(&sequence) else {
+        return;
+    };
+    click_consumed.0 = true;
+    let status_text = match copy_text_to_clipboard(payload) {
+        Ok(()) => format!("Copied AI debug JSON (line #{sequence}) to clipboard."),
+        Err(error) => format!("Could not copy AI debug JSON to clipboard: {error}"),
+    };
+    info!("{status_text}");
+    if let Some(status) = prompt_status.as_mut() {
+        status.0 = Some(PromptStatusUpdate {
+            state: PromptState::Applied,
+            reason: Some(status_text),
+        });
+    }
+}
+
+/// Writes `text` to the operating system clipboard without extra crate dependencies.
+fn copy_text_to_clipboard(text: &str) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    let (program, args): (&str, &[&str]) = ("clip", &[]);
+    #[cfg(target_os = "macos")]
+    let (program, args): (&str, &[&str]) = ("pbcopy", &[]);
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let (program, args): (&str, &[&str]) = ("xclip", &["-selection", "clipboard"]);
+
+    let mut child = Command::new(program)
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|error| format!("failed to launch `{program}`: {error}"))?;
+    if let Some(mut stdin) = child.stdin.take() {
+        stdin
+            .write_all(text.as_bytes())
+            .map_err(|error| format!("failed to write clipboard stdin: {error}"))?;
+    }
+    let exit = child
+        .wait()
+        .map_err(|error| format!("clipboard command failed: {error}"))?;
+    if exit.success() {
+        Ok(())
+    } else {
+        Err(format!("`{program}` exited with {exit}"))
     }
 }
 
@@ -434,10 +576,17 @@ mod tests {
     }
 
     fn log_text(app: &mut App) -> String {
-        let mut texts = app
-            .world_mut()
-            .query_filtered::<&Text, With<NarrationLogText>>();
-        texts.single(app.world()).expect("1 log text").0.clone()
+        let mut lines = app.world_mut().query::<(&NarrationLogLine, &Text)>();
+        let mut entries: Vec<(u64, String)> = lines
+            .iter(app.world())
+            .map(|(line, text)| (line.sequence, text.0.clone()))
+            .collect();
+        entries.sort_by_key(|(seq, _)| *seq);
+        entries
+            .into_iter()
+            .map(|(_, text)| text)
+            .collect::<Vec<_>>()
+            .join("\n")
     }
 
     fn bubble_count(app: &mut App) -> usize {
@@ -580,5 +729,27 @@ mod tests {
             .write_message(entry(1, LogEntryKind::Narration, "Wind howls."));
         app.update();
         assert_eq!(bubble_count(&mut app), 0);
+    }
+
+    #[test]
+    fn ai_debug_payloads_tag_matching_log_lines_for_click_copy() {
+        let mut app = test_app();
+        app.add_message::<AiResolutionDebug>();
+        app.world_mut()
+            .write_message(entry(4, LogEntryKind::Narration, "The barrel rolls."));
+        app.world_mut().write_message(AiResolutionDebug {
+            sequences: vec![4],
+            payload_json: r#"{"ok":true}"#.to_owned(),
+        });
+        app.update();
+        assert_eq!(
+            app.world()
+                .resource::<AiDebugPayloads>()
+                .0
+                .get(&4)
+                .map(String::as_str),
+            Some(r#"{"ok":true}"#)
+        );
+        assert_eq!(log_text(&mut app), "The barrel rolls. [debug]");
     }
 }
