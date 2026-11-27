@@ -66,8 +66,14 @@ const SHORE_PAD: usize = SHORE_DISTANCE_MAX_TILES as usize;
 const WINDOW_SIDE: usize = COVER_SIDE + 2 * SHORE_PAD;
 /// Tiles between the window's top-left tile and the chunk origin tile.
 const WINDOW_OFFSET: i64 = COVER_HALO_TILES as i64 + SHORE_DISTANCE_MAX_TILES as i64;
-/// Cover weights reach 0 and 1 this far from the midpoint between 2 tile centers.
-const BLEND_EDGE: (f32, f32) = (0.1, 0.9);
+/// Per-cover score noise octaves: lattice spacing in control texels and amplitude in
+/// bilinear weight units (1 unit = 1 tile of distance). Each cover gets its own noise, so
+/// a border follows the noise instead of the tile grid.
+const EDGE_NOISE_OCTAVES: [(i64, f32); 2] = [(12, 0.3), (5, 0.15)];
+/// [`hash_unit`] salt of the per-cover score noise.
+const EDGE_NOISE_SALT: u64 = 0x7370_6c61_7465_6401;
+/// Score gap below the leading cover over which a cover's weight falls from 1 to 0.
+const EDGE_SOFTNESS: f32 = 0.2;
 /// Edge noise octaves: lattice spacing in control texels and amplitude in tiles. The sum
 /// stays below 1 tile; it is large enough that cover borders meander across tile lines.
 const WARP_OCTAVES: [(i64, f32); 3] = [(32, 0.55), (8, 0.3), (3, 0.1)];
@@ -286,7 +292,7 @@ pub fn bake_chunk_splat(
                 palette,
                 &cover,
                 (rel_x, rel_y),
-                warp,
+                (warp, face_salt, global),
                 variant_noise,
                 &mut weights,
             );
@@ -494,8 +500,10 @@ fn texel_tile_position(rel_x: i64, rel_y: i64) -> Vec2 {
     )
 }
 
-/// Adds the smoothstep weights of the 4 cover cells around texel `(rel_x, rel_y)`, displaced
-/// by `warp` tiles. Each cell's weight is shared among its cover's variants by
+/// Adds the cover weights of texel `(rel_x, rel_y)`. The 4 cover cells around the texel,
+/// displaced by `warp` tiles, give each cover a bilinear score; per-cover noise at face
+/// texel `global` is added, and covers within [`EDGE_SOFTNESS`] of the best score share the
+/// texel. Each cover's weight is split among its variants by
 /// [`TerrainPalette::variant_mix`] at the texel's `variant_noise`.
 ///
 /// The tile and sub-tile parts are kept apart, so the fraction depends only on the texel's
@@ -505,7 +513,7 @@ fn add_cover_weights(
     palette: &TerrainPalette,
     cover: &[CoverCell],
     (rel_x, rel_y): (i64, i64),
-    warp: Vec2,
+    (warp, face_salt, global): (Vec2, u64, (i64, i64)),
     variant_noise: f32,
     weights: &mut [f32; MAX_PALETTE_ENTRIES],
 ) {
@@ -526,17 +534,43 @@ fn add_cover_weights(
     };
     let cx = cell(rel_x.div_euclid(TEXELS_PER_TILE_I64), floor.x);
     let cy = cell(rel_y.div_euclid(TEXELS_PER_TILE_I64), floor.y);
-    let fx = smoothstep(BLEND_EDGE.0, BLEND_EDGE.1, blend.x);
-    let fy = smoothstep(BLEND_EDGE.0, BLEND_EDGE.1, blend.y);
     let corners = [
-        (cx, cy, (1.0 - fx) * (1.0 - fy)),
-        (cx + 1, cy, fx * (1.0 - fy)),
-        (cx, cy + 1, (1.0 - fx) * fy),
-        (cx + 1, cy + 1, fx * fy),
+        (cx, cy, (1.0 - blend.x) * (1.0 - blend.y)),
+        (cx + 1, cy, blend.x * (1.0 - blend.y)),
+        (cx, cy + 1, (1.0 - blend.x) * blend.y),
+        (cx + 1, cy + 1, blend.x * blend.y),
     ];
+    // Bilinear score per distinct cover among the 4 corners.
+    let mut scores: [(Option<GroundCover>, f32); 4] = [(None, 0.0); 4];
     for (x, y, weight) in corners {
-        for (index, share) in palette.variant_mix(cover[y * COVER_SIDE + x].kind, variant_noise) {
-            weights[palette_slot(index)] += weight * share;
+        let kind = cover[y * COVER_SIDE + x].kind;
+        if let Some(slot) = scores
+            .iter_mut()
+            .find(|(existing, _)| existing.is_none_or(|existing| existing == kind))
+        {
+            *slot = (Some(kind), slot.1 + weight);
+        }
+    }
+    let mut best = f32::MIN;
+    for (kind, score) in &mut scores {
+        if let Some(kind) = kind {
+            *score += edge_noise(face_salt ^ cover_salt(*kind), global.0, global.1);
+            best = best.max(*score);
+        }
+    }
+    let mut kept = [(None, 0.0_f32); 4];
+    let mut total = 0.0;
+    for ((kind, score), slot) in scores.iter().zip(&mut kept) {
+        if let Some(kind) = kind {
+            let weight = smoothstep(best - EDGE_SOFTNESS, best, *score);
+            *slot = (Some(*kind), weight);
+            total += weight;
+        }
+    }
+    for (kind, weight) in kept {
+        let Some(kind) = kind else { continue };
+        for (index, share) in palette.variant_mix(kind, variant_noise) {
+            weights[palette_slot(index)] += weight / total * share;
         }
     }
 }
@@ -640,6 +674,27 @@ fn warp_noise(salt: u64, x: i64, y: i64) -> f32 {
             value_noise(salt.wrapping_add(octave), x, y, spacing) * amplitude
         })
         .sum()
+}
+
+/// Score noise of 1 cover at face control texel `(x, y)`, in about `[-0.45, 0.45]`.
+fn edge_noise(salt: u64, x: i64, y: i64) -> f32 {
+    EDGE_NOISE_OCTAVES
+        .iter()
+        .zip(0_u64..)
+        .map(|(&(spacing, amplitude), octave)| {
+            value_noise(salt.wrapping_add(octave), x, y, spacing) * amplitude
+        })
+        .sum()
+}
+
+/// Salt of `cover`'s score noise: its position in [`GroundCover::ALL`] mixed with
+/// [`EDGE_NOISE_SALT`].
+fn cover_salt(cover: GroundCover) -> u64 {
+    let slot = GroundCover::ALL
+        .iter()
+        .position(|&kind| kind == cover)
+        .unwrap_or(0);
+    EDGE_NOISE_SALT ^ (u64::try_from(slot).unwrap_or(0) << 40)
 }
 
 /// Smooth value noise in `[-1.0, 1.0]` over a lattice every `spacing` texels.

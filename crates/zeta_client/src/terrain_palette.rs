@@ -460,7 +460,7 @@ pub fn build_palette_array(palette: &TerrainPalette) -> Result<Image, String> {
         ..default()
     });
     // `ImageSamplerDescriptor::linear` sets a linear mipmap filter
-    // (bevy_image-0.20.1/src/image.rs:903); `ImageAddressMode::Repeat` (image.rs:747).
+    // (bevy_image-0.20.1/src/image.rs:903); `ImageAddressMode::Repeat` (image.rs:758).
     image.sampler = ImageSampler::Descriptor(ImageSamplerDescriptor {
         address_mode_u: ImageAddressMode::Repeat,
         address_mode_v: ImageAddressMode::Repeat,
