@@ -8,14 +8,13 @@
     [1819648, 318484]
   ],
   "edge_feather": 1.25,
-  "tiles_per_repeat": 4.5,
   "grid_alpha": 0.12,
   "ambient_tint": [1.05, 1.0, 0.91],
   "materials": [
-    { "id": "land", "texture": "terrain/grass.png", "scale": 1.0 },
-    { "id": "path", "texture": "terrain/dirt.png", "scale": 1.15 },
-    { "id": "bank", "texture": "terrain/rock.png", "scale": 1.05 },
-    { "id": "water", "texture": "terrain/water.png", "scale": 0.95 }
+    { "id": "land", "palette": "grass_lush" },
+    { "id": "path", "palette": "dirt" },
+    { "id": "bank", "palette": "rock_brown" },
+    { "id": "water", "palette": "water_shallow" }
   ],
   "layers": [
     {

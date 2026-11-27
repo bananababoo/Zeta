@@ -38,14 +38,14 @@
     {
       "id": "grass_cold",
       "texture": "terrain/palette/grass_cold.png",
-      "tiles_per_repeat": 3,
+      "tiles_per_repeat": 6,
       "ground_cover": "tundra",
       "clutter": true
     },
     {
       "id": "tundra",
       "texture": "terrain/palette/tundra.png",
-      "tiles_per_repeat": 3,
+      "tiles_per_repeat": 5,
       "ground_cover": "tundra",
       "clutter": true
     },
@@ -108,7 +108,7 @@
     {
       "id": "rock_snow",
       "texture": "terrain/palette/rock_snow.png",
-      "tiles_per_repeat": 8,
+      "tiles_per_repeat": 10,
       "ground_cover": "snow",
       "clutter": true
     },
