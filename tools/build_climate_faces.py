@@ -135,13 +135,16 @@ def climate_face(elev_ft: np.ndarray, dirs: np.ndarray, ocean_tree: cKDTree) -> 
     if land_idx[0].size:
         chord, _ = ocean_tree.query(dirs[land_idx])
         ocean_km[land_idx] = 2.0 * np.arcsin(np.clip(chord / 2.0, 0.0, 1.0)) * PLANET_RADIUS_KM
-    belts = np.interp(abs_lat_deg, [0, 10, 25, 35, 50, 60, 75, 90],
-                      [1.0, 0.9, 0.15, 0.25, 0.7, 0.65, 0.4, 0.3])
-    moisture = belts * (0.25 + 0.75 * np.exp(-ocean_km / 400.0))
+    # Wet tropics, savanna edges, a dry subtropical desert belt near 25-30 degrees, wet
+    # mid-latitude storm tracks, and drier polar air.
+    belts = np.interp(abs_lat_deg, [0, 8, 15, 22, 28, 35, 45, 55, 65, 75, 90],
+                      [1.0, 0.95, 0.6, 0.25, 0.12, 0.3, 0.6, 0.75, 0.6, 0.4, 0.3])
+    moisture = belts * (0.3 + 0.7 * np.exp(-ocean_km / 500.0))
     moisture += 0.12 * fbm(dirs, 6.0, 4, NOISE_SEED + 1)
     moisture = np.where(ocean, 1.0, np.clip(moisture, 0.0, 1.0))
 
-    foliage = (smoothstep(-5.0, 8.0, temperature)
+    # The cold end of the ramp lets boreal forest (taiga) grow down to about -4 C.
+    foliage = (smoothstep(-8.0, 4.0, temperature)
                * (1.0 - 0.3 * smoothstep(30.0, 38.0, temperature))
                * smoothstep(0.15, 0.85, moisture)
                * (1.0 - smoothstep(9000.0, 12000.0, land_ft)))

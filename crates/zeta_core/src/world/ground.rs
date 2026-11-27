@@ -40,8 +40,14 @@ const ROCK_MIN_SLOPE_STEP_FT: i32 = 10;
 const ALPINE_ROCK_MIN_ELEVATION_FT: i32 = 10_000;
 /// Foliage below this counts as sparse for the alpine rock rule.
 const ALPINE_ROCK_MAX_FOLIAGE: f32 = 0.2;
-/// Land at or below this temperature (degrees Celsius, after jitter) is snow.
-const SNOW_MAX_TEMPERATURE_C: f32 = -6.0;
+/// Land at or below this temperature (degrees Celsius, after jitter) is snow: polar ice.
+const SNOW_MAX_TEMPERATURE_C: f32 = -12.0;
+/// Mountain land at or above this elevation gets snow at a milder temperature (snowcaps).
+const ALPINE_SNOW_MIN_ELEVATION_FT: i32 = 8_000;
+/// Mountain land at or below this temperature (degrees Celsius, after jitter) is snow.
+/// Combined with the lapse rate this puts the snowline near 16,000 ft at the equator and
+/// near 8,500 ft at 45 degrees of latitude.
+const ALPINE_SNOW_MAX_TEMPERATURE_C: f32 = -6.0;
 /// Beach band width in tiles from the waterline (plus up to 2 tiles of hash jitter).
 const BEACH_SHORE_TILES: u8 = 3;
 /// Beaches only form on land this close to sea level (feet).
@@ -57,7 +63,7 @@ const SWAMP_MIN_TEMPERATURE_C: f32 = 2.0;
 /// Foliage at or above this (after jitter) is forest floor.
 const FOREST_MIN_FOLIAGE: f32 = 0.55;
 /// Land colder than this (degrees Celsius, after jitter) but above snow is tundra.
-const TUNDRA_MAX_TEMPERATURE_C: f32 = 0.0;
+const TUNDRA_MAX_TEMPERATURE_C: f32 = -4.0;
 /// Moisture below this (after jitter) is dry grass.
 const DRY_GRASS_MAX_MOISTURE: f32 = 0.3;
 /// Moisture at or above this (after jitter) is lush grass.
@@ -195,17 +201,19 @@ pub struct GroundCoverInput {
 ///
 /// Rules, first match wins (thresholds are the constants in this module):
 /// 1. Water: shallow within 8 tiles of shore or 20 ft of depth, otherwise deep.
-/// 2. Rock: an elevation step of 10 ft or more to an edge neighbor, or alpine heights
-///    (10,000 ft and up) with sparse foliage.
-/// 3. Snow: temperature at or below -6 °C (jittered ±1.5 °C per tile).
-/// 4. Beach: a band 3-5 tiles wide from the waterline, at most 25 ft above sea level.
-/// 5. Desert sand: moisture below 0.12.
-/// 6. Swamp: flat land (no step to neighbors) at most 300 ft high, moisture 0.75 or more,
+/// 2. Rock: an elevation step of 10 ft or more to an edge neighbor (snow never sticks to
+///    cliffs).
+/// 3. Snow: temperature at or below -12 °C, or at or below -6 °C on land 8,000 ft and up
+///    (snowcaps); temperature is jittered ±1.5 °C per tile.
+/// 4. Rock: alpine heights (10,000 ft and up) with sparse foliage, below the snowline.
+/// 5. Beach: a band 3-5 tiles wide from the waterline, at most 25 ft above sea level.
+/// 6. Desert sand: moisture below 0.12.
+/// 7. Swamp: flat land (no step to neighbors) at most 300 ft high, moisture 0.75 or more,
 ///    above 2 °C, inside low-frequency swamp pools.
-/// 7. Forest floor: foliage 0.55 or more.
-/// 8. Tundra: below 0 °C.
-/// 9. Dirt: low-frequency patches, more frequent where drier.
-/// 10. Dry grass below moisture 0.3, lush grass from moisture 0.6, grass otherwise.
+/// 8. Forest floor: foliage 0.55 or more.
+/// 9. Tundra: below -4 °C.
+/// 10. Dirt: low-frequency patches, more frequent where drier.
+/// 11. Dry grass below moisture 0.3, lush grass from moisture 0.6, grass otherwise.
 ///
 /// Per-tile hash jitter on thresholds dithers boundaries so bands never form straight lines.
 /// The biome override id is not interpreted here.
@@ -224,17 +232,25 @@ pub fn ground_cover(input: &GroundCoverInput) -> GroundCover {
         };
     }
 
-    if input.slope_step_ft >= ROCK_MIN_SLOPE_STEP_FT
-        || (sample.elevation_ft >= ALPINE_ROCK_MIN_ELEVATION_FT
-            && climate.foliage < ALPINE_ROCK_MAX_FOLIAGE)
-    {
+    if input.slope_step_ft >= ROCK_MIN_SLOPE_STEP_FT {
         return GroundCover::Rock;
     }
 
     let jitter = |salt: u64| hash_unit(hash, salt) - 0.5;
     let temperature = climate.temperature + jitter(1) * 3.0;
-    if temperature <= SNOW_MAX_TEMPERATURE_C {
+    let snow_max_temperature = if sample.elevation_ft >= ALPINE_SNOW_MIN_ELEVATION_FT {
+        ALPINE_SNOW_MAX_TEMPERATURE_C
+    } else {
+        SNOW_MAX_TEMPERATURE_C
+    };
+    if temperature <= snow_max_temperature {
         return GroundCover::Snow;
+    }
+
+    if sample.elevation_ft >= ALPINE_ROCK_MIN_ELEVATION_FT
+        && climate.foliage < ALPINE_ROCK_MAX_FOLIAGE
+    {
+        return GroundCover::Rock;
     }
 
     let beach_extra = if hash_unit(hash, 2) < 0.5 { 0 } else { 2 };
@@ -545,11 +561,36 @@ mod tests {
                 GroundCover::LushGrass | GroundCover::Dirt
             ));
             assert!(matches!(
-                classify(tile, land(200), climate(-3.0, 0.5, 0.1), 0, 16),
+                classify(tile, land(200), climate(-8.0, 0.5, 0.1), 0, 16),
                 GroundCover::Tundra | GroundCover::Snow
             ));
         }
         assert!(grass > soil && soil > 0, "grass {grass} dirt {soil}");
+    }
+
+    #[test]
+    fn high_peaks_get_snowcaps_above_alpine_rock_and_cliffs_stay_rock() {
+        for tile in tiles(300) {
+            // The same cold reads as tundra in the lowlands but snow on a peak.
+            assert_ne!(
+                classify(tile, land(200), climate(-8.0, 0.5, 0.0), 0, 16),
+                GroundCover::Snow
+            );
+            assert_eq!(
+                classify(tile, land(15_000), climate(-8.0, 0.5, 0.0), 0, 16),
+                GroundCover::Snow
+            );
+            // Below the snowline, bare heights are rock.
+            assert_eq!(
+                classify(tile, land(11_000), climate(2.0, 0.5, 0.0), 0, 16),
+                GroundCover::Rock
+            );
+            // Cliffs shed snow.
+            assert_eq!(
+                classify(tile, land(15_000), climate(-8.0, 0.5, 0.0), 15, 16),
+                GroundCover::Rock
+            );
+        }
     }
 
     #[test]
