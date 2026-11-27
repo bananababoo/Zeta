@@ -18,6 +18,8 @@ face edge matches its neighbor without seam fixing:
   - great-circle distance to the nearest ocean dries continental interiors,
   - seeded 3D value noise adds low-frequency variation.
 
+Dependencies: numpy, Pillow, and scipy (cKDTree for the ocean distance).
+
 The output is deterministic: the same elevation faces always give byte-identical PNGs.
 """
 

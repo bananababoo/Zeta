@@ -150,7 +150,8 @@ impl GroundCover {
 /// dithering, splat edge noise, clutter placement).
 ///
 /// Defined as `splitmix64(splitmix64(splitmix64(SEED ^ face_index) ^ x) ^ y)` over the tile's
-/// canonical in-face coordinates. The value is part of the world's identity: changing it
+/// raw coordinates. Callers must pass a canonical tile (`x`, `y` below `FACE_TILES`); an
+/// out-of-range tile hashes differently from the same place on the neighboring face. The value is part of the world's identity: changing it
 /// moves every scattered detail, so it never changes.
 pub const fn tile_hash(tile: PlanetTile) -> u64 {
     let mut state = splitmix64(TILE_HASH_SEED ^ tile.face.index() as u64);
