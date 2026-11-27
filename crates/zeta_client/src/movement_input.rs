@@ -1,4 +1,5 @@
-//! WASD (tap or hold-to-walk) and click movement, sent to the server as move requests.
+//! Direct movement input: WASD (tap or hold-to-walk) outside Turn Bubbles, and click-to-move
+//! inside active Turn Bubbles (combat), sent to the server as move requests.
 //!
 //! Rules: `docs/architecture/technical_architecture.md` Section 5 and
 //! `docs/prototypes/realism_prototype.md`. The server checks every request; this plugin
@@ -9,7 +10,7 @@ use bevy::ui::UiGlobalTransform;
 use bevy::window::{PrimaryWindow, RequestRedraw};
 use zeta_core::entity::EntityId;
 use zeta_core::grid::{GridPos, MapBounds};
-use zeta_core::protocol::{MapArea, MoveRequest};
+use zeta_core::protocol::{MapArea, MoveRequest, TurnBubble};
 
 use crate::focus::{
     TextEntryActive, TextEntryUpdate, UiClickConsumed, UiClickUpdate, UiPanel,
@@ -39,7 +40,8 @@ struct MoveRepeatState {
     cooldown_seconds: f32,
 }
 
-/// Sends `MoveRequest` from movement keys (tap or hold) and left clicks on the map.
+/// Sends `MoveRequest` from movement keys outside combat (Turn Bubbles) and left clicks on
+/// the map during combat (inside a Turn Bubble).
 #[derive(Clone, Copy, Debug, Default)]
 pub struct MovementInputPlugin;
 
@@ -61,6 +63,18 @@ impl Plugin for MovementInputPlugin {
                 ),
             );
     }
+}
+
+/// Whether the local character is participating in any active [`TurnBubble`] (combat).
+pub fn is_in_turn_bubble<'a>(
+    bubbles: impl IntoIterator<Item = &'a TurnBubble>,
+    local_player: LocalPlayer,
+) -> bool {
+    local_player.character.is_some_and(|character| {
+        bubbles
+            .into_iter()
+            .any(|bubble| bubble.order.contains(&character))
+    })
 }
 
 /// The adjacent square in `direction`, or `None` when it leaves the map. Without known
@@ -144,11 +158,12 @@ fn keyboard_movement(
     local_player: Res<LocalPlayer>,
     mut repeat: ResMut<MoveRepeatState>,
     characters: Query<(&EntityId, &GridPos)>,
+    bubbles: Query<&TurnBubble>,
     areas: Query<&MapArea>,
     mut requests: MessageWriter<MoveRequest>,
     mut redraws: MessageWriter<RequestRedraw>,
 ) {
-    if text_entry.0 {
+    if text_entry.0 || is_in_turn_bubble(bubbles.iter(), *local_player) {
         repeat.held = None;
         repeat.cooldown_seconds = 0.0;
         return;
@@ -212,12 +227,13 @@ fn click_movement(
     window: Single<&Window, With<PrimaryWindow>>,
     camera: Single<(&Camera, &GlobalTransform), With<Camera2d>>,
     panels: Query<(&ComputedNode, &UiGlobalTransform), With<UiPanel>>,
+    bubbles: Query<&TurnBubble>,
     areas: Query<&MapArea>,
     mut requests: MessageWriter<MoveRequest>,
 ) {
     if text_entry.0
         || click_consumed.0
-        || local_player.character.is_none()
+        || !is_in_turn_bubble(bubbles.iter(), *local_player)
         || !buttons.just_pressed(MouseButton::Left)
     {
         return;
@@ -385,6 +401,56 @@ mod tests {
         let mut app = test_app();
         app.world_mut().resource_mut::<LocalPlayer>().character = Some(EntityId(2));
         press(&mut app, KeyCode::KeyA);
+        assert_eq!(sent(&app), Vec::<MoveRequest>::new());
+    }
+
+    #[test]
+    fn turn_bubble_switches_movement_from_wasd_to_click_only() {
+        let local = LocalPlayer {
+            character: Some(EntityId(1)),
+        };
+        let other_bubble = TurnBubble {
+            order: vec![EntityId(2), EntityId(3)],
+            current: 0,
+            completed_rounds: 0,
+            movement_used: false,
+            prompt_used: false,
+        };
+        let my_bubble = TurnBubble {
+            order: vec![EntityId(1), EntityId(2)],
+            current: 0,
+            completed_rounds: 0,
+            movement_used: false,
+            prompt_used: false,
+        };
+
+        assert!(!is_in_turn_bubble(&[], local));
+        assert!(!is_in_turn_bubble(
+            std::slice::from_ref(&other_bubble),
+            local
+        ));
+        assert!(is_in_turn_bubble(
+            &[other_bubble.clone(), my_bubble.clone()],
+            local
+        ));
+
+        // Another party's Turn Bubble does not block our WASD movement.
+        let mut app = test_app();
+        app.world_mut().spawn(other_bubble);
+        press(&mut app, KeyCode::KeyW);
+        assert_eq!(
+            sent(&app),
+            vec![MoveRequest {
+                target: GridPos::new(2, 1)
+            }]
+        );
+
+        // Once the local character enters a Turn Bubble, WASD stops firing (combat is click-to-move).
+        app.world_mut()
+            .resource_mut::<Messages<MoveRequest>>()
+            .clear();
+        app.world_mut().spawn(my_bubble);
+        press(&mut app, KeyCode::KeyD);
         assert_eq!(sent(&app), Vec::<MoveRequest>::new());
     }
 }
