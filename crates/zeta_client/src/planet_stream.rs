@@ -20,6 +20,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use bevy::asset::RenderAssetUsages;
+use bevy::ecs::system::SystemParam;
 use bevy::image::{Image, ImageSampler};
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
@@ -32,12 +33,20 @@ use bevy::tasks::{AsyncComputeTaskPool, Task, block_on, poll_once};
 use bevy::window::RequestRedraw;
 use zeta_core::world::{
     CHUNK_SIZE, ChunkCoord, ChunkTerrain, CubeFace, ELEVATION_STEP_FT, FACE_TILES, FaceRotation,
-    PlanetHeightmaps, PlanetTile, RegionFootprint, RegionOverlap, TileSample, face_uv_to_unit_vec,
-    polygons_overlap, sample_chunk, sample_tile, step_chunk, step_tile, tile_to_unit_vec,
-    validate_non_overlapping,
+    PlanetClimateMaps, PlanetHeightmaps, PlanetTile, RegionFootprint, RegionOverlap, TileSample,
+    face_uv_to_unit_vec, polygons_overlap, sample_chunk, sample_tile, step_chunk, step_tile,
+    tile_to_unit_vec, validate_non_overlapping,
 };
 
+use crate::chunk_splat::{
+    CONTROL_SIDE, ChunkRegionPaint, ChunkSplatBake, RegionPaint, SHADE_SIDE, SPLAT_MIN_TILE_PIXELS,
+    bake_chunk_splat, splat_texture,
+};
 use crate::planet_io::{PlanetIoError, load_planet_heightmaps, planet_faces_dir};
+use crate::terrain::{SPLAT_PIXELS_PER_TILE, TerrainSplatMaterial};
+use crate::terrain_palette::{
+    TerrainPalette, TerrainPaletteGpu, add_terrain_palette_plugin, layer_params,
+};
 
 /// Default chunk streaming ring half-width (`R = 4` streams a `9x9` chunk grid).
 pub const DEFAULT_STREAM_RADIUS_CHUNKS: i32 = 4;
@@ -55,7 +64,7 @@ pub const MAX_IN_FLIGHT_CHUNK_TASKS: usize = 16;
 /// Maximum completed chunk textures uploaded to `Assets<Image>` in a single frame.
 pub const MAX_CHUNK_UPLOADS_PER_FRAME: usize = 4;
 
-/// Draw depth of streamed planetary terrain sprites (behind `MapPlugin` splatmaps at `z = 0.0`).
+/// Draw depth of streamed planetary terrain chunks (behind `MapPlugin` entities at `z >= 0.0`).
 pub const CHUNK_Z_DEPTH: f32 = -1.0;
 
 /// Side length of 1 streaming chunk in floating-point tiles (`64.0`).
@@ -68,19 +77,29 @@ const CHUNK_SIZE_F32: f32 = CHUNK_SIZE as f32;
 /// Strict upper bound `< CHUNK_SIZE_F32` used when a 90-degree rotation maps exact `0.0` to `64.0`.
 const MAX_LOCAL_OFFSET_F32: f32 = f32::from_bits(CHUNK_SIZE_F32.to_bits() - 1);
 
-/// Loaded 6-face Layer 0 planetary elevation dataset stored as a Bevy resource.
+/// Loaded 6-face Layer 0 planetary elevation dataset, plus the climate maps the splat terrain
+/// needs, stored as a Bevy resource.
 #[derive(Resource, Clone, Debug)]
 pub struct PlanetWorld {
     maps: Arc<PlanetHeightmaps>,
+    climate: Option<Arc<PlanetClimateMaps>>,
 }
 
 impl PlanetWorld {
-    /// Wraps an already-constructed [`PlanetHeightmaps`] dataset.
+    /// Wraps an already-constructed [`PlanetHeightmaps`] dataset without climate maps.
     #[must_use]
     pub fn new(maps: PlanetHeightmaps) -> Self {
         Self {
             maps: Arc::new(maps),
+            climate: None,
         }
+    }
+
+    /// Attaches climate maps. Without them chunks always draw through the color raster.
+    #[must_use]
+    pub fn with_climate(mut self, climate: PlanetClimateMaps) -> Self {
+        self.climate = Some(Arc::new(climate));
+        self
     }
 
     /// Loads all 6 Layer 0 face heightmaps from `dir`.
@@ -110,6 +129,18 @@ impl PlanetWorld {
     #[must_use]
     pub fn maps_arc(&self) -> Arc<PlanetHeightmaps> {
         Arc::clone(&self.maps)
+    }
+
+    /// Returns the climate maps, if loaded.
+    #[must_use]
+    pub fn climate(&self) -> Option<&PlanetClimateMaps> {
+        self.climate.as_deref()
+    }
+
+    /// Returns an `O(1)` cloned [`Arc`] handle to the climate maps, if loaded.
+    #[must_use]
+    pub fn climate_arc(&self) -> Option<Arc<PlanetClimateMaps>> {
+        self.climate.clone()
     }
 }
 
@@ -298,21 +329,105 @@ pub struct StreamedChunkSlot {
     pub world_center: Vec2,
 }
 
+/// How 1 chunk entity is drawn, and the inputs it was baked from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ChunkStyle {
+    /// 1 color per tile ([`build_chunk_image`]) in the given mode.
+    Raster(PlanetRenderMode),
+    /// [`TerrainSplatMaterial`], baked with the given [`ChunkRegionPaint::key_for`] value.
+    Splat(u64),
+}
+
+/// GPU assets owned by 1 chunk entity, freed when it despawns.
+#[derive(Clone, Debug)]
+enum ChunkAssets {
+    Raster(Handle<Image>),
+    Splat {
+        control: Handle<Image>,
+        shade: Handle<Image>,
+        material: Handle<TerrainSplatMaterial>,
+    },
+}
+
 #[derive(Clone, Debug)]
 struct ActiveChunk {
     entity: Entity,
-    image: Handle<Image>,
-    rendered_mode: PlanetRenderMode,
+    assets: ChunkAssets,
+    style: ChunkStyle,
+}
+
+enum ChunkPayload {
+    Raster(Image),
+    Splat(Box<ChunkSplatBake>),
 }
 
 struct GeneratedChunk {
-    image: Image,
-    mode: PlanetRenderMode,
+    payload: ChunkPayload,
+    style: ChunkStyle,
 }
 
 struct PendingChunkTask {
-    mode: PlanetRenderMode,
+    style: ChunkStyle,
     task: Task<GeneratedChunk>,
+}
+
+/// Inputs of the splat bake, present only when every splat dependency is loaded.
+#[derive(Clone)]
+struct SplatInputs {
+    climate: Arc<PlanetClimateMaps>,
+    palette: Arc<TerrainPalette>,
+    paint: Arc<Vec<RegionPaint>>,
+}
+
+/// Everything a chunk generation task reads, cheap to clone into a background task.
+#[derive(Clone)]
+struct ChunkGenInputs {
+    maps: Arc<PlanetHeightmaps>,
+    splat: Option<SplatInputs>,
+}
+
+/// Generates the payload of `coord` for `style`.
+fn generate_chunk(inputs: &ChunkGenInputs, coord: ChunkCoord, style: ChunkStyle) -> GeneratedChunk {
+    let payload = match (style, &inputs.splat) {
+        (ChunkStyle::Splat(_), Some(splat)) => ChunkPayload::Splat(Box::new(bake_chunk_splat(
+            &inputs.maps,
+            &splat.climate,
+            &splat.palette,
+            coord,
+            &splat.paint,
+        ))),
+        (ChunkStyle::Raster(mode), _) => {
+            let terrain = sample_chunk(&inputs.maps, coord);
+            ChunkPayload::Raster(build_chunk_image(&inputs.maps, &terrain, mode))
+        }
+        // `desired_style` only asks for a splat when `splat` exists.
+        (ChunkStyle::Splat(_), None) => {
+            let terrain = sample_chunk(&inputs.maps, coord);
+            ChunkPayload::Raster(build_chunk_image(
+                &inputs.maps,
+                &terrain,
+                PlanetRenderMode::ElevationShaded,
+            ))
+        }
+    };
+    GeneratedChunk { payload, style }
+}
+
+/// Splat material resources; absent without `AssetPlugin` or when the palette failed to load.
+#[derive(SystemParam)]
+struct SplatParams<'w> {
+    gpu: Option<Res<'w, TerrainPaletteGpu>>,
+    materials: Option<ResMut<'w, Assets<TerrainSplatMaterial>>>,
+    paint: Option<Res<'w, ChunkRegionPaint>>,
+}
+
+/// Mutable targets that applying a generated chunk writes to.
+struct ChunkSink<'a, 'w, 's> {
+    commands: &'a mut Commands<'w, 's>,
+    images: Option<&'a mut Assets<Image>>,
+    materials: Option<&'a mut Assets<TerrainSplatMaterial>>,
+    gpu: Option<&'a TerrainPaletteGpu>,
+    world_size: Vec2,
 }
 
 /// Internal cache of currently spawned chunk sprites and in-flight async tasks keyed by [`ChunkCoord`].
@@ -340,6 +455,7 @@ impl Plugin for PlanetStreamPlugin {
             .init_resource::<PlanetRegions>()
             .init_resource::<PlanetStreamStats>()
             .init_resource::<PlanetStreamCache>()
+            .init_resource::<ChunkRegionPaint>()
             .add_message::<RequestRedraw>()
             .add_systems(Startup, ensure_planet_world)
             .add_systems(
@@ -352,6 +468,10 @@ impl Plugin for PlanetStreamPlugin {
         // Avoid spawning a second `Camera2d` when `MapPlugin` already provides `MapCamera`.
         if !app.is_plugin_added::<crate::map::MapPlugin>() {
             app.add_systems(Startup, ensure_planet_camera);
+        }
+        // The splat material needs `Assets`; headless tests without `AssetPlugin` stay raster.
+        if app.is_plugin_added::<AssetPlugin>() {
+            add_terrain_palette_plugin(app);
         }
     }
 }
@@ -804,7 +924,7 @@ pub fn build_chunk_image(
 
 /// Computes face-independent NW cartographic hillshading in `[0.0, 1.0]` using 3D unit-sphere
 /// tangent vectors so lighting is strictly continuous across all 12 cube-face seams.
-fn spherical_hillshade(
+pub(crate) fn spherical_hillshade(
     unit_vec: [f64; 3],
     face_right: [f64; 3],
     face_down: [f64; 3],
@@ -979,107 +1099,202 @@ fn chunk_transform(slot: &StreamedChunkSlot) -> Transform {
         .with_rotation(Quat::from_rotation_z(angle))
 }
 
-fn apply_chunk_image(
+/// Frees the GPU assets of a despawned chunk.
+fn release_chunk_assets(
+    assets: &ChunkAssets,
+    images: Option<&mut Assets<Image>>,
+    materials: Option<&mut Assets<TerrainSplatMaterial>>,
+) {
+    // `Assets::remove`: bevy_asset-0.20.1/src/assets.rs:470.
+    match assets {
+        ChunkAssets::Raster(image) => {
+            if let Some(images) = images {
+                images.remove(image);
+            }
+        }
+        ChunkAssets::Splat {
+            control,
+            shade,
+            material,
+        } => {
+            if let Some(images) = images {
+                images.remove(control);
+                images.remove(shade);
+            }
+            if let Some(materials) = materials {
+                materials.remove(material);
+            }
+        }
+    }
+}
+
+/// Side of a square splat texture as a texture size.
+fn square_size(side: usize) -> UVec2 {
+    UVec2::splat(u32::try_from(side).unwrap_or(0))
+}
+
+/// Spawns the entity of a generated chunk, replacing (and freeing) any previous entity of
+/// the same chunk.
+fn apply_generated_chunk(
     slot: &StreamedChunkSlot,
     generated: GeneratedChunk,
-    chunk_world_size: Vec2,
-    commands: &mut Commands,
-    images: Option<&mut Assets<Image>>,
+    sink: &mut ChunkSink<'_, '_, '_>,
     active: &mut HashMap<ChunkCoord, ActiveChunk>,
-    chunk_transforms: &mut Query<(&mut Transform, &mut Sprite), With<StreamedChunk>>,
 ) {
-    let desired_transform = chunk_transform(slot);
-    if let Some(entry) = active.get_mut(&slot.coord) {
-        let new_image = if let Some(images) = images {
-            let old_handle = entry.image.clone();
-            // `Assets::add`: bevy_asset-0.20.1/src/assets.rs:401.
-            let handle = images.add(generated.image);
-            // `Assets::remove`: bevy_asset-0.20.1/src/assets.rs:470.
-            images.remove(&old_handle);
-            handle
-        } else {
-            Handle::default()
-        };
-        entry.image = new_image.clone();
-        entry.rendered_mode = generated.mode;
-        if let Ok((mut transform, mut sprite)) = chunk_transforms.get_mut(entry.entity) {
-            *transform = desired_transform;
-            sprite.image = new_image;
-            sprite.custom_size = Some(chunk_world_size);
-        }
-        return;
+    if let Some(old) = active.remove(&slot.coord) {
+        sink.commands.entity(old.entity).despawn();
+        release_chunk_assets(
+            &old.assets,
+            sink.images.as_deref_mut(),
+            sink.materials.as_deref_mut(),
+        );
     }
-
-    let handle = if let Some(images) = images {
-        images.add(generated.image)
-    } else {
-        Handle::default()
+    let transform = chunk_transform(slot);
+    let marker = StreamedChunk { coord: slot.coord };
+    let spawned = match generated.payload {
+        ChunkPayload::Raster(image) => {
+            let handle = sink
+                .images
+                .as_deref_mut()
+                .map_or_else(Handle::default, |images| images.add(image));
+            // `Sprite::from_image`: bevy_sprite-0.20.1/src/sprite.rs:56.
+            // `Sprite::custom_size`: bevy_sprite-0.20.1/src/sprite.rs:31.
+            let mut sprite = Sprite::from_image(handle.clone());
+            sprite.custom_size = Some(sink.world_size);
+            let entity = sink.commands.spawn((marker, sprite, transform)).id();
+            Some((entity, ChunkAssets::Raster(handle)))
+        }
+        ChunkPayload::Splat(bake) => spawn_splat_chunk(slot, *bake, marker, transform, sink),
     };
+    if let Some((entity, assets)) = spawned {
+        active.insert(
+            slot.coord,
+            ActiveChunk {
+                entity,
+                assets,
+                style: generated.style,
+            },
+        );
+    }
+}
 
-    // `Sprite::from_image`: bevy_sprite-0.20.1/src/sprite.rs:56.
-    // `Sprite::custom_size`: bevy_sprite-0.20.1/src/sprite.rs:31.
-    let mut sprite = Sprite::from_image(handle.clone());
-    sprite.custom_size = Some(chunk_world_size);
-
-    let entity = commands
+/// Uploads a splat bake and spawns its mesh entity; `None` when the splat resources vanished.
+fn spawn_splat_chunk(
+    slot: &StreamedChunkSlot,
+    bake: ChunkSplatBake,
+    marker: StreamedChunk,
+    transform: Transform,
+    sink: &mut ChunkSink<'_, '_, '_>,
+) -> Option<(Entity, ChunkAssets)> {
+    let gpu = sink.gpu?;
+    let images = sink.images.as_deref_mut()?;
+    let materials = sink.materials.as_deref_mut()?;
+    // `ImageSampler::nearest`: bevy_image-0.20.1/src/image.rs:714. The shader blends control
+    // texels itself, so the sampler must not.
+    let control = images.add(splat_texture(
+        bake.control,
+        square_size(CONTROL_SIDE),
+        ImageSampler::nearest(),
+    ));
+    // `ImageSampler::linear`: bevy_image-0.20.1/src/image.rs:708.
+    let shade = images.add(splat_texture(
+        bake.shade,
+        square_size(SHADE_SIDE),
+        ImageSampler::linear(),
+    ));
+    let origin = slot.coord.origin_tile();
+    let material = materials.add(TerrainSplatMaterial {
+        params: Vec4::new(
+            CHUNK_SIZE_F32,
+            CHUNK_SIZE_F32,
+            0.0,
+            crate::terrain::count_to_f32(SPLAT_PIXELS_PER_TILE),
+        ),
+        layer_params: layer_params(&gpu.palette, origin.x, origin.y),
+        control: control.clone(),
+        shade: shade.clone(),
+        layers: gpu.layers.clone(),
+    });
+    // `Mesh2d`: bevy_mesh-0.20.1/src/components.rs:46.
+    // `MeshMaterial2d`: bevy_sprite_render-0.20.1/src/mesh2d/material.rs:217.
+    // `Transform::with_scale`: bevy_transform-0.20.1/src/components/transform.rs:258.
+    let entity = sink
+        .commands
         .spawn((
-            StreamedChunk { coord: slot.coord },
-            sprite,
-            desired_transform,
+            marker,
+            Mesh2d(gpu.unit_mesh.clone()),
+            MeshMaterial2d(material.clone()),
+            bake.ground,
+            transform.with_scale(sink.world_size.extend(1.0)),
         ))
         .id();
-
-    active.insert(
-        slot.coord,
-        ActiveChunk {
-            entity,
-            image: handle,
-            rendered_mode: generated.mode,
+    Some((
+        entity,
+        ChunkAssets::Splat {
+            control,
+            shade,
+            material,
         },
-    );
+    ))
+}
+
+/// Decides how each chunk is drawn this frame.
+struct StyleChooser<'a> {
+    mode: PlanetRenderMode,
+    paint: Option<&'a ChunkRegionPaint>,
+    splat: bool,
+}
+
+impl StyleChooser<'_> {
+    fn style_for(&self, coord: ChunkCoord) -> ChunkStyle {
+        if self.splat {
+            ChunkStyle::Splat(self.paint.map_or(0, |paint| paint.key_for(coord)))
+        } else {
+            ChunkStyle::Raster(self.mode)
+        }
+    }
+
+    fn up_to_date(&self, cache: &PlanetStreamCache, coord: ChunkCoord) -> bool {
+        cache
+            .active
+            .get(&coord)
+            .is_some_and(|entry| entry.style == self.style_for(coord))
+    }
 }
 
 fn dispatch_async_chunks(
     pool: &AsyncComputeTaskPool,
-    world: &PlanetWorld,
+    inputs: &ChunkGenInputs,
     stream_ring: &[StreamedChunkSlot],
-    mode: PlanetRenderMode,
+    chooser: &StyleChooser<'_>,
     cache: &mut PlanetStreamCache,
 ) {
-    // Dispatch missing or stale-mode chunks closest-to-camera first up to `MAX_IN_FLIGHT_CHUNK_TASKS`.
+    // Dispatch missing or stale chunks closest-to-camera first up to `MAX_IN_FLIGHT_CHUNK_TASKS`.
     for slot in stream_ring {
         if cache.pending.len() >= MAX_IN_FLIGHT_CHUNK_TASKS {
             break;
         }
-        let up_to_date = cache
-            .active
-            .get(&slot.coord)
-            .is_some_and(|entry| entry.rendered_mode == mode);
-        if up_to_date || cache.pending.contains_key(&slot.coord) {
+        if chooser.up_to_date(cache, slot.coord) || cache.pending.contains_key(&slot.coord) {
             continue;
         }
-        let maps = world.maps_arc();
+        let style = chooser.style_for(slot.coord);
+        let task_inputs = inputs.clone();
         let coord = slot.coord;
         // `TaskPool::spawn`: bevy_tasks-0.20.1/src/task_pool.rs:566.
-        let task = pool.spawn(async move {
-            let terrain = sample_chunk(&maps, coord);
-            let image = build_chunk_image(&maps, &terrain, mode);
-            GeneratedChunk { image, mode }
-        });
-        cache.pending.insert(coord, PendingChunkTask { mode, task });
+        let task = pool.spawn(async move { generate_chunk(&task_inputs, coord, style) });
+        cache
+            .pending
+            .insert(coord, PendingChunkTask { style, task });
     }
 }
 
 fn poll_completed_async_chunks(
     keep_slots: &HashMap<ChunkCoord, StreamedChunkSlot>,
-    chunk_world_size: Vec2,
-    commands: &mut Commands,
-    mut images: Option<&mut Assets<Image>>,
+    sink: &mut ChunkSink<'_, '_, '_>,
     cache: &mut PlanetStreamCache,
-    chunk_transforms: &mut Query<(&mut Transform, &mut Sprite), With<StreamedChunk>>,
 ) {
     // Poll completed tasks closest-to-camera first, uploading at most
-    // `MAX_CHUNK_UPLOADS_PER_FRAME` textures so the main thread never stutters.
+    // `MAX_CHUNK_UPLOADS_PER_FRAME` chunks so the main thread never stutters.
     let mut pending_order: Vec<ChunkCoord> = cache.pending.keys().copied().collect();
     pending_order.sort_by_key(|coord| {
         keep_slots
@@ -1101,65 +1316,34 @@ fn poll_completed_async_chunks(
         if let Some(generated) = finished {
             cache.pending.remove(&coord);
             if let Some(slot) = keep_slots.get(&coord) {
-                apply_chunk_image(
-                    slot,
-                    generated,
-                    chunk_world_size,
-                    commands,
-                    images.as_deref_mut(),
-                    &mut cache.active,
-                    chunk_transforms,
-                );
+                apply_generated_chunk(slot, generated, sink, &mut cache.active);
                 uploads_this_frame += 1;
             }
         }
     }
 }
 
-#[derive(Clone, Copy)]
-struct ChunkRenderConfig {
-    mode: PlanetRenderMode,
-    world_size: Vec2,
-}
-
 fn sync_chunks_blocking(
-    world: &PlanetWorld,
+    inputs: &ChunkGenInputs,
     stream_ring: &[StreamedChunkSlot],
-    config: ChunkRenderConfig,
-    commands: &mut Commands,
-    mut images: Option<&mut Assets<Image>>,
+    chooser: &StyleChooser<'_>,
+    sink: &mut ChunkSink<'_, '_, '_>,
     cache: &mut PlanetStreamCache,
-    chunk_transforms: &mut Query<(&mut Transform, &mut Sprite), With<StreamedChunk>>,
 ) {
     cache.pending.clear();
     for slot in stream_ring {
-        let up_to_date = cache
-            .active
-            .get(&slot.coord)
-            .is_some_and(|entry| entry.rendered_mode == config.mode);
-        if up_to_date {
+        if chooser.up_to_date(cache, slot.coord) {
             continue;
         }
-        let terrain = sample_chunk(world.maps(), slot.coord);
-        let generated = GeneratedChunk {
-            image: build_chunk_image(world.maps(), &terrain, config.mode),
-            mode: config.mode,
-        };
-        apply_chunk_image(
-            slot,
-            generated,
-            config.world_size,
-            commands,
-            images.as_deref_mut(),
-            &mut cache.active,
-            chunk_transforms,
-        );
+        let generated = generate_chunk(inputs, slot.coord, chooser.style_for(slot.coord));
+        apply_generated_chunk(slot, generated, sink, &mut cache.active);
     }
 }
 
 #[expect(
     clippy::needless_pass_by_value,
     clippy::too_many_arguments,
+    clippy::too_many_lines,
     reason = "Bevy system parameters are passed by value"
 )]
 fn sync_streamed_chunks(
@@ -1169,9 +1353,10 @@ fn sync_streamed_chunks(
     mode: Res<PlanetRenderMode>,
     sync_mode: Res<PlanetStreamSyncMode>,
     mut images: Option<ResMut<Assets<Image>>>,
+    mut splat: SplatParams,
     mut cache: ResMut<PlanetStreamCache>,
     mut stats: ResMut<PlanetStreamStats>,
-    mut chunk_transforms: Query<(&mut Transform, &mut Sprite), With<StreamedChunk>>,
+    mut chunk_transforms: Query<(&mut Transform, Option<&mut Sprite>), With<StreamedChunk>>,
     mut redraws: MessageWriter<RequestRedraw>,
 ) {
     let Some(world) = world else {
@@ -1181,7 +1366,7 @@ fn sync_streamed_chunks(
     let (stream_ring, keep_slots) = streamed_ring_with_keep(&focus);
 
     // Despawn chunks outside the hysteresis keep-margin (`keep_radius = stream_radius + 1`)
-    // and release their GPU textures.
+    // and release their GPU assets.
     let stale: Vec<ChunkCoord> = cache
         .active
         .keys()
@@ -1191,31 +1376,75 @@ fn sync_streamed_chunks(
     for coord in stale {
         if let Some(entry) = cache.active.remove(&coord) {
             commands.entity(entry.entity).despawn();
-            if let Some(images) = images.as_deref_mut() {
-                // `Assets::remove`: bevy_asset-0.20.1/src/assets.rs:470.
-                images.remove(&entry.image);
-            }
+            release_chunk_assets(
+                &entry.assets,
+                images.as_deref_mut(),
+                splat.materials.as_deref_mut(),
+            );
         }
     }
 
-    // Cancel pending background tasks outside `keep_radius` or rendered for a stale mode.
+    // Splat drawing needs the palette GPU resources, image and material storage, and climate
+    // maps, and only pays off once 1 control texel covers at least 1 screen pixel.
+    let splat_inputs = match (&splat.gpu, &world.climate) {
+        (Some(gpu), Some(climate))
+            if *mode == PlanetRenderMode::ElevationShaded
+                && focus.tile_pixel_size >= SPLAT_MIN_TILE_PIXELS
+                && images.is_some()
+                && splat.materials.is_some() =>
+        {
+            Some(SplatInputs {
+                climate: Arc::clone(climate),
+                palette: Arc::clone(&gpu.palette),
+                paint: splat
+                    .paint
+                    .as_ref()
+                    .map_or_else(Arc::default, |paint| Arc::clone(&paint.regions)),
+            })
+        }
+        _ => None,
+    };
+    let chooser = StyleChooser {
+        mode: *mode,
+        paint: splat.paint.as_deref(),
+        splat: splat_inputs.is_some(),
+    };
+    let inputs = ChunkGenInputs {
+        maps: world.maps_arc(),
+        splat: splat_inputs,
+    };
+
+    // Cancel pending background tasks outside `keep_radius` or baked for a stale style.
     // Dropping a `Task` cancels it: async-task-4.7.1/src/task.rs:49,440.
-    cache
-        .pending
-        .retain(|coord, pending| keep_slots.contains_key(coord) && pending.mode == *mode);
+    cache.pending.retain(|coord, pending| {
+        keep_slots.contains_key(coord) && pending.style == chooser.style_for(*coord)
+    });
 
     let chunk_world_size = Vec2::splat(CHUNK_SIZE_F32 * focus.tile_pixel_size.max(0.1));
 
     // Keep all active chunks (both inside `stream_ring` and inside the hysteresis keep-margin)
-    // locked to the floating camera origin.
+    // locked to the floating camera origin. Sprites size through `custom_size`, splat meshes
+    // through their unit quad's scale.
     for (coord, entry) in &cache.active {
         if let Some(slot) = keep_slots.get(coord)
-            && let Ok((mut transform, mut sprite)) = chunk_transforms.get_mut(entry.entity)
+            && let Ok((mut transform, sprite)) = chunk_transforms.get_mut(entry.entity)
         {
             *transform = chunk_transform(slot);
-            sprite.custom_size = Some(chunk_world_size);
+            match sprite {
+                Some(mut sprite) => sprite.custom_size = Some(chunk_world_size),
+                None => transform.scale = chunk_world_size.extend(1.0),
+            }
         }
     }
+
+    let gpu = splat.gpu.as_deref();
+    let mut sink = ChunkSink {
+        commands: &mut commands,
+        images: images.as_deref_mut(),
+        materials: splat.materials.as_deref_mut(),
+        gpu,
+        world_size: chunk_world_size,
+    };
 
     // `AsyncComputeTaskPool::try_get`: bevy_tasks-0.20.1/src/usages.rs:21.
     // Falls back to synchronous generation when no task pool is initialized (e.g. headless tests).
@@ -1225,38 +1454,15 @@ fn sync_streamed_chunks(
     };
 
     if let Some(pool) = async_pool {
-        poll_completed_async_chunks(
-            &keep_slots,
-            chunk_world_size,
-            &mut commands,
-            images.as_deref_mut(),
-            &mut cache,
-            &mut chunk_transforms,
-        );
-        dispatch_async_chunks(pool, &world, &stream_ring, *mode, &mut cache);
+        poll_completed_async_chunks(&keep_slots, &mut sink, &mut cache);
+        dispatch_async_chunks(pool, &inputs, &stream_ring, &chooser, &mut cache);
     } else {
-        sync_chunks_blocking(
-            &world,
-            &stream_ring,
-            ChunkRenderConfig {
-                mode: *mode,
-                world_size: chunk_world_size,
-            },
-            &mut commands,
-            images.as_deref_mut(),
-            &mut cache,
-            &mut chunk_transforms,
-        );
+        sync_chunks_blocking(&inputs, &stream_ring, &chooser, &mut sink, &mut cache);
     }
 
     let missing_in_ring = stream_ring
         .iter()
-        .filter(|slot| {
-            !cache
-                .active
-                .get(&slot.coord)
-                .is_some_and(|entry| entry.rendered_mode == *mode)
-        })
+        .filter(|slot| !chooser.up_to_date(&cache, slot.coord))
         .count();
     stats.active_chunks = cache.active.len();
     stats.in_flight_tasks = cache.pending.len();

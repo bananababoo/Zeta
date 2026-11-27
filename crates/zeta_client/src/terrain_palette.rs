@@ -6,12 +6,21 @@
 //! `ground_cover` field, and authored maps and regions reference entries by `id`.
 
 use std::collections::HashSet;
+use std::sync::Arc;
 
+use bevy::asset::RenderAssetUsages;
+use bevy::image::{
+    CompressedImageFormats, ImageAddressMode, ImageSampler, ImageSamplerDescriptor, ImageType,
+};
 use bevy::prelude::*;
+use bevy::render::render_resource::{
+    Extent3d, TextureDimension, TextureFormat, TextureViewDescriptor, TextureViewDimension,
+};
+use bevy::sprite_render::Material2dPlugin;
 use serde::Deserialize;
 use zeta_core::world::{GroundCover, PlanetTile, hash_unit, tile_hash};
 
-use crate::terrain::assets_root;
+use crate::terrain::{TerrainSplatMaterial, assets_root};
 
 /// Palette file path relative to `assets/`.
 pub const PALETTE_PATH: &str = "terrain/palette.json";
@@ -99,11 +108,17 @@ impl TerrainPalette {
                 return Err(format!("palette entry {:?} has no texture", entry.id));
             }
             if entry.tiles_per_repeat == 0 {
-                return Err(format!("palette entry {:?} has tiles_per_repeat 0", entry.id));
+                return Err(format!(
+                    "palette entry {:?} has tiles_per_repeat 0",
+                    entry.id
+                ));
             }
             if let Some(name) = &entry.ground_cover {
                 let cover = GroundCover::from_name(name).ok_or_else(|| {
-                    format!("palette entry {:?} names unknown ground_cover {name:?}", entry.id)
+                    format!(
+                        "palette entry {:?} names unknown ground_cover {name:?}",
+                        entry.id
+                    )
                 })?;
                 let index = u8::try_from(index).map_err(|_| "palette index overflow")?;
                 variants[cover_slot(cover)].push(index);
@@ -217,13 +232,298 @@ fn floor_to_index(value: f32, len: usize) -> usize {
     (value.max(0.0) as usize).min(len.saturating_sub(1))
 }
 
+/// Per palette layer uniform of `TerrainSplatMaterial` for a quad whose top-left tile is
+/// `(origin_x, origin_y)`: `xy` = origin modulo the layer repeat, `z` = 1 / repeat.
+///
+/// The modulo is integer math, so UVs stay continuous across quads without ever putting a raw
+/// face tile coordinate into an `f32` (`terrain_contract.md` Section 1).
+#[must_use]
+pub fn layer_params(
+    palette: &TerrainPalette,
+    origin_x: u32,
+    origin_y: u32,
+) -> [Vec4; MAX_PALETTE_ENTRIES] {
+    let mut params = [Vec4::new(0.0, 0.0, 1.0, 0.0); MAX_PALETTE_ENTRIES];
+    for (slot, entry) in params.iter_mut().zip(palette.entries()) {
+        let repeat = entry.tiles_per_repeat;
+        *slot = Vec4::new(
+            len_to_f32((origin_x % repeat) as usize),
+            len_to_f32((origin_y % repeat) as usize),
+            1.0 / len_to_f32(repeat as usize),
+            0.0,
+        );
+    }
+    params
+}
+
+/// GPU side of the palette: the mipmapped texture array and the shared unit quad mesh.
+#[derive(Resource, Clone, Debug)]
+pub struct TerrainPaletteGpu {
+    /// Parsed palette whose entry order matches the array layers.
+    pub palette: Arc<TerrainPalette>,
+    /// `texture_2d_array` with 1 layer per palette entry.
+    pub layers: Handle<Image>,
+    /// 1 x 1 rectangle scaled by each terrain quad's transform.
+    pub unit_mesh: Handle<Mesh>,
+}
+
+/// Loads the palette and its texture array at startup and registers the splat material.
+///
+/// Added by `MapPlugin` and `PlanetStreamPlugin` when `AssetPlugin` exists. A palette error is
+/// logged and leaves [`TerrainPaletteGpu`] absent, so terrain falls back to the raster path.
+pub struct TerrainPalettePlugin;
+
+impl Plugin for TerrainPalettePlugin {
+    fn build(&self, app: &mut App) {
+        // `App::is_plugin_added`: bevy_app-0.20.1/src/app.rs:570.
+        if !app.is_plugin_added::<Material2dPlugin<TerrainSplatMaterial>>() {
+            app.add_plugins(Material2dPlugin::<TerrainSplatMaterial>::default());
+        }
+        app.add_systems(PreStartup, load_terrain_palette);
+    }
+}
+
+/// Adds [`TerrainPalettePlugin`] unless an earlier plugin already did.
+pub fn add_terrain_palette_plugin(app: &mut App) {
+    if !app.is_plugin_added::<TerrainPalettePlugin>() {
+        app.add_plugins(TerrainPalettePlugin);
+    }
+}
+
+fn load_terrain_palette(
+    mut commands: Commands,
+    images: Option<ResMut<Assets<Image>>>,
+    meshes: Option<ResMut<Assets<Mesh>>>,
+) {
+    let (Some(mut images), Some(mut meshes)) = (images, meshes) else {
+        return;
+    };
+    let palette = match TerrainPalette::load() {
+        Ok(palette) => palette,
+        Err(error) => {
+            error!("terrain palette unavailable, splat terrain disabled: {error}");
+            return;
+        }
+    };
+    let array = match build_palette_array(&palette) {
+        Ok(array) => array,
+        Err(error) => {
+            error!("terrain palette textures unavailable, splat terrain disabled: {error}");
+            commands.insert_resource(palette);
+            return;
+        }
+    };
+    commands.insert_resource(palette.clone());
+    commands.insert_resource(TerrainPaletteGpu {
+        palette: Arc::new(palette),
+        layers: images.add(array),
+        // `Rectangle::new`: bevy_shape-0.20.1/src/dim2.rs:1827; UV (0, 0) is the top-left
+        // corner (bevy_mesh-0.20.1/src/primitives/dim2.rs:1068).
+        unit_mesh: meshes.add(Rectangle::new(1.0, 1.0)),
+    });
+}
+
+/// Decodes every palette texture and builds 1 mipmapped `Rgba8UnormSrgb` texture array.
+///
+/// # Errors
+///
+/// Returns an error naming the file when a texture is missing, does not decode, or differs in
+/// size from the first entry.
+pub fn build_palette_array(palette: &TerrainPalette) -> Result<Image, String> {
+    let mut size = None;
+    let mut layers = Vec::with_capacity(palette.entries().len());
+    for entry in palette.entries() {
+        let path = assets_root().join(&entry.texture);
+        let bytes = std::fs::read(&path).map_err(|error| format!("{}: {error}", path.display()))?;
+        let extension = path
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .unwrap_or_default();
+        // `Image::from_buffer`: bevy_image-0.20.1/src/image.rs:1589.
+        let image = Image::from_buffer(
+            &bytes,
+            ImageType::Extension(extension),
+            CompressedImageFormats::NONE,
+            true,
+            ImageSampler::Default,
+            RenderAssetUsages::MAIN_WORLD,
+        )
+        .map_err(|error| format!("{}: {error}", path.display()))?;
+        // `Image::convert`: bevy_image-0.20.1/src/image.rs:1556.
+        let image = if image.texture_descriptor.format == TextureFormat::Rgba8UnormSrgb {
+            image
+        } else {
+            image
+                .convert(TextureFormat::Rgba8UnormSrgb)
+                .ok_or_else(|| format!("{} cannot convert to RGBA8 sRGB", path.display()))?
+        };
+        let this = (image.width(), image.height());
+        if *size.get_or_insert(this) != this {
+            return Err(format!(
+                "{} differs in size from the first entry",
+                path.display()
+            ));
+        }
+        let data = image
+            .data
+            .ok_or_else(|| format!("{} has no pixel data", path.display()))?;
+        layers.push(data);
+    }
+    let (width, height) = size.ok_or("palette has no entries")?;
+
+    let mut mip_count = 1_u32;
+    let mut bytes = Vec::new();
+    for layer in &layers {
+        let mut level = layer.clone();
+        let (mut w, mut h) = (width, height);
+        let mut levels = 1;
+        bytes.extend_from_slice(&level);
+        while w > 1 || h > 1 {
+            let (next, nw, nh) = downsample_srgb(&level, w, h);
+            bytes.extend_from_slice(&next);
+            level = next;
+            (w, h) = (nw, nh);
+            levels += 1;
+        }
+        mip_count = levels;
+    }
+
+    let layer_count = u32::try_from(layers.len()).map_err(|_| "palette layer overflow")?;
+    // `Image::new_uninit` skips the 1-mip length assert of `Image::new`
+    // (bevy_image-0.20.1/src/image.rs:1143); data is layer-major, each layer with its full mip
+    // chain (`TextureDataOrder::LayerMajor`, wgpu-types texture.rs:41).
+    let mut image = Image::new_uninit(
+        Extent3d {
+            width,
+            height,
+            depth_or_array_layers: layer_count,
+        },
+        TextureDimension::D2,
+        TextureFormat::Rgba8UnormSrgb,
+        RenderAssetUsages::RENDER_WORLD,
+    );
+    image.texture_descriptor.mip_level_count = mip_count;
+    image.data = Some(bytes);
+    // `Image::texture_view_descriptor`: bevy_image-0.20.1/src/image.rs:662; same pattern as
+    // the DDS loader (bevy_image-0.20.1/src/dds.rs:97).
+    image.texture_view_descriptor = Some(TextureViewDescriptor {
+        dimension: Some(TextureViewDimension::D2Array),
+        ..default()
+    });
+    // `ImageSamplerDescriptor::linear` sets a linear mipmap filter
+    // (bevy_image-0.20.1/src/image.rs:903); `ImageAddressMode::Repeat` (image.rs:747).
+    image.sampler = ImageSampler::Descriptor(ImageSamplerDescriptor {
+        address_mode_u: ImageAddressMode::Repeat,
+        address_mode_v: ImageAddressMode::Repeat,
+        anisotropy_clamp: 8,
+        ..ImageSamplerDescriptor::linear()
+    });
+    Ok(image)
+}
+
+/// sRGB byte to linear light.
+fn srgb_to_linear(value: u8) -> f32 {
+    let c = f32::from(value) / 255.0;
+    if c <= 0.040_45 {
+        c / 12.92
+    } else {
+        ((c + 0.055) / 1.055).powf(2.4)
+    }
+}
+
+/// Linear light to an sRGB byte.
+#[expect(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "value is clamped to [0.0, 255.0] before conversion"
+)]
+fn linear_to_srgb(value: f32) -> u8 {
+    let c = value.clamp(0.0, 1.0);
+    let encoded = if c <= 0.003_130_8 {
+        c * 12.92
+    } else {
+        1.055 * c.powf(1.0 / 2.4) - 0.055
+    };
+    (encoded * 255.0 + 0.5).clamp(0.0, 255.0) as u8
+}
+
+/// Halves an RGBA8 sRGB image with a 2 x 2 box filter in linear light (alpha averaged as is).
+fn downsample_srgb(data: &[u8], width: u32, height: u32) -> (Vec<u8>, u32, u32) {
+    let (nw, nh) = ((width / 2).max(1), (height / 2).max(1));
+    let mut out = Vec::with_capacity((nw * nh * 4) as usize);
+    for y in 0..nh {
+        for x in 0..nw {
+            let mut sum = [0.0_f32; 4];
+            for (dx, dy) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
+                let sx = (x * 2 + dx).min(width - 1);
+                let sy = (y * 2 + dy).min(height - 1);
+                let i = ((sy * width + sx) * 4) as usize;
+                for (channel, total) in sum.iter_mut().enumerate().take(3) {
+                    *total += srgb_to_linear(data[i + channel]);
+                }
+                sum[3] += f32::from(data[i + 3]) / 255.0;
+            }
+            out.extend_from_slice(&[
+                linear_to_srgb(sum[0] * 0.25),
+                linear_to_srgb(sum[1] * 0.25),
+                linear_to_srgb(sum[2] * 0.25),
+                linear_to_srgb_alpha(sum[3] * 0.25),
+            ]);
+        }
+    }
+    (out, nw, nh)
+}
+
+#[expect(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "value is clamped to [0.0, 255.0] before conversion"
+)]
+fn linear_to_srgb_alpha(value: f32) -> u8 {
+    (value * 255.0 + 0.5).clamp(0.0, 255.0) as u8
+}
+
 #[cfg(test)]
 mod tests {
-    use bevy::asset::RenderAssetUsages;
-    use bevy::image::{CompressedImageFormats, ImageSampler, ImageType};
     use zeta_core::world::CubeFace;
 
     use super::*;
+
+    #[test]
+    fn palette_array_has_1_layer_per_entry_and_a_full_mip_chain() {
+        let palette = TerrainPalette::load().expect("valid palette");
+        let array = build_palette_array(&palette).expect("palette textures decode");
+        let desc = &array.texture_descriptor;
+        assert_eq!(
+            desc.size.depth_or_array_layers as usize,
+            palette.entries().len()
+        );
+        let largest = desc.size.width.max(desc.size.height);
+        assert_eq!(desc.mip_level_count, 32 - largest.leading_zeros());
+        let mut texels = 0_u64;
+        let (mut w, mut h) = (desc.size.width, desc.size.height);
+        for _ in 0..desc.mip_level_count {
+            texels += u64::from(w) * u64::from(h);
+            (w, h) = ((w / 2).max(1), (h / 2).max(1));
+        }
+        let expected = texels * 4 * u64::from(desc.size.depth_or_array_layers);
+        assert_eq!(
+            array.data.as_ref().map(Vec::len),
+            usize::try_from(expected).ok()
+        );
+    }
+
+    #[test]
+    fn layer_params_wrap_origins_with_integer_modulo() {
+        let palette = TerrainPalette::load().expect("valid palette");
+        let params = layer_params(&palette, 4_000_000, 3_999_999);
+        for (param, entry) in params.iter().zip(palette.entries()) {
+            let repeat = entry.tiles_per_repeat;
+            assert_eq!(param.x, len_to_f32((4_000_000 % repeat) as usize));
+            assert_eq!(param.y, len_to_f32((3_999_999 % repeat) as usize));
+            assert!(param.x < len_to_f32(repeat as usize));
+        }
+    }
 
     #[test]
     fn shipped_palette_is_valid_and_every_texture_shares_1_size_and_format() {
@@ -267,7 +567,12 @@ mod tests {
                 assert!(variants.contains(&pick));
                 seen.insert(pick);
             }
-            assert_eq!(seen.len(), variants.len(), "{} variants unused", cover.as_str());
+            assert_eq!(
+                seen.len(),
+                variants.len(),
+                "{} variants unused",
+                cover.as_str()
+            );
         }
     }
 
