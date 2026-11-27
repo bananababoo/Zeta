@@ -111,6 +111,9 @@ enum Scene {
     PlanetCoast,
     /// Live streamed `64x64` chunks directly straddling the rotated `NegX <-> PosY` cube-face seam.
     PlanetSeam,
+    /// The River Crossing scene with the local character at the region's north-west corner,
+    /// so the authored polygon edge and the planet ground around it share the screen.
+    RiverEdge,
 }
 
 /// What the fake cursor points at.
@@ -137,7 +140,7 @@ enum Step {
 
 impl Scene {
     /// Every scene, in the order `tools/ui_shots.ps1` lists them.
-    const ALL: [Self; 8] = [
+    const ALL: [Self; 9] = [
         Self::InventoryOpen,
         Self::InventoryHover,
         Self::InventoryMenu,
@@ -146,6 +149,7 @@ impl Scene {
         Self::InspectBridge,
         Self::PlanetCoast,
         Self::PlanetSeam,
+        Self::RiverEdge,
     ];
 
     /// The name given on the command line, which is also the PNG file name.
@@ -159,6 +163,7 @@ impl Scene {
             Self::InspectBridge => "inspect_bridge",
             Self::PlanetCoast => "planet_coast",
             Self::PlanetSeam => "planet_seam",
+            Self::RiverEdge => "river_edge",
         }
     }
 
@@ -177,7 +182,11 @@ impl Scene {
             Self::InventoryOpen => vec![open],
             Self::InventoryHover => vec![open, Step::Hover(Target::Slot("painters_supplies"))],
             Self::InventoryMenu => vec![open, Step::Click(Target::Slot("longsword"))],
-            Self::RiverScene | Self::CombatHud | Self::PlanetCoast | Self::PlanetSeam => Vec::new(),
+            Self::RiverScene
+            | Self::CombatHud
+            | Self::PlanetCoast
+            | Self::PlanetSeam
+            | Self::RiverEdge => Vec::new(),
             Self::InspectBridge => {
                 vec![Step::RightClick(Target::Square(river_crossing_pos(10, 10)))]
             }
@@ -347,7 +356,11 @@ fn spawn_fake_world(
     ));
     commands.spawn((
         LOCAL_CHARACTER,
-        river_crossing_pos(4, 10),
+        if scene.0 == Scene::RiverEdge {
+            river_crossing_pos(1, 1)
+        } else {
+            river_crossing_pos(4, 10)
+        },
         EntityName("Aria".to_owned()),
         Visual("An adventurer controlled by a player.".to_owned()),
         Creature,
