@@ -25,14 +25,8 @@ use serde::Deserialize;
 use zeta_core::world::{CHUNK_SIZE, PlanetClimateMaps, hash_unit, sample_climate, tile_hash};
 
 use crate::chunk_splat::ChunkGroundCover;
-use crate::planet_stream::{PlanetCameraFocus, PlanetWorld};
+use crate::planet_stream::PlanetWorld;
 use crate::terrain_palette::TerrainPalette;
-
-/// Climate maps of the planet, if the client loaded them.
-fn planet_climate(world: &PlanetWorld) -> Option<&PlanetClimateMaps> {
-    let _ = world;
-    None
-}
 
 /// Path of the clutter table, relative to `assets/`.
 pub const CLUTTER_CONFIG_PATH: &str = "terrain/clutter.json";
@@ -51,9 +45,13 @@ pub struct ClutterConfig {
 pub struct ClutterRule {
     /// Chance in `[0, 1]` that 1 tile carries 1 sprite.
     pub density: f32,
-    /// Whether the chance is multiplied by the climate foliage density (plants: yes,
-    /// pebbles: no).
+    /// Whether the chance follows the climate foliage density (plants: yes, pebbles: no).
     pub follows_foliage: bool,
+    /// Share of `density` in `[0, 1]` kept on bare ground (foliage `0`) when the rule
+    /// follows foliage; the chance rises linearly to the full `density` at foliage `1`.
+    /// Grassland has low foliage, so its tufts need a floor. Defaults to `0`.
+    #[serde(default)]
+    pub foliage_floor: f32,
     /// Weighted sprites to pick from.
     pub sprites: Vec<ClutterSprite>,
 }
@@ -162,6 +160,12 @@ impl ClutterRule {
         if !(0.0..=1.0).contains(&self.density) {
             return Err(format!("density {} is outside [0, 1]", self.density));
         }
+        if !(0.0..=1.0).contains(&self.foliage_floor) {
+            return Err(format!(
+                "foliage_floor {} is outside [0, 1]",
+                self.foliage_floor
+            ));
+        }
         if self.sprites.is_empty() {
             return Err("sprites is empty".to_owned());
         }
@@ -226,7 +230,8 @@ impl ClutterTable {
         }
         let rule = self.rule(input.palette_index)?;
         let chance = if rule.follows_foliage {
-            rule.density * input.foliage.clamp(0.0, 1.0)
+            let foliage = input.foliage.clamp(0.0, 1.0);
+            rule.density * (rule.foliage_floor + (1.0 - rule.foliage_floor) * foliage)
         } else {
             rule.density
         };
@@ -290,7 +295,7 @@ pub struct ChunkClutterSprite {
 /// Every clutter sprite of 1 chunk, in row-major tile order.
 ///
 /// `foliage` gives the climate foliage density of a tile; when it is `None` (no climate
-/// maps), rules that follow foliage draw nothing and the rest still draw.
+/// maps), rules that follow foliage draw as on bare ground (only their `foliage_floor`).
 #[must_use]
 pub fn chunk_clutter(
     table: &ClutterTable,
@@ -357,7 +362,6 @@ impl Plugin for GroundClutterPlugin {
                     clear_removed_chunk_clutter,
                     queue_changed_chunks,
                     build_queued_chunk_clutter,
-                    scale_clutter_layers,
                 )
                     .chain()
                     .run_if(resource_exists::<GroundClutterAssets>),
@@ -526,15 +530,14 @@ fn build_queued_chunk_clutter(
     mut commands: Commands,
     assets: Res<GroundClutterAssets>,
     world: Option<Res<PlanetWorld>>,
-    focus: Res<PlanetCameraFocus>,
     queued: Query<(Entity, &ChunkGroundCover, Option<&ChunkClutterLayer>), With<ClutterQueued>>,
 ) {
-    let climate = world.as_deref().and_then(planet_climate);
+    let climate = world.as_deref().and_then(PlanetWorld::climate);
     if climate.is_none() {
         // `warn_once!`: bevy_log-0.20.1/src/once.rs:35.
-        warn_once!("no planet climate maps: plant clutter is off, pebbles still draw");
+        warn_once!("no planet climate maps: plant clutter draws at its bare-ground floor");
     }
-    let tile_pixel_size = focus.tile_pixel_size.max(0.1);
+    let tiles_to_chunk = 0.5 / half_chunk_tiles();
     for (chunk, cover, old_layer) in queued.iter().take(MAX_CLUTTER_CHUNKS_PER_FRAME) {
         if let Some(old_layer) = old_layer
             && let Ok(mut old_layer) = commands.get_entity(old_layer.0)
@@ -542,8 +545,11 @@ fn build_queued_chunk_clutter(
             old_layer.despawn();
         }
         let sprites = chunk_clutter(&assets.table, cover, climate);
+        // The splat chunk is a unit mesh scaled to the chunk's world size
+        // (planet_stream.rs `spawn_splat_chunk`), so the layer scales by 1 / chunk side to
+        // place its children in tiles; zoom and view rotation follow the chunk.
         // `Transform::from_xyz`: bevy_transform-0.20.1/src/components/transform.rs:119.
-        // `Transform::with_scale`: bevy_transform-0.20.1/src/components/transform.rs.
+        // `Transform::with_scale`: bevy_transform-0.20.1/src/components/transform.rs:258.
         // `Visibility`: bevy_camera-0.20.1/src/visibility/mod.rs:83.
         // `ChildOf`: bevy_ecs-0.20.1/src/hierarchy.rs:107.
         // `EntityCommands::with_children`: bevy_ecs-0.20.1/src/hierarchy.rs:366.
@@ -551,8 +557,8 @@ fn build_queued_chunk_clutter(
             .spawn((
                 GroundClutterLayer,
                 Transform::from_xyz(0.0, 0.0, CLUTTER_LAYER_Z).with_scale(Vec3::new(
-                    tile_pixel_size,
-                    tile_pixel_size,
+                    tiles_to_chunk,
+                    tiles_to_chunk,
                     1.0,
                 )),
                 Visibility::default(),
@@ -585,7 +591,7 @@ impl GroundClutterAssets {
             .images
             .get(usize::from(sprite.palette_index))?
             .get(placement.sprite)?;
-        let half_chunk = local_tile_center(CHUNK_SIZE / 2) - 0.5;
+        let half_chunk = half_chunk_tiles();
         let x = local_tile_center(sprite.local_x) + placement.offset_tiles.x - half_chunk;
         let y = half_chunk - (local_tile_center(sprite.local_y) + placement.offset_tiles.y);
         let z = CLUTTER_ROW_Z_STEP * local_tile_center(sprite.local_y);
@@ -605,22 +611,9 @@ fn local_tile_center(index: u32) -> f32 {
     f32::from(u16::try_from(index).unwrap_or(u16::MAX)) + 0.5
 }
 
-/// Keeps every clutter layer at the current zoom.
-#[expect(
-    clippy::needless_pass_by_value,
-    reason = "Bevy system parameters are passed by value"
-)]
-fn scale_clutter_layers(
-    focus: Res<PlanetCameraFocus>,
-    mut layers: Query<&mut Transform, With<GroundClutterLayer>>,
-) {
-    if !focus.is_changed() {
-        return;
-    }
-    let tile_pixel_size = focus.tile_pixel_size.max(0.1);
-    for mut transform in &mut layers {
-        transform.scale = Vec3::new(tile_pixel_size, tile_pixel_size, 1.0);
-    }
+/// Half a chunk side in tiles.
+fn half_chunk_tiles() -> f32 {
+    local_tile_center(CHUNK_SIZE / 2) - 0.5
 }
 
 #[cfg(test)]
@@ -747,6 +740,33 @@ mod tests {
     }
 
     #[test]
+    fn foliage_floor_keeps_a_share_of_plants_on_bare_ground() {
+        let table = ClutterConfig::from_json(
+            r#"{"palette":{"meadow":{"density":1.0,"follows_foliage":true,"foliage_floor":0.5,"sprites":[{"texture":"a","weight":1,"min_size_tiles":0.2,"max_size_tiles":0.3}]}}}"#,
+        )
+        .and_then(|config| config.resolve(&PALETTE))
+        .expect("floor table is valid");
+        let count = |foliage: f32| {
+            (0..20_000_u64)
+                .filter(|&hash| {
+                    table
+                        .place(ClutterTileInput {
+                            foliage,
+                            ..input(0, hash.wrapping_mul(0x9e37_79b9_7f4a_7c15))
+                        })
+                        .is_some()
+                })
+                .count()
+        };
+        let bare = count(0.0);
+        assert!(
+            (9_000..11_000).contains(&bare),
+            "floor 0.5 on bare ground gave {bare}"
+        );
+        assert_eq!(count(1.0), 20_000, "full foliage reaches the full density");
+    }
+
+    #[test]
     fn sprites_stay_inside_their_tile_within_their_size_range() {
         let table = test_table();
         let mut picks = [0_usize; 2];
@@ -792,6 +812,7 @@ mod tests {
     fn from_json_rejects_invalid_rules() {
         let bad = [
             r#"{"palette":{"x":{"density":1.5,"follows_foliage":false,"sprites":[{"texture":"a","weight":1,"min_size_tiles":0.2,"max_size_tiles":0.3}]}}}"#,
+            r#"{"palette":{"x":{"density":0.5,"follows_foliage":true,"foliage_floor":1.5,"sprites":[{"texture":"a","weight":1,"min_size_tiles":0.2,"max_size_tiles":0.3}]}}}"#,
             r#"{"palette":{"x":{"density":0.5,"follows_foliage":false,"sprites":[]}}}"#,
             r#"{"palette":{"x":{"density":0.5,"follows_foliage":false,"sprites":[{"texture":"a","weight":0,"min_size_tiles":0.2,"max_size_tiles":0.3}]}}}"#,
             r#"{"palette":{"x":{"density":0.5,"follows_foliage":false,"sprites":[{"texture":"a","weight":1,"min_size_tiles":0.5,"max_size_tiles":0.3}]}}}"#,

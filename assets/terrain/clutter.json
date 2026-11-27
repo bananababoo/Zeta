@@ -1,8 +1,9 @@
 {
   "palette": {
     "grass_lush": {
-      "density": 0.45,
+      "density": 0.55,
       "follows_foliage": true,
+      "foliage_floor": 0.6,
       "sprites": [
         {
           "texture": "terrain/clutter/grassclump_a.png",
@@ -67,8 +68,9 @@
       ]
     },
     "grass_meadow": {
-      "density": 0.45,
+      "density": 0.55,
       "follows_foliage": true,
+      "foliage_floor": 0.6,
       "sprites": [
         {
           "texture": "terrain/clutter/grassclump_a.png",
@@ -133,8 +135,9 @@
       ]
     },
     "grass_forest": {
-      "density": 0.35,
+      "density": 0.45,
       "follows_foliage": true,
+      "foliage_floor": 0.6,
       "sprites": [
         {
           "texture": "terrain/clutter/grassclump_a.png",
@@ -169,8 +172,9 @@
       ]
     },
     "grass_dry": {
-      "density": 0.25,
+      "density": 0.4,
       "follows_foliage": true,
+      "foliage_floor": 0.6,
       "sprites": [
         {
           "texture": "terrain/clutter/grassclump_a.png",
@@ -223,8 +227,9 @@
       ]
     },
     "grass_savanna": {
-      "density": 0.25,
+      "density": 0.4,
       "follows_foliage": true,
+      "foliage_floor": 0.6,
       "sprites": [
         {
           "texture": "terrain/clutter/grassclump_a.png",
@@ -253,8 +258,9 @@
       ]
     },
     "grass_cold": {
-      "density": 0.2,
+      "density": 0.3,
       "follows_foliage": true,
+      "foliage_floor": 0.6,
       "sprites": [
         {
           "texture": "terrain/clutter/grassclump_a.png",
@@ -361,8 +367,9 @@
       ]
     },
     "forest_floor": {
-      "density": 0.3,
+      "density": 0.35,
       "follows_foliage": true,
+      "foliage_floor": 0.6,
       "sprites": [
         {
           "texture": "terrain/clutter/dense_clover_patch_plant.png",
@@ -421,8 +428,9 @@
       ]
     },
     "swamp": {
-      "density": 0.3,
+      "density": 0.35,
       "follows_foliage": true,
+      "foliage_floor": 0.6,
       "sprites": [
         {
           "texture": "terrain/clutter/grassclump_a.png",
