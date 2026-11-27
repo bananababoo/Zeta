@@ -55,7 +55,9 @@ pub const CONTROL_SIDE: usize = CHUNK_TILES * TEXELS_PER_TILE + 2;
 pub const SHADE_SIDE: usize = CHUNK_TILES + 2;
 /// Cover grid halo in tiles: edge noise moves a texel's 4 blend cells up to 2 tiles away
 /// from its own tile, and halo texels sit 1 tile outside the chunk.
-const COVER_HALO: usize = 3;
+const COVER_HALO_TILES: u32 = 3;
+/// [`COVER_HALO_TILES`] as an index.
+const COVER_HALO: usize = COVER_HALO_TILES as usize;
 /// Cover grid side in tiles: chunk tiles plus [`COVER_HALO`] on each side.
 const COVER_SIDE: usize = CHUNK_TILES + 2 * COVER_HALO;
 /// Padding that makes [`shore_distances`] exact inside the cover grid.
@@ -63,7 +65,7 @@ const SHORE_PAD: usize = SHORE_DISTANCE_MAX_TILES as usize;
 /// Side of the sampled tile window: cover grid plus shore padding on each side.
 const WINDOW_SIDE: usize = COVER_SIDE + 2 * SHORE_PAD;
 /// Tiles between the window's top-left tile and the chunk origin tile.
-const WINDOW_OFFSET: i64 = COVER_HALO as i64 + SHORE_DISTANCE_MAX_TILES as i64;
+const WINDOW_OFFSET: i64 = COVER_HALO_TILES as i64 + SHORE_DISTANCE_MAX_TILES as i64;
 /// Cover weights reach 0 and 1 this far from the midpoint between 2 tile centers.
 const BLEND_EDGE: (f32, f32) = (0.1, 0.9);
 /// Edge noise octaves: lattice spacing in control texels and amplitude in tiles. The sum
@@ -258,14 +260,17 @@ pub fn bake_chunk_splat(
         .collect();
 
     let face_salt = u64::try_from(coord.face.index()).unwrap_or(0) << 56;
-    let texel_x0 = i64::from(origin.x) * TEXELS_PER_TILE_I64 - 1;
-    let texel_y0 = i64::from(origin.y) * TEXELS_PER_TILE_I64 - 1;
+    let first_texel_col = i64::from(origin.x) * TEXELS_PER_TILE_I64 - 1;
+    let first_texel_row = i64::from(origin.y) * TEXELS_PER_TILE_I64 - 1;
     let mut control = vec![0_u8; CONTROL_SIDE * CONTROL_SIDE * 4];
     for py in 0..CONTROL_SIDE {
         let rel_y = index_to_i64(py) - 1;
         for px in 0..CONTROL_SIDE {
             let rel_x = index_to_i64(px) - 1;
-            let global = (texel_x0 + index_to_i64(px), texel_y0 + index_to_i64(py));
+            let global = (
+                first_texel_col + index_to_i64(px),
+                first_texel_row + index_to_i64(py),
+            );
             let warp = Vec2::new(
                 warp_noise(face_salt ^ WARP_SALT_X, global.0, global.1),
                 warp_noise(face_salt ^ WARP_SALT_Y, global.0, global.1),
@@ -779,7 +784,7 @@ mod tests {
         let count = palette.entries().len();
         assert!(bake.ground.dominant.iter().all(|&i| usize::from(i) < count));
         assert!(bake.ground.region_painted.iter().all(|&painted| !painted));
-        for chunk in bake.control.chunks_exact(4) {
+        for chunk in bake.control.as_chunks::<4>().0 {
             assert!(usize::from(chunk[0]) < count && usize::from(chunk[1]) < count);
         }
     }

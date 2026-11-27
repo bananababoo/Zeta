@@ -359,7 +359,7 @@ struct ActiveChunk {
 }
 
 enum ChunkPayload {
-    Raster(Image),
+    Raster(Box<Image>),
     Splat(Box<ChunkSplatBake>),
 }
 
@@ -400,16 +400,16 @@ fn generate_chunk(inputs: &ChunkGenInputs, coord: ChunkCoord, style: ChunkStyle)
         ))),
         (ChunkStyle::Raster(mode), _) => {
             let terrain = sample_chunk(&inputs.maps, coord);
-            ChunkPayload::Raster(build_chunk_image(&inputs.maps, &terrain, mode))
+            ChunkPayload::Raster(Box::new(build_chunk_image(&inputs.maps, &terrain, mode)))
         }
         // `desired_style` only asks for a splat when `splat` exists.
         (ChunkStyle::Splat(_), None) => {
             let terrain = sample_chunk(&inputs.maps, coord);
-            ChunkPayload::Raster(build_chunk_image(
+            ChunkPayload::Raster(Box::new(build_chunk_image(
                 &inputs.maps,
                 &terrain,
                 PlanetRenderMode::ElevationShaded,
-            ))
+            )))
         }
     };
     GeneratedChunk { payload, style }
@@ -1169,7 +1169,7 @@ fn apply_generated_chunk(
             let handle = sink
                 .images
                 .as_deref_mut()
-                .map_or_else(Handle::default, |images| images.add(image));
+                .map_or_else(Handle::default, |images| images.add(*image));
             // `Sprite::from_image`: bevy_sprite-0.20.1/src/sprite.rs:56.
             // `Sprite::custom_size`: bevy_sprite-0.20.1/src/sprite.rs:31.
             let mut sprite = Sprite::from_image(handle.clone());
@@ -1356,7 +1356,6 @@ fn sync_chunks_blocking(
 #[expect(
     clippy::needless_pass_by_value,
     clippy::too_many_arguments,
-    clippy::too_many_lines,
     reason = "Bevy system parameters are passed by value"
 )]
 fn sync_streamed_chunks(

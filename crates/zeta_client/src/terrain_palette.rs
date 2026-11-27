@@ -242,9 +242,7 @@ pub fn value_noise_unit(salt: u64, x: i64, y: i64, spacing: i64) -> f32 {
     let (tx, ty) = (smooth(x), smooth(y));
     // Face positions stay below 2^32 fine units, so the low 32 bits name each lattice point.
     let low = |value: i64| u64::try_from(value & 0xFFFF_FFFF).unwrap_or(0);
-    let corner = |dx: i64, dy: i64| {
-        hash_unit((low(cell_x + dx) << 32) | low(cell_y + dy), salt)
-    };
+    let corner = |dx: i64, dy: i64| hash_unit((low(cell_x + dx) << 32) | low(cell_y + dy), salt);
     let top = corner(0, 0) + (corner(1, 0) - corner(0, 0)) * tx;
     let bottom = corner(0, 1) + (corner(1, 1) - corner(0, 1)) * tx;
     (top + (bottom - top) * ty).clamp(0.0, 0.999_999)
