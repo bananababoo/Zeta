@@ -54,17 +54,17 @@ Does not store per-tile 5-foot wilderness grids on disk. Climate stacks onto thi
 ## 3. Climate Layer & Ground Cover
 
 ### What
-Climate lives in `assets/world/faces/` as 6 `RGBA8` PNG files named `{face}_climate.png`, each `1024 × 1024` pixels, with the same face names and orientation as the `{face}_elevation.png` heightmaps. The channel encoding is listed in the Climate Face Encoding schema. A deterministic Python generator in `tools/` builds the 6 files from latitude, an elevation lapse rate, and distance to ocean, following the conventions of [`tools/build_planet_faces.py`](../../tools/build_planet_faces.py), and reads an optional overrides file from `tools/worldgen/`.
+Climate lives in `assets/world/faces/` as 6 `RGBA8` PNG files named `{face}_climate.png`, each `1024 × 1024` pixels, with the same face names and orientation as the `{face}_elevation.png` heightmaps. The channel encoding is listed in the Climate Face Encoding schema. The deterministic generator [`tools/build_climate_faces.py`](../../tools/build_climate_faces.py) builds the 6 files from latitude, an elevation lapse rate, and distance to ocean, following the conventions of [`tools/build_planet_faces.py`](../../tools/build_planet_faces.py). Every generator input comes from the 3D direction of a pixel, so values match across face edges.
 
-`zeta_core` samples climate with `sample_climate(&PlanetClimateMaps, PlanetTile) -> ClimateSample { temperature, moisture, foliage, biome_override }`. Temperature, moisture, and foliage use the same bicubic cross-face sampling as `sample_macro_elevation_ft`, so values stay continuous across all 6 face edges. The biome override channel uses nearest sampling and is never interpolated.
+[`crates/zeta_core/src/world/climate.rs`](../../crates/zeta_core/src/world/climate.rs) samples climate with `sample_climate(&PlanetClimateMaps, PlanetTile) -> ClimateSample { temperature, moisture, foliage, biome_override }`, returning temperature in degrees Celsius and moisture and foliage in `0–1`. Temperature, moisture, and foliage use the same bicubic cross-face sampling as `sample_macro_elevation_ft`, so values stay continuous across all 6 face edges. The biome override channel uses nearest sampling and is never interpolated.
 
-`zeta_core` derives each tile's ground cover with a pure function, `ground_cover`, that returns 1 value of the closed unit enum `GroundCover`. Its inputs are the climate sample, the elevation sample, the slope from neighbor step heights, the distance to shore, and hash noise. Steep slopes become rock, tiles near shore become sand, and hash noise places soil patches. Every deterministic scatter in the world uses 1 stable, documented hash, `tile_hash(PlanetTile) -> u64`. The client loads climate files with an `RGBA8` loader next to its 16-bit elevation loader.
+[`crates/zeta_core/src/world/ground.rs`](../../crates/zeta_core/src/world/ground.rs) derives each tile's ground cover with a pure function, `ground_cover`, that returns 1 value of the closed unit enum `GroundCover`: `deep_water`, `shallow_water`, `beach`, `desert_sand`, `lush_grass`, `grass`, `dry_grass`, `tundra`, `swamp`, `forest_floor`, `dirt`, `rock`, or `snow`. Its inputs are the climate sample, the elevation sample, the slope from neighbor step heights, the distance to shore, and hash noise. Steep slopes and alpine heights become rock, tiles near shore become beach, and low-frequency noise places dirt patches and swamp pools; the rule order and thresholds live in the `ground_cover` doc comment. Every deterministic scatter in the world uses 1 stable, documented hash, `tile_hash(PlanetTile) -> u64`. The client loads climate files with `load_planet_climate_maps` in [`crates/zeta_client/src/planet_io.rs`](../../crates/zeta_client/src/planet_io.rs), next to its 16-bit elevation loader.
 
 ### Why
 Storing climate at the heightmap's resolution keeps the whole planet's climate to a few megabytes and lets the generator derive temperature from the same elevations players walk on. Computing ground cover per tile from stored climate plus deterministic detail gives every 5-foot square a stable cover type with 0 bytes of per-tile storage. The function is pure and has no Bevy dependency, so every caller gets the same cover for the same tile.
 
 ### Boundaries
-Does not define river networks or named biomes. The physical units behind each normalized climate channel are documented in the generator. A biome override value of `0` means no override.
+Does not define river networks or named biomes. No biome override ids are defined yet, so every generated pixel stores `0`, meaning no override.
 
 ---
 
@@ -133,9 +133,9 @@ Each channel of a `{face}_climate.png` pixel holds 1 value.
 
 | Channel | Value | Range | Sampling |
 |---|---|---|---|
-| **R** | Temperature | `0–255`, normalized | Bicubic |
-| **G** | Moisture | `0–255`, normalized | Bicubic |
-| **B** | Foliage density | `0–255`, normalized | Bicubic |
+| **R** | Mean annual air temperature | `0–255` -> `-50` to `+40` degrees Celsius, linear | Bicubic |
+| **G** | Moisture index | `0–255` -> `0–1` (ocean `1`) | Bicubic |
+| **B** | Foliage density | `0–255` -> `0–1` (ocean `0`) | Bicubic |
 | **A** | Biome override id | `0` = none | Nearest |
 
 ### Terrain Palette Entry
