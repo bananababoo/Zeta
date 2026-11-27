@@ -168,15 +168,6 @@ impl PlanetHeightmaps {
     pub const fn res(&self) -> u32 {
         self.res
     }
-
-    /// Reads an arbitrary signed pixel coordinate on `face`, crossing onto neighboring faces
-    /// via the exact cube-sphere adjacency table when `px` or `py` falls outside `[0, res)`.
-    fn sample_pixel_cross_face(&self, face: CubeFace, pixel_x: i64, pixel_y: i64) -> f64 {
-        let (target_face, sample_x, sample_y, _rot) =
-            step_grid(face, self.res, i128::from(pixel_x), i128::from(pixel_y));
-        let raw = self.face(target_face).get(sample_x, sample_y);
-        f64::from(raw) - f64::from(SEA_LEVEL_U16)
-    }
 }
 
 /// Deterministic Layer 0 + Layer 1 terrain sample for a single 5-foot square.
@@ -213,9 +204,50 @@ impl ChunkTerrain {
 /// Bicubic-interpolates the Layer 0 macro elevation (in feet relative to sea level) at `tile`,
 /// seamlessly sampling across neighboring cube faces at edges.
 pub fn sample_macro_elevation_ft(maps: &PlanetHeightmaps, tile: PlanetTile) -> f64 {
+    let [elevation_ft] = sample_cross_face_smooth(maps.res(), tile, |face, pixel_x, pixel_y| {
+        [f64::from(maps.face(face).get(pixel_x, pixel_y)) - f64::from(SEA_LEVEL_U16)]
+    });
+    elevation_ft
+}
+
+/// Returns the face pixel `(face, x, y)` of a `res × res` per-face raster whose area contains
+/// the center of `tile` (nearest sampling, for categorical channels that must never blend).
+pub(crate) fn tile_pixel(res: u32, tile: PlanetTile) -> (CubeFace, u32, u32) {
     let normalized = normalize_tile(tile);
-    let res_f64 = f64::from(maps.res());
+    let res_u64 = u64::from(res.max(1));
+    let denominator = 2 * u64::from(FACE_TILES);
+    // Tile center (x + 0.5) scaled to pixels: floor((2x + 1) * res / (2 * FACE_TILES)).
+    let to_pixel = |coord: u32| -> u32 {
+        let pixel = (2 * u64::from(coord) + 1) * res_u64 / denominator;
+        u32::try_from(pixel.min(res_u64 - 1)).unwrap_or(0)
+    };
+    (
+        normalized.face,
+        to_pixel(normalized.x),
+        to_pixel(normalized.y),
+    )
+}
+
+/// Smoothly interpolates any `N`-channel per-face raster of side `res` at `tile`.
+///
+/// `fetch(face, x, y)` reads 1 in-bounds pixel. Uses Catmull-Rom bicubic taps that cross
+/// onto neighboring faces through the cube-sphere adjacency table, blending to cross-face
+/// bilinear near the 8 cube corners. Shared by Layer 0 elevation and the climate maps so
+/// every planetary raster is seam-continuous in the same way.
+pub(crate) fn sample_cross_face_smooth<const N: usize>(
+    res: u32,
+    tile: PlanetTile,
+    fetch: impl Fn(CubeFace, u32, u32) -> [f64; N],
+) -> [f64; N] {
+    let normalized = normalize_tile(tile);
+    let res = res.max(1);
+    let res_f64 = f64::from(res);
     let tiles_f64 = f64::from(FACE_TILES);
+    let fetch_signed = |face: CubeFace, pixel_x: i64, pixel_y: i64| -> [f64; N] {
+        let (target_face, sample_x, sample_y, _rot) =
+            step_grid(face, res, i128::from(pixel_x), i128::from(pixel_y));
+        fetch(target_face, sample_x, sample_y)
+    };
 
     // Pixel centers in the heightmap lie at i + 0.5, matching `tools/build_planet_faces.py`.
     let float_x = (f64::from(normalized.x) + 0.5) * res_f64 / tiles_f64 - 0.5;
@@ -246,16 +278,38 @@ pub fn sample_macro_elevation_ft(maps: &PlanetHeightmaps, tile: PlanetTile) -> f
     let corner_blend = corner_edge_weight(dist_x) * corner_edge_weight(dist_y);
 
     if corner_blend >= 1.0 {
-        return sample_bilinear_cross_face(maps, normalized.face, base_x, base_y, frac_x, frac_y);
+        return sample_bilinear_cross_face(
+            res,
+            normalized.face,
+            base_x,
+            base_y,
+            frac_x,
+            frac_y,
+            &fetch_signed,
+        );
     }
 
-    let bicubic = sample_bicubic_cross_face(maps, normalized.face, base_x, base_y, frac_x, frac_y);
+    let bicubic = sample_bicubic_cross_face(
+        normalized.face,
+        base_x,
+        base_y,
+        frac_x,
+        frac_y,
+        &fetch_signed,
+    );
     if corner_blend <= 0.0 {
         bicubic
     } else {
-        let bilinear =
-            sample_bilinear_cross_face(maps, normalized.face, base_x, base_y, frac_x, frac_y);
-        lerp(bicubic, bilinear, corner_blend)
+        let bilinear = sample_bilinear_cross_face(
+            res,
+            normalized.face,
+            base_x,
+            base_y,
+            frac_x,
+            frac_y,
+            &fetch_signed,
+        );
+        std::array::from_fn(|channel| lerp(bicubic[channel], bilinear[channel], corner_blend))
     }
 }
 
@@ -263,15 +317,16 @@ fn corner_edge_weight(edge_distance_pixels: f64) -> f64 {
     1.0 - quintic_fade((edge_distance_pixels - 1.5).clamp(0.0, 1.0))
 }
 
-fn sample_bilinear_cross_face(
-    maps: &PlanetHeightmaps,
+fn sample_bilinear_cross_face<const N: usize>(
+    res: u32,
     face: CubeFace,
     base_x: i64,
     base_y: i64,
     frac_x: f64,
     frac_y: f64,
-) -> f64 {
-    let res = i64::from(maps.res());
+    fetch_signed: &impl Fn(CubeFace, i64, i64) -> [f64; N],
+) -> [f64; N] {
+    let res = i64::from(res);
     let coords = [
         (base_x, base_y),
         (base_x + 1, base_y),
@@ -282,49 +337,57 @@ fn sample_bilinear_cross_face(
     // At a cube corner, 3 faces meet instead of 4, so 1 of the 4 bilinear taps falls outside
     // both face edges simultaneously. Filling that virtual corner with the mean of the 3 real
     // corner pixels makes the bilinear surface identical across all 3 edges and the vertex.
-    let mut values = [0.0; 4];
+    let mut values = [[0.0; N]; 4];
     let mut virtual_corner: Option<usize> = None;
-    let mut real_sum = 0.0;
+    let mut real_sum = [0.0; N];
     for (idx, &(px, py)) in coords.iter().enumerate() {
         let out_x = px < 0 || px >= res;
         let out_y = py < 0 || py >= res;
         if out_x && out_y {
             virtual_corner = Some(idx);
         } else {
-            let val = maps.sample_pixel_cross_face(face, px, py);
+            let val = fetch_signed(face, px, py);
+            for channel in 0..N {
+                real_sum[channel] += val[channel];
+            }
             values[idx] = val;
-            real_sum += val;
         }
     }
     if let Some(corner_idx) = virtual_corner {
-        values[corner_idx] = real_sum / 3.0;
+        values[corner_idx] = real_sum.map(|sum| sum / 3.0);
     }
 
-    let top = lerp(values[0], values[1], frac_x);
-    let bottom = lerp(values[2], values[3], frac_x);
-    lerp(top, bottom, frac_y)
+    std::array::from_fn(|channel| {
+        let top = lerp(values[0][channel], values[1][channel], frac_x);
+        let bottom = lerp(values[2][channel], values[3][channel], frac_x);
+        lerp(top, bottom, frac_y)
+    })
 }
 
-fn sample_bicubic_cross_face(
-    maps: &PlanetHeightmaps,
+fn sample_bicubic_cross_face<const N: usize>(
     face: CubeFace,
     base_x: i64,
     base_y: i64,
     frac_x: f64,
     frac_y: f64,
-) -> f64 {
+    fetch_signed: &impl Fn(CubeFace, i64, i64) -> [f64; N],
+) -> [f64; N] {
     let weights_x = catmull_rom_weights(frac_x);
     let weights_y = catmull_rom_weights(frac_y);
     let tap_offsets: [i64; 4] = [-1, 0, 1, 2];
 
-    let mut sum = 0.0;
+    let mut sum = [0.0; N];
     for (&offset_y, &weight_y) in tap_offsets.iter().zip(weights_y.iter()) {
-        let mut row_sum = 0.0;
+        let mut row_sum = [0.0; N];
         for (&offset_x, &weight_x) in tap_offsets.iter().zip(weights_x.iter()) {
-            let sample = maps.sample_pixel_cross_face(face, base_x + offset_x, base_y + offset_y);
-            row_sum += sample * weight_x;
+            let sample = fetch_signed(face, base_x + offset_x, base_y + offset_y);
+            for channel in 0..N {
+                row_sum[channel] += sample[channel] * weight_x;
+            }
         }
-        sum += row_sum * weight_y;
+        for channel in 0..N {
+            sum[channel] += row_sum[channel] * weight_y;
+        }
     }
     sum
 }
@@ -445,7 +508,7 @@ fn fbm_3d(unit_vec: [f64; 3]) -> f64 {
     total.clamp(-1.0, 1.0)
 }
 
-fn value_noise_3d(coord_x: f64, coord_y: f64, coord_z: f64, seed: u64) -> f64 {
+pub(crate) fn value_noise_3d(coord_x: f64, coord_y: f64, coord_z: f64, seed: u64) -> f64 {
     let floor_x = coord_x.floor();
     let floor_y = coord_y.floor();
     let floor_z = coord_z.floor();
@@ -489,7 +552,7 @@ fn value_noise_3d(coord_x: f64, coord_y: f64, coord_z: f64, seed: u64) -> f64 {
     lerp(y0, y1, fade_z)
 }
 
-fn quintic_fade(param: f64) -> f64 {
+pub(crate) fn quintic_fade(param: f64) -> f64 {
     param * param * param * (param * (param * 6.0 - 15.0) + 10.0)
 }
 
@@ -513,7 +576,7 @@ fn lattice_hash_signed(ix: i64, iy: i64, iz: i64, seed: u64) -> f64 {
     unit * 2.0 - 1.0
 }
 
-const fn splitmix64(mut value: u64) -> u64 {
+pub(crate) const fn splitmix64(mut value: u64) -> u64 {
     value = value.wrapping_add(0x9E37_79B9_7F4A_7C15);
     value = (value ^ (value >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
     value = (value ^ (value >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);

@@ -1,11 +1,12 @@
-//! Client-side Layer 0 planetary heightmap loader and cube-sphere seam verifier.
+//! Client-side Layer 0 planetary heightmap and climate map loader, plus cube-sphere seam verifier.
 //!
 //! Rules: `docs/architecture/world_geography.md` Section 2.
 //!
 //! Decodes the 6 unsigned 16-bit grayscale PNG face heightmaps from `assets/world/faces/` in
 //! canonical face order (`pos_x`, `neg_x`, `pos_y`, `neg_y`, `pos_z`, `neg_z`) using Bevy's
 //! built-in PNG decoder (`bevy::image::Image::from_buffer`) without introducing additional
-//! image-decoding dependencies.
+//! image-decoding dependencies. The 6 climate maps (`{face}_climate.png`, 8-bit RGBA, written by
+//! `tools/build_climate_faces.py`) share the same faces, orientation, and resolution.
 
 use std::path::{Path, PathBuf};
 
@@ -13,7 +14,10 @@ use bevy::asset::RenderAssetUsages;
 use bevy::image::{CompressedImageFormats, Image, ImageFormat, ImageSampler, ImageType};
 use bevy::render::render_resource::TextureFormat;
 use thiserror::Error;
-use zeta_core::world::{FaceHeightmap, HeightmapError, PlanetHeightmaps};
+use zeta_core::world::{
+    ClimateMapError, FaceClimateMap, FaceHeightmap, HeightmapError, PlanetClimateMaps,
+    PlanetHeightmaps,
+};
 
 use crate::terrain::assets_root;
 
@@ -32,6 +36,9 @@ const PNG_IHDR_MIN_BYTES: usize = 8 + 4 + 4 + 13 + 4;
 const PNG_GRAYSCALE_COLOR_TYPE: u8 = 0;
 const PNG_SIXTEEN_BIT_DEPTH: u8 = 16;
 const RGBA16_BYTES_PER_PIXEL: usize = 8;
+const PNG_RGBA_COLOR_TYPE: u8 = 6;
+const PNG_EIGHT_BIT_DEPTH: u8 = 8;
+const RGBA8_BYTES_PER_PIXEL: usize = 4;
 
 /// Decoded Layer 0 unsigned 16-bit heightmap for 1 cube-sphere face.
 ///
@@ -72,7 +79,7 @@ impl RawFaceHeightmap {
 #[derive(Debug, Error)]
 pub enum PlanetIoError {
     /// Reading a face PNG file from disk failed.
-    #[error("could not read planet face heightmap {path}: {source}")]
+    #[error("could not read planet face PNG {path}: {source}")]
     ReadFile {
         /// File path that could not be read.
         path: PathBuf,
@@ -81,7 +88,7 @@ pub enum PlanetIoError {
         source: std::io::Error,
     },
     /// The file does not begin with a valid PNG signature and `IHDR` header.
-    #[error("invalid PNG header in {path}: {reason} (expected a valid 16-bit grayscale PNG)")]
+    #[error("invalid PNG header in {path}: {reason}")]
     InvalidPngHeader {
         /// File path with the malformed header.
         path: PathBuf,
@@ -185,6 +192,22 @@ pub enum PlanetIoError {
         /// Expected height shared by the planet face set.
         expected_height: u32,
     },
+    /// A climate map PNG does not declare 8-bit RGBA pixels (`bit_depth = 8, color_type = 6`).
+    #[error(
+        "unsupported climate PNG pixel format in {path}: bit_depth={bit_depth}, color_type={color_type} \
+         (only 8-bit RGBA PNGs with bit_depth=8 and color_type=6 are allowed)"
+    )]
+    NotEightBitRgba {
+        /// File path with the unsupported PNG format.
+        path: PathBuf,
+        /// Declared PNG bit depth from `IHDR`.
+        bit_depth: u8,
+        /// Declared PNG color type from `IHDR`.
+        color_type: u8,
+    },
+    /// Validated `zeta_core` planetary climate map construction failed.
+    #[error("invalid planetary climate map dataset: {0}")]
+    ClimateMap(#[from] ClimateMapError),
     /// Validated `zeta_core` planetary heightmap construction failed.
     #[error("invalid planetary heightmap dataset: {0}")]
     Heightmap(#[from] HeightmapError),
@@ -278,7 +301,94 @@ fn load_face(dir: &Path, face_name: &'static str) -> Result<RawFaceHeightmap, Pl
     decode_grayscale_u16_png(&bytes, &path, face_name)
 }
 
+/// Loads all 6 climate map PNGs (`{face}_climate.png`) from `dir` into [`PlanetClimateMaps`].
+///
+/// Each face must be a square 8-bit RGBA PNG, and all 6 faces must share 1 resolution. Channel
+/// meanings are documented in `zeta_core::world::climate`.
+///
+/// # Errors
+/// Returns [`PlanetIoError`] if any face file is missing, unreadable, not an 8-bit RGBA PNG,
+/// fails decoding, is not square, or has dimensions that differ from the other faces.
+pub fn load_planet_climate_maps(dir: &Path) -> Result<PlanetClimateMaps, PlanetIoError> {
+    let faces = [
+        load_climate_face(dir, CANONICAL_FACE_NAMES[0])?,
+        load_climate_face(dir, CANONICAL_FACE_NAMES[1])?,
+        load_climate_face(dir, CANONICAL_FACE_NAMES[2])?,
+        load_climate_face(dir, CANONICAL_FACE_NAMES[3])?,
+        load_climate_face(dir, CANONICAL_FACE_NAMES[4])?,
+        load_climate_face(dir, CANONICAL_FACE_NAMES[5])?,
+    ];
+    Ok(PlanetClimateMaps::new(faces)?)
+}
+
+fn load_climate_face(dir: &Path, face_name: &'static str) -> Result<FaceClimateMap, PlanetIoError> {
+    let path = dir.join(format!("{face_name}_climate.png"));
+    let bytes = std::fs::read(&path).map_err(|source| PlanetIoError::ReadFile {
+        path: path.clone(),
+        source,
+    })?;
+    let (width, texels) = decode_rgba8_png(&bytes, &path)?;
+    Ok(FaceClimateMap::new(width, texels)?)
+}
+
+/// Decodes a square 8-bit RGBA PNG into its width and row-major texels.
+fn decode_rgba8_png(bytes: &[u8], path: &Path) -> Result<(u32, Vec<[u8; 4]>), PlanetIoError> {
+    let (header_width, header_height, bit_depth, color_type) = read_png_ihdr(bytes, path)?;
+    if bit_depth != PNG_EIGHT_BIT_DEPTH || color_type != PNG_RGBA_COLOR_TYPE {
+        return Err(PlanetIoError::NotEightBitRgba {
+            path: path.to_path_buf(),
+            bit_depth,
+            color_type,
+        });
+    }
+    if header_width != header_height {
+        return Err(PlanetIoError::InvalidDimensions {
+            path: path.to_path_buf(),
+            width: header_width,
+            height: header_height,
+        });
+    }
+    let (image, pixel_count) = decode_png_image(bytes, path, header_width, header_height)?;
+    let raw_bytes = image
+        .data
+        .as_deref()
+        .ok_or_else(|| PlanetIoError::MissingPixelData {
+            path: path.to_path_buf(),
+        })?;
+    // `Image::from_buffer` with `is_srgb = false` keeps `ImageRgba8` bytes unchanged as
+    // `TextureFormat::Rgba8Unorm` (`bevy_image-0.20.1/src/image_texture_conversion.rs:68-77`).
+    if image.texture_descriptor.format != TextureFormat::Rgba8Unorm {
+        return Err(PlanetIoError::UnexpectedTextureFormat {
+            path: path.to_path_buf(),
+            format: format!("{:?}", image.texture_descriptor.format),
+        });
+    }
+    let expected_bytes = pixel_count.saturating_mul(RGBA8_BYTES_PER_PIXEL);
+    if raw_bytes.len() != expected_bytes {
+        return Err(PlanetIoError::CorruptPixelBuffer {
+            path: path.to_path_buf(),
+            expected_bytes,
+            actual_bytes: raw_bytes.len(),
+        });
+    }
+    let texels = raw_bytes.as_chunks::<RGBA8_BYTES_PER_PIXEL>().0.to_vec();
+    Ok((header_width, texels))
+}
+
 fn validate_png_ihdr_grayscale_u16(bytes: &[u8], path: &Path) -> Result<(u32, u32), PlanetIoError> {
+    let (width, height, bit_depth, color_type) = read_png_ihdr(bytes, path)?;
+    if bit_depth != PNG_SIXTEEN_BIT_DEPTH || color_type != PNG_GRAYSCALE_COLOR_TYPE {
+        return Err(PlanetIoError::NotSixteenBitGrayscale {
+            path: path.to_path_buf(),
+            bit_depth,
+            color_type,
+        });
+    }
+    Ok((width, height))
+}
+
+/// Reads `(width, height, bit_depth, color_type)` from the PNG signature and `IHDR` chunk.
+fn read_png_ihdr(bytes: &[u8], path: &Path) -> Result<(u32, u32, u8, u8), PlanetIoError> {
     if bytes.len() < PNG_IHDR_MIN_BYTES {
         return Err(PlanetIoError::InvalidPngHeader {
             path: path.to_path_buf(),
@@ -309,17 +419,7 @@ fn validate_png_ihdr_grayscale_u16(bytes: &[u8], path: &Path) -> Result<(u32, u3
         });
     }
 
-    let bit_depth = bytes[24];
-    let color_type = bytes[25];
-    if bit_depth != PNG_SIXTEEN_BIT_DEPTH || color_type != PNG_GRAYSCALE_COLOR_TYPE {
-        return Err(PlanetIoError::NotSixteenBitGrayscale {
-            path: path.to_path_buf(),
-            bit_depth,
-            color_type,
-        });
-    }
-
-    Ok((width, height))
+    Ok((width, height, bytes[24], bytes[25]))
 }
 
 fn decode_grayscale_u16_png(
@@ -328,7 +428,26 @@ fn decode_grayscale_u16_png(
     face_name: &'static str,
 ) -> Result<RawFaceHeightmap, PlanetIoError> {
     let (header_width, header_height) = validate_png_ihdr_grayscale_u16(bytes, path)?;
+    let (image, pixel_count) = decode_png_image(bytes, path, header_width, header_height)?;
+    let samples =
+        extract_grayscale_u16_samples(&image, path, header_width, header_height, pixel_count)?;
 
+    Ok(RawFaceHeightmap {
+        face_name,
+        width: header_width,
+        height: header_height,
+        samples,
+    })
+}
+
+/// Decodes PNG bytes with Bevy and checks the result against the `IHDR` dimensions.
+/// Returns the image and its pixel count.
+fn decode_png_image(
+    bytes: &[u8],
+    path: &Path,
+    header_width: u32,
+    header_height: u32,
+) -> Result<(Image, usize), PlanetIoError> {
     // `Image::from_buffer`: bevy_image-0.20.1/src/image.rs:1589.
     // `ImageType::Format`: bevy_image-0.20.1/src/image.rs:2343.
     // `ImageFormat::Png`: bevy_image-0.20.1/src/image.rs:297.
@@ -368,14 +487,7 @@ fn decode_grayscale_u16_png(
             height,
         })?;
 
-    let samples = extract_grayscale_u16_samples(&image, path, width, height, pixel_count)?;
-
-    Ok(RawFaceHeightmap {
-        face_name,
-        width,
-        height,
-        samples,
-    })
+    Ok((image, pixel_count))
 }
 
 fn extract_grayscale_u16_samples(
@@ -810,6 +922,107 @@ mod tests {
         assert!(matches!(
             load_planet_faces(missing),
             Err(PlanetIoError::ReadFile { .. })
+        ));
+        assert!(matches!(
+            load_planet_climate_maps(missing),
+            Err(PlanetIoError::ReadFile { .. })
+        ));
+    }
+
+    #[test]
+    fn climate_maps_decode_at_the_elevation_face_resolution() {
+        let elevation = load_planet_faces(&planet_faces_dir()).expect("valid elevation faces");
+        let climate =
+            load_planet_climate_maps(&planet_faces_dir()).expect("valid 6 climate face PNGs");
+        assert_eq!(climate.res(), elevation[0].width);
+        assert_eq!(climate.res(), elevation[0].height);
+    }
+
+    #[test]
+    fn climate_maps_are_continuous_across_all_cube_edges() {
+        let climate =
+            load_planet_climate_maps(&planet_faces_dir()).expect("valid 6 climate face PNGs");
+        let resolution = climate.res();
+        let face = |index: usize| climate.face(zeta_core::world::CubeFace::ALL[index]);
+
+        // Per channel: mean absolute change between interior 1-pixel neighbors.
+        let mut interior_sum = [0_u64; 3];
+        let mut interior_count = 0_u64;
+        for index in 0..6 {
+            for y in 0..resolution {
+                for x in 0..(resolution - 1) {
+                    let a = face(index).get(x, y);
+                    let b = face(index).get(x + 1, y);
+                    for channel in 0..3 {
+                        interior_sum[channel] += u64::from(a[channel].abs_diff(b[channel]));
+                    }
+                    interior_count += 1;
+                }
+            }
+        }
+
+        for (index, face_name) in CANONICAL_FACE_NAMES.iter().enumerate() {
+            for edge in ALL_EDGES {
+                let mut edge_sum = [0_u64; 3];
+                for i in 0..resolution {
+                    let ((px, py), (neighbor, nx, ny)) =
+                        matched_seam_pixels(index, edge, i, resolution);
+                    let a = face(index).get(px, py);
+                    let b = face(neighbor).get(nx, ny);
+                    for channel in 0..3 {
+                        edge_sum[channel] += u64::from(a[channel].abs_diff(b[channel]));
+                    }
+                }
+                for channel in 0..3 {
+                    #[expect(
+                        clippy::cast_precision_loss,
+                        reason = "test diagnostic averages fit comfortably in f64"
+                    )]
+                    let (edge_mean, interior_mean) = (
+                        edge_sum[channel] as f64 / f64::from(resolution),
+                        interior_sum[channel] as f64 / interior_count as f64,
+                    );
+                    // A misoriented face jumps by tens of byte levels; a continuous seam stays
+                    // near the interior gradient (plus 1 level of rounding).
+                    let allowed = interior_mean * 3.0 + 1.0;
+                    assert!(
+                        edge_mean <= allowed,
+                        "climate seam discontinuity on {face_name} {edge:?} channel {channel}: \
+                         mean diff {edge_mean:.2} exceeds {allowed:.2}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn climate_decoder_rejects_non_rgba8_headers() {
+        let dummy_path = Path::new("synthetic_climate.png");
+        let mut header = Vec::from(PNG_SIGNATURE);
+        header.extend_from_slice(&13_u32.to_be_bytes());
+        header.extend_from_slice(b"IHDR");
+        header.extend_from_slice(&4_u32.to_be_bytes());
+        header.extend_from_slice(&4_u32.to_be_bytes());
+        header.push(16); // bit_depth
+        header.push(0); // color_type = grayscale
+        header.extend_from_slice(&[0, 0, 0, 0, 0, 0, 0]);
+        assert!(matches!(
+            decode_rgba8_png(&header, dummy_path),
+            Err(PlanetIoError::NotEightBitRgba {
+                bit_depth: 16,
+                color_type: 0,
+                ..
+            })
+        ));
+        header[24] = 8;
+        header[25] = 2; // 8-bit RGB without alpha
+        assert!(matches!(
+            decode_rgba8_png(&header, dummy_path),
+            Err(PlanetIoError::NotEightBitRgba {
+                bit_depth: 8,
+                color_type: 2,
+                ..
+            })
         ));
     }
 }
