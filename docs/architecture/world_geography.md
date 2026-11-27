@@ -3,14 +3,14 @@
 | Field | Value |
 |---|---|
 | **Status** | `Draft` |
-| **Scope** | Continuous 6-face cube-sphere coordinate contract, Layer 0 planetary heightmaps, chunk streaming, and non-overlapping authored map regions |
+| **Scope** | Continuous 6-face cube-sphere coordinate contract, Layer 0 planetary heightmaps, climate layer and ground cover, chunk streaming and terrain splat rendering, non-overlapping authored map regions, and client ground clutter |
 | **Last Updated** | `2026-11-26` |
 | **Decision Authority** | Game Director (Project Owner) |
 
 ---
 
 ## Overview
-This document defines how the playable world is represented continuously from planetary scale down to individual 5-foot tactical squares with zero loading zones. Every coordinate, elevation unit, chunk size, and authored region boundary follows 1 contract shared by the server, client, and offline tooling.
+This document defines how the playable world is represented continuously from planetary scale down to individual 5-foot tactical squares with zero loading zones. Every coordinate, elevation unit, climate value, chunk size, and authored region boundary follows 1 contract shared by the server, client, and offline tooling. At gameplay zoom the planet base layer and authored regions render as 1 continuous textured ground with no visible rectangle edge.
 
 ---
 
@@ -47,29 +47,50 @@ The land and ocean mask is always derived from `elevation >= 32768`, never store
 Deriving land and ocean directly from the heightmap keeps coastlines and elevations synchronized by construction. Storing `6 × 1024 × 1024` 16-bit samples keeps the entire planet's base geography to a few megabytes while preserving smooth coastlines and mountain chains across all 6 faces.
 
 ### Boundaries
-Does not store per-tile 5-foot wilderness grids on disk. Climate, rivers, and biomes stack onto this same 6-face `1024 × 1024` grid in later layers.
+Does not store per-tile 5-foot wilderness grids on disk. Climate stacks onto this same 6-face `1024 × 1024` grid in Section 3; rivers stack onto it in a later layer.
 
 ---
 
-## 3. Deterministic Zoom & Chunk Streaming
+## 3. Climate Layer & Ground Cover
+
+### What
+Climate lives in `assets/world/faces/` as 6 `RGBA8` PNG files named `{face}_climate.png`, each `1024 × 1024` pixels, with the same face names and orientation as the `{face}_elevation.png` heightmaps. The channel encoding is listed in the Climate Face Encoding schema. A deterministic Python generator in `tools/` builds the 6 files from latitude, an elevation lapse rate, and distance to ocean, following the conventions of [`tools/build_planet_faces.py`](../../tools/build_planet_faces.py), and reads an optional overrides file from `tools/worldgen/`.
+
+`zeta_core` samples climate with `sample_climate(&PlanetClimateMaps, PlanetTile) -> ClimateSample { temperature, moisture, foliage, biome_override }`. Temperature, moisture, and foliage use the same bicubic cross-face sampling as `sample_macro_elevation_ft`, so values stay continuous across all 6 face edges. The biome override channel uses nearest sampling and is never interpolated.
+
+`zeta_core` derives each tile's ground cover with a pure function, `ground_cover`, that returns 1 value of the closed unit enum `GroundCover`. Its inputs are the climate sample, the elevation sample, the slope from neighbor step heights, the distance to shore, and hash noise. Steep slopes become rock, tiles near shore become sand, and hash noise places soil patches. Every deterministic scatter in the world uses 1 stable, documented hash, `tile_hash(PlanetTile) -> u64`. The client loads climate files with an `RGBA8` loader next to its 16-bit elevation loader.
+
+### Why
+Storing climate at the heightmap's resolution keeps the whole planet's climate to a few megabytes and lets the generator derive temperature from the same elevations players walk on. Computing ground cover per tile from stored climate plus deterministic detail gives every 5-foot square a stable cover type with 0 bytes of per-tile storage. The function is pure and has no Bevy dependency, so every caller gets the same cover for the same tile.
+
+### Boundaries
+Does not define river networks or named biomes. The physical units behind each normalized climate channel are documented in the generator. A biome override value of `0` means no override.
+
+---
+
+## 4. Deterministic Zoom & Chunk Streaming
 
 ### What
 The planet is divided into `64 × 64` 5-foot tile chunks (`320 × 320` feet, `32,768 × 32,768` chunks per face). Both server and client generate untouched wilderness chunks deterministically in `zeta_core` by bicubic-sampling Layer 0 heightmaps and adding coordinate-seeded fractal detail clamped so macro coastlines never drift.
 
-Each loaded chunk renders its own 4-material GPU terrain splatmap, allowing adjacent biomes and towns to use different 4-texture palettes without changing the terrain shader.
+At gameplay zoom each streamed chunk renders through `TerrainSplatMaterial`, which samples a `texture_2d_array`. A per-chunk control map at `SPLAT_PIXELS_PER_TILE` pixels per tile stores layer indexes and weights for each pixel. The material also applies baked hillshade and a climate tint. The overview zoom keeps the existing color raster path.
+
+The base control map comes from `ground_cover` per tile, blended across tile edges with `tile_hash` noise so 5-foot squares never read as blocks. The terrain palette file in `assets/terrain/` lists every texture in the array, and the array index of a texture is its entry order; the entry fields are listed in the Terrain Palette Entry schema. All palette textures share 1 size and 1 format. Map configurations in `assets/maps/` reference palette ids, never raw texture paths.
+
+Texture repeats are computed as `tile mod repeat_period` with integer math on the processor, and each chunk passes the result to the shader as a UV offset. Raw face tile coordinates (up to about 1.8 million) never enter an `f32` shader coordinate.
 
 ### Why
-Deterministic generation uses 0 bytes of disk storage for untouched wilderness while keeping server passability and client visuals identical on every 5-foot square. Per-chunk splatmaps reuse the existing 4-material splatmap shader across the entire planet.
+Deterministic generation uses 0 bytes of disk storage for untouched wilderness while keeping server passability and client visuals identical on every 5-foot square. One texture array indexed per pixel lets any number of cover types meet inside 1 chunk with 1 shader, so chunk edges and region edges need no special case. An `f32` holds about 7 significant digits, so raw tile coordinates would lose sub-tile precision; the integer modulo keeps texture repeats continuous across chunk and region edges.
 
 ### Boundaries
-Does not define the fractal noise parameters or biome texture palettes, which are tuned as later geography layers are added.
+Does not define the fractal noise parameters. Palette contents and texture choices are data in the palette file, never hardcoded in Rust.
 
 ---
 
-## 4. Authored Map Regions & Live Overrides
+## 5. Authored Map Regions & Live Overrides
 
 ### What
-Hand-authored places such as towns, road corridors, and landmarks are stored as self-contained region files that claim an explicit polygon footprint in planetary coordinates (matching the polygon convention of `assets/world/world_map.geojson`). Each region file holds its boundary polygon, optional elevation edits, terrain brush layers, and authored entities.
+Hand-authored places such as towns, road corridors, and landmarks are stored as self-contained region files that claim an explicit polygon footprint in planetary coordinates (matching the polygon convention of `assets/world/world_map.geojson`). Each region file holds its boundary polygon, optional elevation edits, terrain brush layers, and authored entities. Region layer shapes (`LayerShape`) use grid-square units, give full widths, and are region-local, offset by `RegionBounds.min`.
 
 No 2 authored region polygons may overlap. A generic validation check inspects every authored region file and fails with the colliding region names and coordinates if any 2 polygons intersect.
 
@@ -78,8 +99,52 @@ When a `64 × 64` chunk loads, it composites layers in 1 fixed order:
 2. Any non-overlapping authored region polygon intersecting the chunk.
 3. Dynamic gameplay edits stored per chunk in PostgreSQL and PostGIS, defined in [`persistence.md`](persistence.md) Section 3.
 
+An authored region writes only its painted layers into the control map of every chunk it intersects, feathered by the region's `edge_feather`. A region has no separate mesh drawn over the planet. The grid overlay and `entity_cells` stay derived from live state.
+
+At gameplay zoom each chunk entity carries a `ChunkGroundCover` component: the dominant palette index of each of its `64 × 64` tiles and a per-tile `region_painted` flag. Ground clutter (Section 6) reads only this component.
+
 ### Why
-Self-contained polygon region files keep authored towns readable and clean in version control while fitting curved rivers, coastlines, and borders without rectangular overlap conflicts. Enforcing non-overlap in automated checks catches boundary collisions at once instead of hiding silent layer-order bugs.
+Self-contained polygon region files keep authored towns readable and clean in version control while fitting curved rivers, coastlines, and borders without rectangular overlap conflicts. Enforcing non-overlap in automated checks catches boundary collisions at once instead of hiding silent layer-order bugs. Writing region paint into the same control maps as the base layer lets a road blend into the surrounding grass through 1 material, where a separate region mesh left a visible rectangle edge.
 
 ### Boundaries
 Does not define the in-engine map editor interface or live Event Log persistence schema.
+
+---
+
+## 6. Ground Clutter
+
+### What
+Ground clutter is small decorative sprites, such as grass tufts and stones, scattered on the ground by a client-only Bevy plugin. The plugin reads `ChunkGroundCover`, the climate foliage value, and `tile_hash`, and spawns each sprite as a child of its chunk so the sprite despawns with the chunk. It skips every tile whose palette entry has `clutter: false` and every tile flagged `region_painted`.
+
+A clutter file in `assets/terrain/` maps each palette id to a weighted sprite list and a density scale. The sprites are a curated set of about 8–16 copied from the nature folder of the local asset warehouse into `assets/terrain/`, using only `painterly` art (see [`../design/visual_style_guide.md`](../design/visual_style_guide.md) Section 3).
+
+### Why
+Seeding placement from `tile_hash` puts the same sprite on the same square for every player without network traffic. Reading only `ChunkGroundCover` keeps clutter off water, roads, paths, and town floors without the plugin knowing region or palette internals.
+
+### Boundaries
+Ground clutter is visual only; the server does not know it exists, and it never blocks movement. Server-side obstacles placed from ground cover are a later phase, and no part of them exists yet.
+
+---
+
+## Schemas
+
+### Climate Face Encoding
+Each channel of a `{face}_climate.png` pixel holds 1 value.
+
+| Channel | Value | Range | Sampling |
+|---|---|---|---|
+| **R** | Temperature | `0–255`, normalized | Bicubic |
+| **G** | Moisture | `0–255`, normalized | Bicubic |
+| **B** | Foliage density | `0–255`, normalized | Bicubic |
+| **A** | Biome override id | `0` = none | Nearest |
+
+### Terrain Palette Entry
+Each entry in the terrain palette file has these fields.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `id` | String | Name that map configurations and the clutter file reference |
+| `texture` | Asset path | Texture loaded into the array at this entry's index |
+| `tiles_per_repeat` | Number | 5-foot tiles covered by 1 repeat of the texture |
+| `ground_cover` | Optional `GroundCover` name | Ground cover value this entry renders |
+| `clutter` | Boolean | `false` for water, roads, paths, and town floors |
