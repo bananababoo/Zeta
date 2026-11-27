@@ -41,6 +41,7 @@ impl PluginGroup for ClientPlugins {
             .add(player::LocalPlayerPlugin)
             .add(map::MapPlugin)
             .add(planet_stream::PlanetStreamPlugin)
+            .add(ground_clutter::GroundClutterPlugin)
             .add(movement_input::MovementInputPlugin)
             .add(prompt::FreeformActionPromptPlugin)
             .add(turn_banner::TurnBubbleBannerPlugin)
