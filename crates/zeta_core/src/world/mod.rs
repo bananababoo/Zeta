@@ -4,14 +4,24 @@
 //! Rules are defined in `docs/architecture/world_geography.md`. All types and functions here
 //! are pure Rust with zero input or output.
 
+pub mod climate;
 pub mod cube_sphere;
+pub mod ground;
 pub mod region;
 pub mod sampler;
 
+pub use climate::{
+    ClimateMapError, ClimateSample, FaceClimateMap, PlanetClimateMaps, TEMPERATURE_MAX_C,
+    TEMPERATURE_MIN_C, sample_climate, temperature_from_byte, temperature_to_byte, unit_to_byte,
+};
 pub use cube_sphere::{
     CHUNK_SIZE, ChunkCoord, CubeFace, EdgeTransition, FACE_CHUNKS, FACE_TILES, FaceBasis, FaceEdge,
     FaceRotation, PlanetTile, face_uv_to_unit_vec, step_chunk, step_tile, tile_to_unit_vec,
     unit_vec_to_face_uv, unit_vec_to_tile,
+};
+pub use ground::{
+    GroundCover, GroundCoverInput, SHORE_DISTANCE_MAX_TILES, ground_cover, hash_unit,
+    shore_distances, tile_hash,
 };
 pub use region::{
     RegionFootprint, RegionOverlap, point_in_polygon, polygons_overlap, validate_non_overlapping,
