@@ -85,6 +85,7 @@ Decisions live in `docs/`; this file only points to them and records working kno
 - **Generic schema & asset tests:** test the engine's general invariants (every file referenced by `theme.rs`, `assets/ui/icon_map.json`, or any `assets/maps/*.json` exists on disk; generic `entity_cells` alignment holds), never brittle tests hardcoded to specific prototype props or scenes.
 - **Direction before ingestion:** lock art direction and target schema before downloading or promoting bulk assets.
 - **Keep docs synchronized:** when a new permanent pattern stabilizes, propose updating `docs/` immediately rather than letting it live as unwritten tribal knowledge.
+- **Error attribution & visibility (`docs/architecture/code_style.md` Section 7):** never collapse distinct failure classes into a single misleading message (only AI validation retry exhaustion may suggest rephrasing). Fail fast on missing required dependencies (PostgreSQL requires `ZETA_ALLOW_IN_MEMORY_LOG=1` to run in memory), surface degraded dependencies and connection errors in-game, redact secrets, and never leave async player operations hanging without a terminal status.
 
 ## Doc Writing Checklist
 - Update **Last Updated** on every edit. Digits for numbers. At most 300 lines.

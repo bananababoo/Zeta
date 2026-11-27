@@ -41,6 +41,10 @@ pub const POSTGRES_DB_VARIABLE: &str = "POSTGRES_DB";
 /// Environment variable holding the IP address and port the game server listens on.
 pub const LISTEN_ADDRESS_VARIABLE: &str = "ZETA_LISTEN_ADDRESS";
 
+/// Environment variable that explicitly opts into volatile in-memory Event Log mode when
+/// PostgreSQL is unavailable (`docs/architecture/persistence.md` Section 1).
+pub const ALLOW_IN_MEMORY_LOG_VARIABLE: &str = "ZETA_ALLOW_IN_MEMORY_LOG";
+
 const DEFAULT_POSTGRES_HOST: &str = "127.0.0.1";
 const DEFAULT_POSTGRES_PORT: u16 = 5432;
 
@@ -93,6 +97,44 @@ pub enum ConfigError {
         /// The rejected value.
         value: String,
     },
+    /// A boolean flag variable is not one of `1`, `0`, `true`, `false`, `yes`, or `no`.
+    #[error("{variable} is {value:?}; expected 1, 0, true, or false")]
+    InvalidBoolean {
+        /// Name of the variable.
+        variable: &'static str,
+        /// The rejected value.
+        value: String,
+    },
+}
+
+/// Reads whether [`ALLOW_IN_MEMORY_LOG_VARIABLE`] opts into volatile in-memory Event Log
+/// mode, defaulting to `false` (fail fast when PostgreSQL is unavailable).
+///
+/// # Errors
+/// [`ConfigError`] if the variable is set but not Unicode or not a valid boolean flag.
+pub fn allow_in_memory_log_from_environment() -> Result<bool, ConfigError> {
+    let dotenv = load_dotenv_file();
+    allow_in_memory_log_from_lookup(|variable| lookup_with_dotenv(&dotenv, variable))
+}
+
+/// Reads [`ALLOW_IN_MEMORY_LOG_VARIABLE`] through `lookup`.
+///
+/// # Errors
+/// [`ConfigError`] if the variable is set but not Unicode or not a valid boolean flag.
+pub fn allow_in_memory_log_from_lookup(
+    lookup: impl Fn(&'static str) -> Result<String, VarError>,
+) -> Result<bool, ConfigError> {
+    match optional_variable(&lookup, ALLOW_IN_MEMORY_LOG_VARIABLE)? {
+        None => Ok(false),
+        Some(value) => match value.to_ascii_lowercase().as_str() {
+            "1" | "true" | "yes" => Ok(true),
+            "0" | "false" | "no" => Ok(false),
+            _ => Err(ConfigError::InvalidBoolean {
+                variable: ALLOW_IN_MEMORY_LOG_VARIABLE,
+                value,
+            }),
+        },
+    }
 }
 
 /// Reads the address the game server listens on from [`LISTEN_ADDRESS_VARIABLE`], loading
@@ -618,6 +660,30 @@ EMPTY_VALUE=
             Err(ConfigError::InvalidAddress {
                 variable: LISTEN_ADDRESS_VARIABLE,
                 value: "localhost".into(),
+            })
+        );
+    }
+
+    #[test]
+    fn allow_in_memory_log_defaults_to_false_and_validates_flags() {
+        assert_eq!(allow_in_memory_log_from_lookup(lookup_in(&[])), Ok(false));
+        assert_eq!(
+            allow_in_memory_log_from_lookup(lookup_in(&[(ALLOW_IN_MEMORY_LOG_VARIABLE, "1")])),
+            Ok(true)
+        );
+        assert_eq!(
+            allow_in_memory_log_from_lookup(lookup_in(&[(ALLOW_IN_MEMORY_LOG_VARIABLE, "TRUE")])),
+            Ok(true)
+        );
+        assert_eq!(
+            allow_in_memory_log_from_lookup(lookup_in(&[(ALLOW_IN_MEMORY_LOG_VARIABLE, "0")])),
+            Ok(false)
+        );
+        assert_eq!(
+            allow_in_memory_log_from_lookup(lookup_in(&[(ALLOW_IN_MEMORY_LOG_VARIABLE, "maybe")])),
+            Err(ConfigError::InvalidBoolean {
+                variable: ALLOW_IN_MEMORY_LOG_VARIABLE,
+                value: "maybe".into(),
             })
         );
     }

@@ -42,8 +42,8 @@ use zeta_core::entity::EntityId;
 use zeta_core::grid::{GridPos, MapBounds};
 use zeta_core::protocol::{
     Collider, Creature, Delivery, DiceRollShown, EntityName, Inventory, Item, LogEntryKind,
-    MapArea, NarrationLogEntry, PlayerAssigned, PlayerCharacter, ProtocolRegistrar, Tags,
-    TurnBubble, Visual, register_protocol,
+    MapArea, NarrationLogEntry, PlayerAssigned, PlayerCharacter, PromptState, PromptStatusUpdate,
+    ProtocolRegistrar, Tags, TurnBubble, Visual, register_protocol,
 };
 use zeta_core::resolution::{D20, Volume};
 use zeta_core::world::FACE_TILES;
@@ -290,6 +290,7 @@ fn spawn_fake_world(
     mut assignments: MessageWriter<PlayerAssigned>,
     mut logs: MessageWriter<NarrationLogEntry>,
     mut rolls: MessageWriter<DiceRollShown>,
+    mut statuses: MessageWriter<PromptStatusUpdate>,
 ) {
     // Matches `zeta_server::world::scene` (River Crossing anchored at `RIVER_CROSSING_ORIGIN`
     // inside Sera's `FACE_TILES x FACE_TILES` face) so screenshots verify exact live geometry.
@@ -368,7 +369,13 @@ fn spawn_fake_world(
         character: LOCAL_CHARACTER,
     });
     if scene.0 == Scene::CombatHud {
-        spawn_combat_hud_state(&mut commands, EntityId(next_id + 2), &mut logs, &mut rolls);
+        spawn_combat_hud_state(
+            &mut commands,
+            EntityId(next_id + 2),
+            &mut logs,
+            &mut rolls,
+            &mut statuses,
+        );
     }
 }
 
@@ -377,6 +384,7 @@ fn spawn_combat_hud_state(
     goblin: EntityId,
     logs: &mut MessageWriter<NarrationLogEntry>,
     rolls: &mut MessageWriter<DiceRollShown>,
+    statuses: &mut MessageWriter<PromptStatusUpdate>,
 ) {
     commands.spawn(TurnBubble {
         order: vec![LOCAL_CHARACTER, goblin],
@@ -410,6 +418,12 @@ fn spawn_combat_hud_state(
         dc: 14,
         reason: "Athletics: shove the oil barrel".to_owned(),
         success: true,
+    });
+    statuses.write(PromptStatusUpdate {
+        state: PromptState::Rejected,
+        reason: Some(
+            "AI provider rate-limited or quota exceeded (HTTP 429): Quota exceeded.".to_owned(),
+        ),
     });
 }
 

@@ -20,7 +20,7 @@ use std::collections::BTreeMap;
 use std::marker::PhantomData;
 
 use bevy_app::{App, Plugin, Startup, Update};
-use bevy_ecs::prelude::{Entity, IntoScheduleConfigs, Resource};
+use bevy_ecs::prelude::{Entity, IntoScheduleConfigs, MessageWriter, ResMut, Resource};
 use zeta_core::ai::AiProvider;
 use zeta_core::entity::EntityId;
 use zeta_core::protocol::{LogEntryKind, NarrationLogEntry};
@@ -87,9 +87,32 @@ impl<P: AiProvider + Send + Sync + 'static> Plugin for WorldPlugin<P> {
                     prompts::collect_prompts,
                     turn_bubble::handle_end_turn_requests,
                     prompts::run_resolutions::<P>,
+                    report_persistence_errors,
                 )
                     .chain(),
             );
+    }
+}
+
+/// Broadcasts any runtime PostgreSQL Event Log write failures to all connected players so
+/// persistence loss never stays hidden in server stderr (`docs/architecture/code_style.md` Section 7).
+fn report_persistence_errors(
+    mut event_log: ResMut<EventLogWriter>,
+    mut sequence: ResMut<LogSequence>,
+    mut notices: MessageWriter<ToPlayers<NarrationLogEntry>>,
+) {
+    for error in event_log.drain_persistence_errors() {
+        notices.write(ToPlayers {
+            recipients: Recipients::All,
+            message: NarrationLogEntry {
+                sequence: sequence.next(),
+                kind: LogEntryKind::Notice,
+                speaker: None,
+                speaker_name: None,
+                text: format!("Database write failed (changes may not be saved): {error}"),
+                vol: None,
+            },
+        });
     }
 }
 
@@ -669,7 +692,7 @@ mod tests {
     }
 
     #[test]
-    fn a_provider_failure_rejects_the_prompt_and_asks_to_rephrase() {
+    fn a_provider_failure_rejects_the_prompt_with_its_cause_without_asking_to_rephrase() {
         let mut app = test_app(&[10]);
         let (connection, _) = connect(&mut app);
         prompt(&mut app, connection, "I juggle.");
@@ -680,12 +703,41 @@ mod tests {
             sent.states_for(connection),
             vec![PromptState::Resolving, PromptState::Rejected]
         );
+        let notice_line = sent
+            .lines
+            .iter()
+            .find(|line| {
+                line.recipients == Recipients::Only(connection)
+                    && line.message.kind == LogEntryKind::Notice
+            })
+            .expect("player receives a failure notice");
+        assert!(
+            !notice_line
+                .message
+                .text
+                .to_ascii_lowercase()
+                .contains("rephras"),
+            "provider failure must not tell the player to rephrase: {}",
+            notice_line.message.text
+        );
+        assert!(notice_line.message.text.contains("replay"));
+        assert_eq!(records(&app), Vec::new());
+        assert!(nothing_locked(&app));
+    }
+
+    #[test]
+    fn degraded_memory_log_notifies_connecting_players_in_game() {
+        let mut app = test_app(&[10]);
+        app.insert_resource(EventLogWriter::memory_with_notice(
+            "Persistence is running in memory-only mode.",
+        ));
+        let (connection, _) = connect(&mut app);
+        let sent = app.world().resource::<Sent>();
         assert!(sent.lines.iter().any(|line| {
             line.recipients == Recipients::Only(connection)
                 && line.message.kind == LogEntryKind::Notice
+                && line.message.text.contains("memory-only mode")
         }));
-        assert_eq!(records(&app), Vec::new());
-        assert!(nothing_locked(&app));
     }
 
     #[test]

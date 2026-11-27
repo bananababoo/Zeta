@@ -122,6 +122,10 @@ fn apply_effect(
                 with_component::<GridPos>(world, snapshot, *id, |position| {
                     *position = GridPos::new(*x, *y);
                 });
+            } else {
+                eprintln!(
+                    "warning: skipped out-of-bounds move effect for local id {id} to ({x}, {y})"
+                );
             }
         }
         WorldEffect::Modify {
@@ -241,6 +245,7 @@ fn apply_property_effect(world: &mut World, snapshot: &Snapshot, effect: &WorldE
                     active.as_ref(),
                 )
             }) else {
+                eprintln!("warning: damage effect ignored because local id {id} has no Health");
                 return;
             };
             if outcome.reached_zero {
@@ -355,14 +360,34 @@ fn apply_property_effect(world: &mut World, snapshot: &Snapshot, effect: &WorldE
             }
         }
         WorldEffect::SpendResource { id, target, amount } => {
-            with_component::<ResourcePools>(world, snapshot, *id, |pools| {
-                let _ = pools.spend(target, *amount);
-            });
+            if let Some(entity) = engine_entity(world, snapshot, *id) {
+                if let Some(mut pools) = world.get_mut::<ResourcePools>(entity) {
+                    if !pools.spend(target, *amount) {
+                        eprintln!(
+                            "warning: spend_resource ({target:?}, amount {amount}) could not spend on local id {id}"
+                        );
+                    }
+                } else {
+                    eprintln!(
+                        "warning: spend_resource ignored because local id {id} has no ResourcePools"
+                    );
+                }
+            }
         }
         WorldEffect::RestoreResource { id, target, amount } => {
-            with_component::<ResourcePools>(world, snapshot, *id, |pools| {
-                let _ = pools.restore(target, *amount);
-            });
+            if let Some(entity) = engine_entity(world, snapshot, *id) {
+                if let Some(mut pools) = world.get_mut::<ResourcePools>(entity) {
+                    if !pools.restore(target, *amount) {
+                        eprintln!(
+                            "warning: restore_resource ({target:?}, amount {amount}) could not restore on local id {id}"
+                        );
+                    }
+                } else {
+                    eprintln!(
+                        "warning: restore_resource ignored because local id {id} has no ResourcePools"
+                    );
+                }
+            }
         }
         WorldEffect::AdvanceLevel {
             id,

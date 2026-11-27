@@ -5,11 +5,12 @@
 //! Order: 1 writer task appends them in the order the world applied them, and recorded times
 //! never run backward.
 
+use std::sync::{Mutex, PoisonError};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use bevy_ecs::prelude::Resource;
 use tokio::runtime::Handle;
-use tokio::sync::mpsc::{self, UnboundedSender};
+use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use zeta_core::event_log::{AppliedChange, EventCause, EventLog, MapPartitionId};
 use zeta_core::grid::GridPos;
 use zeta_core::time::UtcTimestamp;
@@ -34,11 +35,15 @@ enum Destination {
     Database(UnboundedSender<PendingRecord>),
 }
 
-/// Records every applied change with its cause.
+/// Records every applied change with its cause, and tracks any startup degradation or
+/// runtime persistence write failures so the server can notify players in-game.
 #[derive(Resource, Debug)]
 pub struct EventLogWriter {
     destination: Destination,
     latest: Option<UtcTimestamp>,
+    degraded_notice: Option<String>,
+    async_errors: Option<Mutex<UnboundedReceiver<String>>>,
+    sync_errors: Vec<String>,
 }
 
 impl Default for EventLogWriter {
@@ -48,19 +53,34 @@ impl Default for EventLogWriter {
 }
 
 impl EventLogWriter {
-    /// Keeps records in memory only, for tests and for running without a database.
+    /// Keeps records in memory only, for tests.
     pub fn memory() -> Self {
         Self {
             destination: Destination::Memory(EventLog::new()),
             latest: None,
+            degraded_notice: None,
+            async_errors: None,
+            sync_errors: Vec::new(),
+        }
+    }
+
+    /// Keeps records in memory only while advertising `notice` to every connecting player.
+    pub fn memory_with_notice(notice: impl Into<String>) -> Self {
+        Self {
+            destination: Destination::Memory(EventLog::new()),
+            latest: None,
+            degraded_notice: Some(notice.into()),
+            async_errors: None,
+            sync_errors: Vec::new(),
         }
     }
 
     /// Appends records to `store` from a task on `runtime`, all in Map Partition
-    /// `map_partition`. A failed append is reported on standard error and the server keeps
-    /// running.
+    /// `map_partition`. Any failed append is printed to standard error and queued for
+    /// [`Self::drain_persistence_errors`] so players are notified in-game.
     pub fn database(store: EventLogStore, runtime: &Handle, map_partition: MapPartitionId) -> Self {
         let (sender, mut receiver) = mpsc::unbounded_channel::<PendingRecord>();
+        let (error_sender, error_receiver) = mpsc::unbounded_channel::<String>();
         runtime.spawn(async move {
             while let Some(record) = receiver.recv().await {
                 if let Err(error) = store
@@ -73,14 +93,36 @@ impl EventLogWriter {
                     )
                     .await
                 {
-                    eprintln!("failed to store an Event Log record: {error}");
+                    let detail = error.to_string();
+                    eprintln!("failed to store an Event Log record: {detail}");
+                    drop(error_sender.send(detail));
                 }
             }
         });
         Self {
             destination: Destination::Database(sender),
             latest: None,
+            degraded_notice: None,
+            async_errors: Some(Mutex::new(error_receiver)),
+            sync_errors: Vec::new(),
         }
+    }
+
+    /// Warning shown to connecting players when persistence started in degraded mode.
+    pub fn degraded_notice(&self) -> Option<&str> {
+        self.degraded_notice.as_deref()
+    }
+
+    /// Drains any persistence write failures reported since the last tick.
+    pub(crate) fn drain_persistence_errors(&mut self) -> Vec<String> {
+        let mut errors = std::mem::take(&mut self.sync_errors);
+        if let Some(receiver) = &self.async_errors {
+            let mut guard = receiver.lock().unwrap_or_else(PoisonError::into_inner);
+            while let Ok(error) = guard.try_recv() {
+                errors.push(error);
+            }
+        }
+        errors
     }
 
     /// The in-memory Event Log, when records are kept in memory.
@@ -102,7 +144,9 @@ impl EventLogWriter {
         match &mut self.destination {
             Destination::Memory(log) => {
                 if let Err(error) = log.append(recorded_at, cause, change) {
-                    eprintln!("failed to record an Event Log entry: {error}");
+                    let detail = error.to_string();
+                    eprintln!("failed to record an Event Log entry: {detail}");
+                    self.sync_errors.push(detail);
                 }
             }
             Destination::Database(sender) => {
@@ -113,7 +157,9 @@ impl EventLogWriter {
                     change,
                 };
                 if sender.send(pending).is_err() {
-                    eprintln!("the Event Log writer task stopped; a record was lost");
+                    let detail = "the Event Log writer task stopped; a record was lost".to_owned();
+                    eprintln!("{detail}");
+                    self.sync_errors.push(detail);
                 }
             }
         }
@@ -185,5 +231,14 @@ mod tests {
             log.records()[1].recorded_at,
             UtcTimestamp::from_unix_milliseconds(i64::MAX)
         );
+    }
+
+    #[test]
+    fn memory_with_notice_exposes_degraded_notice_and_drains_errors() {
+        let mut writer = EventLogWriter::memory_with_notice("memory-only");
+        assert_eq!(writer.degraded_notice(), Some("memory-only"));
+        writer.sync_errors.push("disk full".to_owned());
+        assert_eq!(writer.drain_persistence_errors(), vec!["disk full"]);
+        assert_eq!(writer.drain_persistence_errors(), Vec::<String>::new());
     }
 }

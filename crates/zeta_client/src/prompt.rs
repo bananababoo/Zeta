@@ -11,6 +11,7 @@ use bevy::prelude::*;
 use zeta_core::protocol::{FreeformActionPrompt, PromptState, PromptStatusUpdate, StackId};
 
 use crate::focus::{TextEntryActive, TextEntryUpdate, UiPanel};
+use crate::net::{ConnectionDiagnostic, ConnectionStatus};
 use crate::settings::ClientSettings;
 use crate::theme::{STATUS_TEXT_COLOR, TEXT_ON_WOOD, UiTheme};
 
@@ -187,6 +188,31 @@ pub fn prompt_input_text(editor: &PromptEditor) -> String {
     }
 }
 
+/// The status line combining connection diagnostics (when connecting or disconnected) with
+/// the latest Freeform Action Prompt status (`docs/architecture/code_style.md` Section 7).
+pub fn prompt_status_line(
+    status: Option<&PromptStatusUpdate>,
+    connection: Option<ConnectionStatus>,
+    diagnostic: Option<&ConnectionDiagnostic>,
+) -> String {
+    match connection {
+        Some(ConnectionStatus::Connecting) => match diagnostic.and_then(|d| d.server_address) {
+            Some(address) => format!("Connecting to server at {address}..."),
+            None => "Connecting to server...".to_owned(),
+        },
+        Some(ConnectionStatus::Disconnected) => {
+            match diagnostic.and_then(|d| d.detail.as_deref()) {
+                Some(detail) => format!("Disconnected: {detail}."),
+                None => match diagnostic.and_then(|d| d.server_address) {
+                    Some(address) => format!("Disconnected from server at {address}."),
+                    None => "Disconnected from server.".to_owned(),
+                },
+            }
+        }
+        Some(ConnectionStatus::Connected) | None => prompt_status_text(status),
+    }
+}
+
 /// The status line for the latest Freeform Action Prompt status.
 pub fn prompt_status_text(status: Option<&PromptStatusUpdate>) -> String {
     let Some(status) = status else {
@@ -224,12 +250,20 @@ fn spawn_prompt_panel(mut commands: Commands, theme: Res<UiTheme>) {
         .with_children(|panel| {
             panel.spawn((
                 PromptStatusText,
+                Node {
+                    max_width: Val::Percent(100.0),
+                    ..default()
+                },
                 Text::new(""),
                 theme.ui_font(STATUS_FONT_SIZE),
                 TextColor(STATUS_TEXT_COLOR),
             ));
             panel.spawn((
                 PromptInputText,
+                Node {
+                    max_width: Val::Percent(100.0),
+                    ..default()
+                },
                 Text::new(PROMPT_HINT),
                 theme.ui_font(PROMPT_FONT_SIZE),
                 TextColor(TEXT_ON_WOOD),
@@ -304,13 +338,22 @@ fn show_prompt_input(
 )]
 fn show_prompt_status(
     status: Res<LatestPromptStatus>,
+    connection: Option<Res<ConnectionStatus>>,
+    diagnostic: Option<Res<ConnectionDiagnostic>>,
     mut texts: Query<&mut Text, With<PromptStatusText>>,
 ) {
-    if !status.is_changed() {
+    let connection_changed = connection.as_ref().is_some_and(DetectChanges::is_changed);
+    let diagnostic_changed = diagnostic.as_ref().is_some_and(DetectChanges::is_changed);
+    if !status.is_changed() && !connection_changed && !diagnostic_changed {
         return;
     }
+    let line = prompt_status_line(
+        status.0.as_ref(),
+        connection.as_deref().copied(),
+        diagnostic.as_deref(),
+    );
     for mut text in &mut texts {
-        text.0 = prompt_status_text(status.0.as_ref());
+        text.0.clone_from(&line);
     }
 }
 
@@ -565,5 +608,44 @@ mod tests {
             };
             assert_ne!(prompt_status_text(Some(&update)), "");
         }
+    }
+
+    #[test]
+    fn connection_diagnostics_appear_when_connecting_or_disconnected() {
+        let addr = "127.0.0.1:7777".parse().expect("valid address");
+        let connecting = ConnectionDiagnostic {
+            server_address: Some(addr),
+            detail: None,
+        };
+        assert_eq!(
+            prompt_status_line(None, Some(ConnectionStatus::Connecting), Some(&connecting)),
+            "Connecting to server at 127.0.0.1:7777..."
+        );
+        let disconnected = ConnectionDiagnostic {
+            server_address: Some(addr),
+            detail: Some(
+                "could not connect to server at 127.0.0.1:7777 (connection refused)".into(),
+            ),
+        };
+        assert_eq!(
+            prompt_status_line(
+                None,
+                Some(ConnectionStatus::Disconnected),
+                Some(&disconnected)
+            ),
+            "Disconnected: could not connect to server at 127.0.0.1:7777 (connection refused)."
+        );
+        let applied = PromptStatusUpdate {
+            state: PromptState::Applied,
+            reason: None,
+        };
+        assert_eq!(
+            prompt_status_line(
+                Some(&applied),
+                Some(ConnectionStatus::Connected),
+                Some(&connecting)
+            ),
+            "Your action was resolved."
+        );
     }
 }

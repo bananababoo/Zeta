@@ -8,13 +8,15 @@ use std::net::SocketAddr;
 
 use bevy::log::{info, warn};
 use bevy::prelude::{
-    App, DetectChangesMut, IntoScheduleConfigs, NextState, PostUpdate, PreUpdate, Res, ResMut,
+    App, DetectChangesMut, IntoScheduleConfigs, NextState, On, PostUpdate, PreUpdate, Res, ResMut,
     Resource, Startup, State,
 };
-use bevy_replicon::prelude::{ClientMessages, ClientState, ClientSystems, RepliconChannels};
+use bevy_replicon::prelude::{
+    ClientMessages, ClientState, ClientSystems, ProtocolMismatch, RepliconChannels,
+};
 
-use super::ConnectionStatus;
 use super::transport::{Connection, ConnectionError, PendingConnection};
+use super::{ConnectionDiagnostic, ConnectionStatus};
 use crate::settings::CONNECT_TIMEOUT;
 
 /// Address given to [`super::ClientNetPlugin`].
@@ -36,6 +38,7 @@ enum ServerLink {
 pub(super) fn build(app: &mut App, server_address: SocketAddr) {
     app.insert_resource(ServerAddress(server_address))
         .init_resource::<ServerLink>()
+        .add_observer(record_protocol_mismatch)
         .add_systems(Startup, start_connecting)
         .add_systems(
             PreUpdate,
@@ -46,27 +49,51 @@ pub(super) fn build(app: &mut App, server_address: SocketAddr) {
 
 #[allow(
     clippy::needless_pass_by_value,
+    reason = "Bevy observer parameters are passed by value"
+)]
+fn record_protocol_mismatch(
+    _: On<ProtocolMismatch>,
+    address: Res<ServerAddress>,
+    mut diagnostic: ResMut<ConnectionDiagnostic>,
+) {
+    let message = format!(
+        "protocol mismatch with server at {}: client and server builds do not match",
+        address.0
+    );
+    warn!("{message}");
+    diagnostic.server_address = Some(address.0);
+    diagnostic.detail = Some(message);
+}
+
+#[allow(
+    clippy::needless_pass_by_value,
     reason = "engine systems receive resource handles by value"
 )]
 fn start_connecting(
     address: Res<ServerAddress>,
     mut link: ResMut<ServerLink>,
     mut status: ResMut<ConnectionStatus>,
+    mut diagnostic: ResMut<ConnectionDiagnostic>,
 ) {
     info!("connecting to the server at {}", address.0);
     *link = ServerLink::Connecting(PendingConnection::start(address.0, CONNECT_TIMEOUT));
     *status = ConnectionStatus::Connecting;
+    diagnostic.server_address = Some(address.0);
+    diagnostic.detail = None;
 }
 
 /// The library's client state may only change here, so this system also applies what the
 /// send system found.
 #[allow(
     clippy::needless_pass_by_value,
+    clippy::too_many_arguments,
     reason = "engine systems receive resource handles by value"
 )]
 fn receive_packets(
+    address: Res<ServerAddress>,
     mut link: ResMut<ServerLink>,
     mut status: ResMut<ConnectionStatus>,
+    mut diagnostic: ResMut<ConnectionDiagnostic>,
     state: Res<State<ClientState>>,
     mut next_state: ResMut<NextState<ClientState>>,
     channels: Res<RepliconChannels>,
@@ -78,10 +105,13 @@ fn receive_packets(
             Err(pending) => ServerLink::Connecting(pending),
             Ok(Ok(connection)) => {
                 info!("connected to the server");
+                diagnostic.detail = None;
                 ServerLink::Open(connection)
             }
             Ok(Err(error)) => {
-                warn!("could not connect to the server: {error}");
+                let message = format!("could not connect to server at {} ({error})", address.0);
+                warn!("{message}");
+                diagnostic.detail = Some(message);
                 ServerLink::Closed
             }
         },
@@ -94,10 +124,16 @@ fn receive_packets(
                 Ok(()) => ServerLink::Open(connection),
                 Err(ConnectionError::Closed) => {
                     info!("the server closed the connection");
+                    if diagnostic.detail.is_none() {
+                        diagnostic.detail =
+                            Some(format!("server at {} closed the connection", address.0));
+                    }
                     ServerLink::Closed
                 }
                 Err(error) => {
-                    warn!("dropping the server connection: {error}");
+                    let message = format!("connection to server at {} lost ({error})", address.0);
+                    warn!("{message}");
+                    diagnostic.detail = Some(message);
                     ServerLink::Closed
                 }
             }
@@ -133,7 +169,16 @@ fn receive(
     result
 }
 
-fn send_packets(mut link: ResMut<ServerLink>, mut messages: ResMut<ClientMessages>) {
+#[allow(
+    clippy::needless_pass_by_value,
+    reason = "engine systems receive resource handles by value"
+)]
+fn send_packets(
+    address: Res<ServerAddress>,
+    mut link: ResMut<ServerLink>,
+    mut diagnostic: ResMut<ConnectionDiagnostic>,
+    mut messages: ResMut<ClientMessages>,
+) {
     let ServerLink::Open(connection) = &mut *link else {
         // Nothing can be sent without a connection, so queued messages are dropped.
         messages.drain_sent().for_each(drop);
@@ -148,8 +193,14 @@ fn send_packets(mut link: ResMut<ServerLink>, mut messages: ResMut<ClientMessage
         }
     }
     if let Err(error) = result.and_then(|()| connection.flush()) {
-        if !matches!(error, ConnectionError::Closed) {
-            warn!("dropping the server connection: {error}");
+        if matches!(error, ConnectionError::Closed) {
+            if diagnostic.detail.is_none() {
+                diagnostic.detail = Some(format!("server at {} closed the connection", address.0));
+            }
+        } else {
+            let message = format!("connection to server at {} lost ({error})", address.0);
+            warn!("{message}");
+            diagnostic.detail = Some(message);
         }
         // The receive system moves the library's state to disconnected next update.
         *link = ServerLink::Closed;
@@ -279,6 +330,15 @@ mod tests {
         });
         let state = app.world().resource::<State<ClientState>>();
         assert_eq!(**state, ClientState::Disconnected);
+        let diagnostic = app.world().resource::<ConnectionDiagnostic>();
+        assert_eq!(diagnostic.server_address, Some(address));
+        assert!(
+            diagnostic
+                .detail
+                .as_deref()
+                .is_some_and(|detail| detail.contains(&address.to_string())),
+            "expected failure diagnostic naming {address}, got {diagnostic:?}"
+        );
     }
 
     #[test]
@@ -327,6 +387,14 @@ mod tests {
         });
         let state = app.world().resource::<State<ClientState>>();
         assert_eq!(**state, ClientState::Disconnected);
+        let diagnostic = app.world().resource::<ConnectionDiagnostic>();
+        assert!(
+            diagnostic
+                .detail
+                .as_deref()
+                .is_some_and(|detail| detail.contains("closed")),
+            "expected close diagnostic, got {diagnostic:?}"
+        );
     }
 
     #[test]

@@ -21,13 +21,14 @@ pub struct ResolvedAction {
 }
 
 /// Why no valid resolution was produced. The caller applies nothing, releases the
-/// `PendingAiResolution` lock, and asks the player to rephrase.
+/// `PendingAiResolution` lock, and reports the actual failure class to the player
+/// (`docs/architecture/code_style.md` Section 7).
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum ResolveError {
-    /// The provider returned no response.
-    #[error("the AI provider returned no response")]
+    /// The provider failed to return a usable response.
+    #[error("the AI provider failed: {source}")]
     Provider {
-        /// The provider's failure.
+        /// The provider's typed failure.
         source: ProviderError,
         /// Exchanges completed before the failure.
         exchanges: Vec<AiExchange>,

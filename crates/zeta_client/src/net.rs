@@ -46,6 +46,17 @@ pub enum ConnectionStatus {
     Disconnected,
 }
 
+/// Target address and latest failure detail for [`ConnectionStatus`]
+/// (`docs/architecture/code_style.md` Section 7).
+#[derive(Resource, Clone, Debug, Default, PartialEq, Eq)]
+pub struct ConnectionDiagnostic {
+    /// Address the client is connecting or connected to.
+    pub server_address: Option<SocketAddr>,
+    /// Concise failure cause when disconnected or rejected, such as refused connect or
+    /// protocol mismatch.
+    pub detail: Option<String>,
+}
+
 impl Plugin for ClientNetPlugin {
     fn build(&self, app: &mut App) {
         // The networking library keeps its connection status in engine states.
@@ -60,7 +71,8 @@ impl Plugin for ClientNetPlugin {
             ClientMessagePlugin,
         ));
         register_protocol(&mut ClientRegistrar(app));
-        app.init_resource::<ConnectionStatus>();
+        app.init_resource::<ConnectionStatus>()
+            .init_resource::<ConnectionDiagnostic>();
         backend::build(app, self.server_address);
     }
 }

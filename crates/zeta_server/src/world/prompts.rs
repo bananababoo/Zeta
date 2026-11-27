@@ -10,7 +10,9 @@ use std::collections::BTreeMap;
 
 use bevy_ecs::prelude::{MessageReader, ResMut, Resource, World};
 use serde_json::{Value, json};
-use zeta_core::ai::{AiExchange, AiProvider, AiRequest, ResolvedAction};
+use zeta_core::ai::{
+    AiExchange, AiProvider, AiRequest, ProviderError, ResolveError, ResolvedAction,
+};
 use zeta_core::catalog::Catalog;
 use zeta_core::entity::EntityId;
 use zeta_core::event_log::{AppliedChange, EventCause, FreeformActionCause};
@@ -32,7 +34,8 @@ use super::{
     DiceRoller, EntityIndex, EventLogWriter, LogSequence, PlayerCharacters, notice, turn_bubble,
 };
 use crate::bridge::{
-    AiBridge, CompletedAiResolutions, CompletedResolution, ResolutionJob, ResolutionLocksResource,
+    AiBridge, BridgeFailure, CompletedAiResolutions, CompletedResolution, ResolutionJob,
+    ResolutionLocksResource,
 };
 use crate::net::messages::{FromPlayer, PlayerConnection, Recipients, ToPlayers};
 use crate::settings::MAX_PROMPT_CHARACTERS;
@@ -68,8 +71,55 @@ Bubble. Decide what they do and resolve it.";
 /// (`docs/prototypes/realism_prototype.md` Section 1), so every modifier is 0.
 const CHECK_MODIFIER: i8 = 0;
 
-/// Notice shown when the AI DM gave no usable answer.
-const REPHRASE_NOTICE: &str = "The AI DM could not resolve that action. Try rephrasing it.";
+/// Translates a [`BridgeFailure`] into an accurate, user-visible notice without ever
+/// collapsing dependency or internal errors into a "try rephrasing" prompt
+/// (`docs/architecture/code_style.md` Section 7).
+pub(crate) fn prompt_failure_notice(failure: &BridgeFailure) -> String {
+    match failure {
+        BridgeFailure::TaskAborted => {
+            "Internal server error: the AI resolution task aborted unexpectedly.".to_owned()
+        }
+        BridgeFailure::Resolution(ResolveError::RetriesExhausted { last_errors, .. }) => {
+            let summary = last_errors.0.first().map_or_else(
+                || "schema validation failed".to_owned(),
+                ToString::to_string,
+            );
+            format!("AI DM output failed validation after retries (try rephrasing): {summary}")
+        }
+        BridgeFailure::Resolution(ResolveError::Provider { source, .. }) => match source {
+            ProviderError::Unauthorized { status, detail } => format!(
+                "AI provider authentication failed (HTTP {status}): {detail}. Check GEMINI_API_KEY in .env."
+            ),
+            ProviderError::RateLimited { status, detail } => {
+                format!("AI provider rate-limited or quota exceeded (HTTP {status}): {detail}.")
+            }
+            ProviderError::BadRequest { status, detail } => {
+                format!("AI provider rejected the request (HTTP {status}): {detail}.")
+            }
+            ProviderError::ModelNotFound { status, detail } => format!(
+                "Configured AI model was not found (HTTP {status}): {detail}. Check ZETA_AI_MODEL in .env."
+            ),
+            ProviderError::ServerUnavailable { status, detail } => {
+                format!("AI provider service unavailable (HTTP {status}): {detail}.")
+            }
+            ProviderError::HttpStatus { status, detail } => {
+                format!("AI provider returned HTTP {status}: {detail}.")
+            }
+            ProviderError::Timeout { detail } => {
+                format!("AI provider request timed out: {detail}.")
+            }
+            ProviderError::Unreachable { detail } => {
+                format!("Could not reach the AI provider: {detail}.")
+            }
+            ProviderError::InvalidResponse { detail } => {
+                format!("AI provider returned an unreadable response: {detail}.")
+            }
+            ProviderError::ReplayExhausted { .. } | ProviderError::ReplayMismatch { .. } => {
+                format!("Internal AI replay error: {source}.")
+            }
+        },
+    }
+}
 
 /// 1 submitted prompt, from admission until its lock is released.
 #[derive(Clone, Debug)]
@@ -374,8 +424,9 @@ fn dispatch<P: AiProvider + Send + Sync + 'static>(
     if dispatched {
         send_status(world, record.connection, PromptState::Resolving, None);
     } else {
-        eprintln!("the AI DM bridge or the map bounds are missing; rejecting a prompt");
-        fail::<P>(world, ticket);
+        let reason = "Internal server error: AI DM bridge or map bounds are not initialized.";
+        eprintln!("{reason}");
+        fail_with_reason::<P>(world, ticket, reason);
     }
 }
 
@@ -397,7 +448,8 @@ fn complete<P: AiProvider + Send + Sync + 'static>(
         Ok(resolved) => resolved,
         Err(error) => {
             eprintln!("AI DM resolution failed: {error}");
-            fail::<P>(world, ticket);
+            let reason = prompt_failure_notice(&error);
+            fail_with_reason::<P>(world, ticket, &reason);
             return;
         }
     };
@@ -479,6 +531,8 @@ fn re_resolve<P: AiProvider + Send + Sync + 'static>(
         }
         Err(error) => {
             eprintln!("could not refresh a prompt lock: {error}");
+            let reason = format!("Internal server error: prompt lock refresh failed ({error}).");
+            reject_with_notice(world, connection, &reason);
             finish::<P>(world, ticket);
         }
     }
@@ -525,7 +579,10 @@ fn apply(world: &mut World, record: &PromptRecord, snapshot: Snapshot, resolved:
         Ok(branch) => branch,
         Err(error) => {
             eprintln!("a validated resolution selected no branch: {error}");
-            reject_with_notice(world, record.connection, REPHRASE_NOTICE);
+            let reason = format!(
+                "Internal server error: validated resolution could not select a branch ({error})."
+            );
+            reject_with_notice(world, record.connection, &reason);
             return;
         }
     };
@@ -562,14 +619,18 @@ fn apply(world: &mut World, record: &PromptRecord, snapshot: Snapshot, resolved:
         .record(position, cause, change);
 }
 
-/// Rejects a prompt the AI DM could not resolve, then ends it.
-fn fail<P: AiProvider + Send + Sync + 'static>(world: &mut World, ticket: PromptTicket) {
+/// Rejects a prompt with its exact failure reason, then ends it.
+fn fail_with_reason<P: AiProvider + Send + Sync + 'static>(
+    world: &mut World,
+    ticket: PromptTicket,
+    reason: &str,
+) {
     let connection = world
         .resource::<PromptRegistry>()
         .0
         .get(&ticket)
         .and_then(|record| record.connection);
-    reject_with_notice(world, connection, REPHRASE_NOTICE);
+    reject_with_notice(world, connection, reason);
     finish::<P>(world, ticket);
 }
 
@@ -647,6 +708,8 @@ fn process_ready<P: AiProvider + Send + Sync + 'static>(
             Ok(Admission::Queued) => {}
             Err(error) => {
                 eprintln!("could not relock a waiting prompt: {error}");
+                let reason = format!("Internal server error: prompt relock failed ({error}).");
+                reject_with_notice(world, connection, &reason);
                 finish::<P>(world, ticket);
             }
         }
@@ -768,5 +831,82 @@ mod tests {
         assert!(!registry.has_npc_turn(EntityId(7)));
         registry.forget_connection(connection);
         assert!(!registry.has_pending(connection));
+    }
+
+    #[test]
+    fn only_validation_retry_exhaustion_suggests_rephrasing() {
+        use zeta_core::validation::{ValidationError, ValidationErrors};
+
+        let non_validation_failures = [
+            BridgeFailure::TaskAborted,
+            BridgeFailure::Resolution(ResolveError::Provider {
+                source: ProviderError::Unauthorized {
+                    status: 401,
+                    detail: "bad key".into(),
+                },
+                exchanges: Vec::new(),
+            }),
+            BridgeFailure::Resolution(ResolveError::Provider {
+                source: ProviderError::RateLimited {
+                    status: 429,
+                    detail: "quota".into(),
+                },
+                exchanges: Vec::new(),
+            }),
+            BridgeFailure::Resolution(ResolveError::Provider {
+                source: ProviderError::BadRequest {
+                    status: 400,
+                    detail: "invalid schema".into(),
+                },
+                exchanges: Vec::new(),
+            }),
+            BridgeFailure::Resolution(ResolveError::Provider {
+                source: ProviderError::ModelNotFound {
+                    status: 404,
+                    detail: "missing".into(),
+                },
+                exchanges: Vec::new(),
+            }),
+            BridgeFailure::Resolution(ResolveError::Provider {
+                source: ProviderError::ServerUnavailable {
+                    status: 503,
+                    detail: "overloaded".into(),
+                },
+                exchanges: Vec::new(),
+            }),
+            BridgeFailure::Resolution(ResolveError::Provider {
+                source: ProviderError::Timeout {
+                    detail: "30s elapsed".into(),
+                },
+                exchanges: Vec::new(),
+            }),
+            BridgeFailure::Resolution(ResolveError::Provider {
+                source: ProviderError::Unreachable {
+                    detail: "dns failure".into(),
+                },
+                exchanges: Vec::new(),
+            }),
+            BridgeFailure::Resolution(ResolveError::Provider {
+                source: ProviderError::InvalidResponse {
+                    detail: "empty text".into(),
+                },
+                exchanges: Vec::new(),
+            }),
+        ];
+        for failure in &non_validation_failures {
+            let notice = prompt_failure_notice(failure);
+            assert!(
+                !notice.to_ascii_lowercase().contains("rephras"),
+                "non-validation failure {failure:?} must not tell player to rephrase: {notice}"
+            );
+        }
+
+        let validation_failure = BridgeFailure::Resolution(ResolveError::RetriesExhausted {
+            last_errors: ValidationErrors(vec![ValidationError::FailWithoutCheck]),
+            exchanges: Vec::new(),
+        });
+        let notice = prompt_failure_notice(&validation_failure);
+        assert!(notice.contains("validation"));
+        assert!(notice.contains("rephrasing"));
     }
 }

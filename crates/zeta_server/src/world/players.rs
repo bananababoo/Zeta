@@ -14,18 +14,21 @@ use zeta_core::protocol::properties::{
     LanguageId, Proficiencies, ProficiencyLevel, RechargeSchedule, ResourceId, ResourcePool,
     ResourcePools, RulesetId, Size, Species, SpeciesId, Speed,
 };
-use zeta_core::protocol::{Collider, Creature, PlayerAssigned, PlayerCharacter, TurnBubble};
+use zeta_core::protocol::{
+    Collider, Creature, NarrationLogEntry, PlayerAssigned, PlayerCharacter, TurnBubble,
+};
 
 use super::inventory::starting_inventory;
 use super::prompts::PromptRegistry;
 use super::scene::{EntitySpec, PLAYER_SPAWN_POSITION, PLAYER_STARTING_ITEMS};
 use super::turn_bubble::remove_participant;
-use super::{EntityIndex, NextEntityId, PlayerCharacters};
+use super::{EntityIndex, EventLogWriter, LogSequence, NextEntityId, PlayerCharacters, notice};
 use crate::net::messages::{PlayerConnected, PlayerDisconnected, Recipients, ToPlayers};
 
 /// Update system: spawns a character for each new player and tells that player which one.
 #[allow(
     clippy::too_many_arguments,
+    clippy::needless_pass_by_value,
     reason = "a Bevy system receives each resource and query it uses as a parameter"
 )]
 pub(crate) fn connect_players(
@@ -35,8 +38,11 @@ pub(crate) fn connect_players(
     mut index: ResMut<EntityIndex>,
     mut next_id: ResMut<NextEntityId>,
     bounds: Option<Res<MapBounds>>,
+    event_log: Res<EventLogWriter>,
+    mut sequence: ResMut<LogSequence>,
     occupants: Query<(&GridPos, &Collider)>,
     mut assignments: MessageWriter<ToPlayers<PlayerAssigned>>,
+    mut notices: MessageWriter<ToPlayers<NarrationLogEntry>>,
 ) {
     let Some(bounds) = bounds else {
         return;
@@ -84,6 +90,9 @@ pub(crate) fn connect_players(
             recipients: Recipients::Only(connection),
             message: PlayerAssigned { character: id },
         });
+        if let Some(warning) = event_log.degraded_notice() {
+            notices.write(notice(&mut sequence, connection, warning));
+        }
     }
 }
 

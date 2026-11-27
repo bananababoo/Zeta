@@ -73,14 +73,77 @@ pub struct AiExchange {
     pub response: AiResponse,
 }
 
-/// Why a provider returned no response.
+/// Why a provider returned no usable response (`docs/architecture/code_style.md` Section 7).
+///
+/// Every variant carries a concise, secret-free diagnostic detail so callers can report the
+/// actual failure class without collapsing infrastructure errors into input errors.
 #[derive(Clone, Debug, PartialEq, Eq, Error)]
 pub enum ProviderError {
-    /// The provider could not be reached or refused the request.
-    #[error("AI provider failed: {message}")]
-    Failed {
-        /// The provider's description of the failure.
-        message: String,
+    /// Authentication or authorization failed (HTTP 401 / 403).
+    #[error("AI provider authentication failed (HTTP {status}): {detail}")]
+    Unauthorized {
+        /// HTTP status code.
+        status: u16,
+        /// Redacted diagnostic detail.
+        detail: String,
+    },
+    /// Rate limit or quota exceeded (HTTP 429).
+    #[error("AI provider rate-limited or quota exceeded (HTTP {status}): {detail}")]
+    RateLimited {
+        /// HTTP status code.
+        status: u16,
+        /// Redacted diagnostic detail.
+        detail: String,
+    },
+    /// The provider rejected the request payload or schema (HTTP 400).
+    #[error("AI provider rejected the request (HTTP {status}): {detail}")]
+    BadRequest {
+        /// HTTP status code.
+        status: u16,
+        /// Redacted diagnostic detail.
+        detail: String,
+    },
+    /// Configured model or endpoint was not found (HTTP 404).
+    #[error("AI provider model or endpoint not found (HTTP {status}): {detail}")]
+    ModelNotFound {
+        /// HTTP status code.
+        status: u16,
+        /// Redacted diagnostic detail.
+        detail: String,
+    },
+    /// Upstream provider service error (HTTP 5xx).
+    #[error("AI provider service unavailable (HTTP {status}): {detail}")]
+    ServerUnavailable {
+        /// HTTP status code.
+        status: u16,
+        /// Redacted diagnostic detail.
+        detail: String,
+    },
+    /// Any other non-2xx HTTP response.
+    #[error("AI provider returned HTTP {status}: {detail}")]
+    HttpStatus {
+        /// HTTP status code.
+        status: u16,
+        /// Redacted diagnostic detail.
+        detail: String,
+    },
+    /// The HTTP request timed out before receiving a complete response.
+    #[error("AI provider request timed out: {detail}")]
+    Timeout {
+        /// Transport diagnostic detail.
+        detail: String,
+    },
+    /// The provider could not be reached over the network (DNS, TCP, TLS, or offline).
+    #[error("AI provider is unreachable: {detail}")]
+    Unreachable {
+        /// Transport diagnostic detail.
+        detail: String,
+    },
+    /// The provider returned 2xx, but the body was malformed, incomplete, or empty.
+    #[error("AI provider returned an unreadable response: {detail}")]
+    InvalidResponse {
+        /// Parse or structural detail.
+        detail: String,
     },
     /// A replay was asked for more requests than were recorded.
     #[error("replay has no recorded exchange at position {position}")]

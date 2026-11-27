@@ -4,7 +4,7 @@
 |---|---|
 | **Status** | `Draft` |
 | **Scope** | World-state database, Event Log, state checkpoints, and location indexing |
-| **Last Updated** | `2026-11-21` |
+| **Last Updated** | `2026-11-26` |
 | **Decision Authority** | Game Director (Project Owner) |
 
 ---
@@ -17,7 +17,7 @@ This document defines how world state and its changes are stored. Every change i
 ## 1. Database
 
 ### What
-World state is stored in PostgreSQL from day one, run locally in Docker on the developer laptop for the prototype. The file `compose.yaml` at the repository root starts PostgreSQL with the PostGIS extension for location queries, pinned to a major version, with credentials read from the local `.env` file and data kept in a named Docker volume. The server connects to PostgreSQL with `sqlx` and applies versioned migration files on startup.
+World state is stored in PostgreSQL from day one, run locally in Docker on the developer laptop for the prototype. The file `compose.yaml` at the repository root starts PostgreSQL with the PostGIS extension for location queries, pinned to a major version, with credentials read from the local `.env` file and data kept in a named Docker volume. The server connects to PostgreSQL with `sqlx` and applies versioned migration files on startup. If PostgreSQL is misconfigured or unreachable on startup, the server exits with an actionable error instead of silently falling back to memory; volatile in-memory mode requires an explicit opt-in (`ZETA_ALLOW_IN_MEMORY_LOG=1`) and notifies connected players in-game. Runtime Event Log write failures surface to players in-game per [`code_style.md`](code_style.md) Section 7.
 
 ### Why
 PostgreSQL is the database the full game uses, and it stores both strict tables and flexible JSON data such as free-form tags. Starting on a simpler database would mean rewriting queries and migrating data later, which the Longevity Principle rules out. The `sqlx` library runs asynchronously on `tokio`, applies migration files from the repository, and sends PostGIS spatial queries directly to PostgreSQL.

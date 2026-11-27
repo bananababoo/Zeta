@@ -4,7 +4,7 @@
 |---|---|
 | **Status** | `Draft` |
 | **Scope** | Rust style base, toolchain, workspace layout, crate boundaries, naming, types, tunable values, errors, serialized data, code documentation, tests, dependencies, and commits |
-| **Last Updated** | `2026-11-22` |
+| **Last Updated** | `2026-11-26` |
 | **Decision Authority** | Game Director (Project Owner) |
 
 ---
@@ -113,11 +113,20 @@ Library code returns typed error enums built with `thiserror`, 1 enum per kind o
 
 Non-test code never calls `unwrap` and never panics on input it does not control. `expect` is allowed only for invariants the code itself upholds, and its message states the invariant, such as `"a value below 1 day in milliseconds fits in u32"`. Arithmetic on values that come from outside the program uses checked or saturating operations. Tests may use `expect` and `panic!` freely.
 
+Every runtime failure reported to players or operators belongs to 1 of 5 disjoint classes, handled by exhaustive `match` on typed errors and never collapsed into another class's message:
+1. **Rule Refusal:** the player's action violates a game rule; state the exact rule.
+2. **AI Output Validation Failure:** the AI DM exhausted structural validation retries; this is the **only** class that may suggest rephrasing, and it states that AI output validation failed.
+3. **External Dependency Failure:** PostgreSQL, Docker, or an AI provider (classified by typed cause: authentication, rate limit, bad request, missing model, service outage, timeout, unreachable, or unreadable response); name the failing dependency and concise safe technical cause, redacting secrets and keys, and never suggest rephrasing.
+4. **Network or Protocol Failure:** refused connection, timeout, unexpected disconnect, or protocol mismatch; display the target address and cause on the client interface.
+5. **Internal Server or Engine Error:** missing required resource, aborted task, or violated invariant; report as an internal server error, log full context, and never suggest rephrasing.
+
+Subsystems fail fast on missing required dependencies (such as unreachable PostgreSQL at server startup, unless an explicit opt-in like `ZETA_ALLOW_IN_MEMORY_LOG=1` is set) and never degrade silently to standard error alone. Every player-initiated asynchronous operation (such as a Freeform Action Prompt or server connection) produces a terminal visible status on every error path so the interface never hangs.
+
 ### Why
-A server that panics drops every connected player. Typed errors make the compiler list every failure a caller must handle. Validation messages also go back to the AI DM on retry, so they have to be exact enough to act on.
+A server that panics drops every connected player. Typed errors make the compiler list every failure a caller must handle. Validation messages go back to the AI DM on retry, so they must be exact enough to act on. Separating the 5 failure classes stops infrastructure outages or internal bugs from telling players to rephrase an action that had nothing wrong with it, and surfacing degraded dependencies in-game makes misconfigurations obvious immediately.
 
 ### Boundaries
-Does not define logging or error reporting to players.
+Does not define structured log shipping or external monitoring dashboards.
 
 ---
 
