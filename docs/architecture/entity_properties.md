@@ -66,6 +66,7 @@ The AI DM mutates typed entity properties only through strict `WorldEffect` vari
 - `ApplyEffect` replaces any prior `Concentration` slot when the new effect requires concentration.
 - `SpendResource` and `RestoreResource` reject underflow and clamp restoration to pool maximums.
 - `AdvanceLevel` enforces total level at most `20` and verifies that any chosen `SubclassId` belongs to that `ClassId`.
+- `Spawn` accepts an optional `props` object (`SpawnProps`: hit points, Armor Class, damage threshold, `Size`, `CreatureType`, walking speed, and `DamageAffinities`) so the AI DM can attach mechanical attributes to newly created objects or creatures while leaving `props` null for purely narrative spawns. Dropped, thrown, or placed items use the dedicated `PlaceItem` operation instead so they always spawn as standard `Inventory`-holding ground piles with full Event Log conservation.
 
 ### Why
 Running arithmetic and rule invariants on the server prevents AI math mistakes, illegal multiclass combinations, or skipped immunities while keeping the AI DM free to adjudicate narrative causes and Difficulty Classes.

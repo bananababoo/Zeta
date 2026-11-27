@@ -1506,4 +1506,131 @@ mod tests {
             "The barrel rolls east."
         );
     }
+
+    #[test]
+    fn ai_place_item_moves_carried_item_onto_ground_pile_and_preserves_conservation() {
+        let mut app = test_app(&[10]);
+        let (connection, character) = connect(&mut app);
+        assert_eq!(held(&app, character, "longsword"), 1);
+
+        let snap = snapshot::build_snapshot(app.world_mut(), character).expect("snapshot");
+        let origin = snap.origin();
+        let target_local = (6_u32, 4_u32);
+        let expected_world = GridPos::new(origin.x + target_local.0, origin.y + target_local.1);
+
+        // 1) Moving a carried sword creates a passable ground pile and preserves conservation.
+        // 2) Trying to place an item the character does not carry spawns nothing.
+        // 3) `from: null` spawns newly discovered ground loot.
+        let reply = format!(
+            r#"{{
+                "ok": true,
+                "chk": null,
+                "fx": [
+                    {{"op": "place_item", "from": 0, "x": {}, "y": {}, "item": "longsword", "custom": null, "qty": 1}},
+                    {{"op": "place_item", "from": 0, "x": {}, "y": {}, "item": "scimitar", "custom": null, "qty": 1}},
+                    {{"op": "place_item", "from": null, "x": {}, "y": {}, "item": "torch", "custom": null, "qty": 2}}
+                ],
+                "fail": []
+            }}"#,
+            target_local.0,
+            target_local.1,
+            target_local.0 + 1,
+            target_local.1,
+            target_local.0 + 2,
+            target_local.1,
+        );
+        let first = exchange(&mut app, character, "I throw my sword.", &reply);
+        replay(&mut app, vec![first]);
+        prompt(&mut app, connection, "I throw my sword.");
+        run_until(&mut app, |world| finished_count(world, connection) == 1);
+
+        assert_eq!(held(&app, character, "longsword"), 0);
+        let recs = records(&app);
+        assert_eq!(recs.len(), 1);
+        assert_eq!(recs[0].change.spawned.len(), 2);
+
+        let sword_pile = recs[0].change.spawned[0];
+        let torch_pile = recs[0].change.spawned[1];
+        assert_eq!(position(&mut app, sword_pile), expected_world);
+        assert_eq!(held(&app, sword_pile, "longsword"), 1);
+        let sword_entity = engine(&app, sword_pile).expect("sword pile entity");
+        assert!(
+            app.world()
+                .get::<Collider>(sword_entity)
+                .expect("collider")
+                .passable
+        );
+        assert_eq!(held(&app, torch_pile, "torch"), 2);
+
+        // Event log records Lost (character) + Gained (sword pile) + Gained (torch pile).
+        let changes = &recs[0].change.items;
+        assert_eq!(changes.len(), 3, "{changes:?}");
+        assert_eq!(changes[0].kind, ItemChangeKind::Lost);
+        assert_eq!(changes[0].holder, character);
+        assert_eq!(changes[1].kind, ItemChangeKind::Gained);
+        assert_eq!(changes[1].holder, sword_pile);
+        assert_eq!(changes[2].kind, ItemChangeKind::Gained);
+        assert_eq!(changes[2].holder, torch_pile);
+    }
+
+    #[test]
+    fn ai_spawn_attaches_optional_props_only_when_provided() {
+        use zeta_core::catalog::DamageType;
+        use zeta_core::protocol::Creature;
+        use zeta_core::protocol::properties::{
+            ArmorClass, CreatureType, DamageAffinities, Health, Size, Speed,
+        };
+
+        let mut app = test_app(&[10]);
+        let (connection, character) = connect(&mut app);
+        let reply = r#"{
+            "ok": true,
+            "chk": null,
+            "fx": [
+                {"op": "spawn", "name": "Smoke", "x": 3, "y": 3, "passable": true, "tags": ["obscuring"], "visual": "grey smoke", "settle": null, "props": null},
+                {"op": "spawn", "name": "Timber Barricade", "x": 4, "y": 3, "passable": false, "tags": ["wooden"], "visual": "stacked timber", "settle": null, "props": {"hp": 20, "ac": 15, "damage_threshold": 5, "size": "large", "creature_type": null, "walk_speed": null, "resistances": [], "immunities": ["poison", "psychic"], "vulnerabilities": ["fire"]}},
+                {"op": "spawn", "name": "Dire Wolf", "x": 5, "y": 3, "passable": false, "tags": ["hostile"], "visual": "grey wolf", "settle": null, "props": {"hp": 37, "ac": 14, "damage_threshold": null, "size": "large", "creature_type": "beast", "walk_speed": 50, "resistances": [], "immunities": [], "vulnerabilities": []}}
+            ],
+            "fail": []
+        }"#;
+        let first = exchange(&mut app, character, "Summon scene.", reply);
+        replay(&mut app, vec![first]);
+        prompt(&mut app, connection, "Summon scene.");
+        run_until(&mut app, |world| finished_count(world, connection) == 1);
+
+        let spawned = records(&app)[0].change.spawned.clone();
+        assert_eq!(spawned.len(), 3);
+        let world = app.world();
+
+        let smoke = engine(&app, spawned[0]).expect("smoke");
+        assert!(world.get::<Health>(smoke).is_none());
+        assert!(world.get::<ArmorClass>(smoke).is_none());
+        assert!(world.get::<Size>(smoke).is_none());
+        assert!(world.get::<Creature>(smoke).is_none());
+
+        let barricade = engine(&app, spawned[1]).expect("barricade");
+        assert_eq!(world.get::<Health>(barricade), Some(&Health::full(20)));
+        assert_eq!(
+            world.get::<ArmorClass>(barricade),
+            Some(&ArmorClass {
+                base: 15,
+                damage_threshold: 5
+            })
+        );
+        assert_eq!(world.get::<Size>(barricade), Some(&Size::Large));
+        assert!(world.get::<Creature>(barricade).is_none());
+        let affinities = world
+            .get::<DamageAffinities>(barricade)
+            .expect("barricade affinities");
+        assert!(affinities.immunities.contains(&DamageType::Poison));
+        assert!(affinities.vulnerabilities.contains(&DamageType::Fire));
+
+        let wolf = engine(&app, spawned[2]).expect("wolf");
+        assert_eq!(world.get::<Health>(wolf), Some(&Health::full(37)));
+        assert_eq!(world.get::<ArmorClass>(wolf), Some(&ArmorClass::new(14)));
+        assert_eq!(world.get::<Size>(wolf), Some(&Size::Large));
+        assert!(world.get::<Creature>(wolf).is_some());
+        assert_eq!(world.get::<CreatureType>(wolf), Some(&CreatureType::Beast));
+        assert_eq!(world.get::<Speed>(wolf), Some(&Speed::walk_only(50)));
+    }
 }

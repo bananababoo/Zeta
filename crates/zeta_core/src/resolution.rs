@@ -10,7 +10,7 @@ use thiserror::Error;
 use crate::catalog::DamageType;
 use crate::protocol::inventory::CustomItem;
 use crate::protocol::properties::{
-    ActiveEffect, ClassId, ConditionId, HazardId, ResourceTarget, SubclassId,
+    ActiveEffect, ClassId, ConditionId, CreatureType, HazardId, ResourceTarget, Size, SubclassId,
 };
 
 /// Local integer identifier assigned per request in the Snapshot.
@@ -70,6 +70,41 @@ pub struct Settle {
     pub visual: Option<String>,
 }
 
+/// Optional 2024 5e mechanical attributes attached to an AI-spawned entity.
+///
+/// Leaving `props` as `None` (or individual fields as `None`/empty) omits those components.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default)]
+#[serde(deny_unknown_fields)]
+pub struct SpawnProps {
+    /// Maximum and starting hit points (`Health::full`). Must be at least 1 when set.
+    #[serde(default)]
+    pub hp: Option<u16>,
+    /// Base Armor Class (`ArmorClass`). Must be at least 1 when set.
+    #[serde(default)]
+    pub ac: Option<u8>,
+    /// Optional structural damage threshold (`ArmorClass::damage_threshold`).
+    #[serde(default)]
+    pub damage_threshold: Option<u16>,
+    /// Optional 2024 5e size category (`Size`).
+    #[serde(default)]
+    pub size: Option<Size>,
+    /// Optional 2024 5e creature type (`CreatureType`). Also marks the entity as a `Creature`.
+    #[serde(default)]
+    pub creature_type: Option<CreatureType>,
+    /// Optional walking speed in feet (`Speed::walk_only`).
+    #[serde(default)]
+    pub walk_speed: Option<u16>,
+    /// Optional damage resistances (`DamageAffinities::resistances`).
+    #[serde(default)]
+    pub resistances: Vec<DamageType>,
+    /// Optional damage immunities (`DamageAffinities::immunities`).
+    #[serde(default)]
+    pub immunities: Vec<DamageType>,
+    /// Optional damage vulnerabilities (`DamageAffinities::vulnerabilities`).
+    #[serde(default)]
+    pub vulnerabilities: Vec<DamageType>,
+}
+
 /// 1 change to the world. Every field naming an entity holds a Snapshot [`LocalId`].
 #[allow(
     missing_docs,
@@ -104,7 +139,7 @@ pub enum WorldEffect {
         visual: Option<String>,
         settle: Option<Settle>,
     },
-    /// `{"op": "spawn", "name": "Smoke", "x": 12, "y": 8, "passable": true, "tags": ["obscuring"], "visual": "thick grey smoke", "settle": {...}}`
+    /// `{"op": "spawn", "name": "Smoke", "x": 12, "y": 8, "passable": true, "tags": ["obscuring"], "visual": "thick grey smoke", "settle": {...}, "props": null}`
     Spawn {
         name: String,
         x: u32,
@@ -113,6 +148,8 @@ pub enum WorldEffect {
         tags: Vec<String>,
         visual: String,
         settle: Option<Settle>,
+        #[serde(default)]
+        props: Option<SpawnProps>,
     },
     /// `{"op": "destroy", "id": 5, "reason": "burned to ash"}`
     Destroy { id: LocalId, reason: String },
@@ -138,6 +175,17 @@ pub enum WorldEffect {
         id: LocalId,
         item: Option<String>,
         custom_name: Option<String>,
+        qty: u32,
+    },
+    /// `{"op": "place_item", "from": 0, "x": 14, "y": 20, "item": "longsword", "custom": null, "qty": 1}`:
+    /// moves an item from `from` onto a ground pile at `(x, y)`, or spawns ground loot when
+    /// `from` is `None`.
+    PlaceItem {
+        from: Option<LocalId>,
+        x: u32,
+        y: u32,
+        item: Option<String>,
+        custom: Option<CustomItem>,
         qty: u32,
     },
     /// `{"op": "damage", "id": 3, "amount": 8, "damage_type": "fire"}`: deals raw typed damage.
@@ -208,6 +256,7 @@ impl WorldEffect {
             Self::Bubble { .. } => "bubble",
             Self::Award { .. } => "award",
             Self::Take { .. } => "take",
+            Self::PlaceItem { .. } => "place_item",
             Self::Damage { .. } => "damage",
             Self::Heal { .. } => "heal",
             Self::TempHp { .. } => "temp_hp",
@@ -239,6 +288,7 @@ impl WorldEffect {
             | Self::RestoreResource { id, .. }
             | Self::AdvanceLevel { id, .. } => std::slice::from_ref(id),
             Self::History { ids, .. } | Self::Bubble { ids, .. } => ids,
+            Self::PlaceItem { from, .. } => from.as_slice(),
             Self::Narrate { .. } | Self::Spawn { .. } => &[],
         }
     }
@@ -246,7 +296,9 @@ impl WorldEffect {
     /// The grid square this effect places something on, if any.
     pub const fn target_square(&self) -> Option<(u32, u32)> {
         match self {
-            Self::Move { x, y, .. } | Self::Spawn { x, y, .. } => Some((*x, *y)),
+            Self::Move { x, y, .. } | Self::Spawn { x, y, .. } | Self::PlaceItem { x, y, .. } => {
+                Some((*x, *y))
+            }
             _ => None,
         }
     }
@@ -409,6 +461,8 @@ impl AiResolution {
                 "StatModifier": stat_modifier_json_schema(),
                 "ActiveEffect": active_effect_json_schema(),
                 "ResourceTarget": resource_target_json_schema(),
+                "CustomItem": custom_item_json_schema(),
+                "SpawnProps": spawn_props_json_schema(),
                 "Settle": settle_json_schema(),
                 "WorldEffect": world_effect_json_schema(),
             }
@@ -490,6 +544,45 @@ fn object_schema(properties: &serde_json::Value, required: &[&str]) -> serde_jso
         "properties": properties,
         "required": required,
     })
+}
+
+fn custom_item_json_schema() -> serde_json::Value {
+    object_schema(
+        &serde_json::json!({
+            "name": { "type": "string" },
+            "weight_thousandths_of_pound": { "type": "integer" },
+            "description": { "type": "string" },
+            "tags": { "type": "array", "items": { "type": "string" } }
+        }),
+        &["name", "weight_thousandths_of_pound", "description", "tags"],
+    )
+}
+
+fn spawn_props_json_schema() -> serde_json::Value {
+    object_schema(
+        &serde_json::json!({
+            "hp": { "type": ["integer", "null"] },
+            "ac": { "type": ["integer", "null"] },
+            "damage_threshold": { "type": ["integer", "null"] },
+            "size": { "type": ["string", "null"] },
+            "creature_type": { "type": ["string", "null"] },
+            "walk_speed": { "type": ["integer", "null"] },
+            "resistances": { "type": "array", "items": { "type": "string" } },
+            "immunities": { "type": "array", "items": { "type": "string" } },
+            "vulnerabilities": { "type": "array", "items": { "type": "string" } }
+        }),
+        &[
+            "hp",
+            "ac",
+            "damage_threshold",
+            "size",
+            "creature_type",
+            "walk_speed",
+            "resistances",
+            "immunities",
+            "vulnerabilities",
+        ],
+    )
 }
 
 fn settle_json_schema() -> serde_json::Value {
@@ -661,23 +754,14 @@ fn property_effect_schemas() -> [serde_json::Value; 9] {
     ]
 }
 
-fn item_effect_schemas() -> [serde_json::Value; 2] {
-    let custom = object_schema(
-        &serde_json::json!({
-            "name": { "type": "string" },
-            "weight_thousandths_of_pound": { "type": "integer" },
-            "description": { "type": "string" },
-            "tags": { "type": "array", "items": { "type": "string" } }
-        }),
-        &["name", "weight_thousandths_of_pound", "description", "tags"],
-    );
+fn item_effect_schemas() -> [serde_json::Value; 3] {
     [
         object_schema(
             &serde_json::json!({
                 "op": { "type": "string", "enum": ["award"] },
                 "id": { "type": "integer" },
                 "item": { "type": ["string", "null"] },
-                "custom": { "anyOf": [custom, { "type": "null" }] },
+                "custom": nullable_ref("CustomItem"),
                 "qty": { "type": "integer" }
             }),
             &["op", "id", "item", "custom", "qty"],
@@ -692,16 +776,23 @@ fn item_effect_schemas() -> [serde_json::Value; 2] {
             }),
             &["op", "id", "item", "custom_name", "qty"],
         ),
+        object_schema(
+            &serde_json::json!({
+                "op": { "type": "string", "enum": ["place_item"] },
+                "from": { "type": ["integer", "null"] },
+                "x": { "type": "integer" },
+                "y": { "type": "integer" },
+                "item": { "type": ["string", "null"] },
+                "custom": nullable_ref("CustomItem"),
+                "qty": { "type": "integer" }
+            }),
+            &["op", "from", "x", "y", "item", "custom", "qty"],
+        ),
     ]
 }
 
 fn settling_effect_schemas() -> [serde_json::Value; 2] {
-    let settle_ref = serde_json::json!({
-        "anyOf": [
-            { "$ref": "#/$defs/Settle" },
-            { "type": "null" }
-        ]
-    });
+    let settle_ref = nullable_ref("Settle");
     [
         object_schema(
             &serde_json::json!({
@@ -724,10 +815,11 @@ fn settling_effect_schemas() -> [serde_json::Value; 2] {
                 "passable": { "type": "boolean" },
                 "tags": { "type": "array", "items": { "type": "string" } },
                 "visual": { "type": "string" },
-                "settle": settle_ref
+                "settle": settle_ref,
+                "props": nullable_ref("SpawnProps")
             }),
             &[
-                "op", "name", "x", "y", "passable", "tags", "visual", "settle",
+                "op", "name", "x", "y", "passable", "tags", "visual", "settle", "props",
             ],
         ),
     ]
@@ -832,6 +924,33 @@ mod tests {
                 tags: vec!["obscuring".into()],
                 visual: "thick grey smoke".into(),
                 settle: Some(settle),
+                props: None,
+            }
+        );
+        let barricade = effect(
+            r#"{"op": "spawn", "name": "Barricade", "x": 5, "y": 6, "passable": false, "tags": ["wooden"], "visual": "stacked timber", "settle": null, "props": {"hp": 20, "ac": 15, "size": "large", "immunities": ["poison", "psychic"], "vulnerabilities": ["fire"]}}"#,
+        );
+        assert_eq!(
+            barricade,
+            WorldEffect::Spawn {
+                name: "Barricade".into(),
+                x: 5,
+                y: 6,
+                passable: false,
+                tags: vec!["wooden".into()],
+                visual: "stacked timber".into(),
+                settle: None,
+                props: Some(SpawnProps {
+                    hp: Some(20),
+                    ac: Some(15),
+                    damage_threshold: None,
+                    size: Some(Size::Large),
+                    creature_type: None,
+                    walk_speed: None,
+                    resistances: vec![],
+                    immunities: vec![DamageType::Poison, DamageType::Psychic],
+                    vulnerabilities: vec![DamageType::Fire],
+                }),
             }
         );
     }
@@ -970,6 +1089,7 @@ mod tests {
                 "bubble",
                 "award",
                 "take",
+                "place_item",
                 "damage",
                 "heal",
                 "temp_hp",
@@ -1085,6 +1205,26 @@ mod tests {
         assert_eq!(
             serde_json::to_value(&take).expect("serializes")["op"],
             take.op()
+        );
+        let place = effect(
+            r#"{"op": "place_item", "from": 0, "x": 14, "y": 20, "item": "longsword", "custom": null, "qty": 1}"#,
+        );
+        assert_eq!(
+            place,
+            WorldEffect::PlaceItem {
+                from: Some(0),
+                x: 14,
+                y: 20,
+                item: Some("longsword".into()),
+                custom: None,
+                qty: 1,
+            }
+        );
+        assert_eq!(place.referenced_ids(), [0]);
+        assert_eq!(place.target_square(), Some((14, 20)));
+        assert_eq!(
+            serde_json::to_value(&place).expect("serializes")["op"],
+            place.op()
         );
     }
 

@@ -169,18 +169,35 @@ fn drop_stack(
     let removed = change_inventory(world, actor, |inventory| {
         inventory.remove(stack.id(), quantity)
     })?;
+    let count = removed.quantity();
+    let (id, placed) = spawn_ground_pile(world, position, removed.item().clone(), count)?;
+    Ok(VerbOutcome {
+        line: format!("Drops {count} {name}."),
+        spawned: vec![id],
+        items: vec![lost(actor, removed), placed],
+    })
+}
+
+/// Spawns 1 passable ground-pile entity at `position` holding `quantity` of `item`.
+pub(crate) fn spawn_ground_pile(
+    world: &mut World,
+    position: GridPos,
+    item: Item,
+    quantity: u32,
+) -> Result<(EntityId, ItemChange), String> {
+    let name = display_name(&item, Catalog::srd());
     let mut ground = Inventory::default();
     let placed = ground
-        .gain(removed.item().clone(), removed.quantity())
+        .gain(item, quantity)
         .map_err(|error| inventory_refusal(&error))?;
-    let visual = match removed.item() {
+    let visual = match placed.item() {
         Item::Custom(custom) => custom.description.clone(),
         Item::Catalog(_) => format!("{name} lying on the ground."),
     };
-    let pile_name = if removed.quantity() > 1 {
-        format!("{name} ({})", removed.quantity())
+    let pile_name = if placed.quantity() > 1 {
+        format!("{name} ({})", placed.quantity())
     } else {
-        name.to_owned()
+        name
     };
     let id = world.resource_mut::<NextEntityId>().allocate();
     let spec = EntitySpec {
@@ -192,12 +209,54 @@ fn drop_stack(
     };
     let entity = world.spawn((spec.into_bundle(id), ground)).id();
     world.resource_mut::<EntityIndex>().0.insert(id, entity);
-    let count = removed.quantity();
-    Ok(VerbOutcome {
-        line: format!("Drops {count} {name}."),
-        spawned: vec![id],
-        items: vec![lost(actor, removed), gained(id, placed)],
-    })
+    Ok((id, gained(id, placed)))
+}
+
+/// Places `quantity` of `item` onto a new passable ground-pile entity at `position`.
+///
+/// When `from` is `Some(holder)`, removes up to `quantity` matching items from `holder` first
+/// and places only what was actually removed (preserving item conservation). When `from` is
+/// `None`, spawns `quantity` of `item` directly as newly discovered ground loot.
+pub(crate) fn place_item(
+    world: &mut World,
+    from: Option<EntityId>,
+    position: GridPos,
+    item: Item,
+    quantity: u32,
+) -> (Option<EntityId>, Vec<ItemChange>) {
+    if quantity == 0 {
+        return (None, Vec::new());
+    }
+    if let Some(holder) = from {
+        let removed = match &item {
+            Item::Catalog(catalog_id) => take(world, holder, quantity, |held| {
+                held.catalog_id() == Some(catalog_id)
+            }),
+            Item::Custom(custom) => take(
+                world,
+                holder,
+                quantity,
+                |held| matches!(held, Item::Custom(held_custom) if held_custom.name.eq_ignore_ascii_case(&custom.name)),
+            ),
+        };
+        let total_removed: u32 = removed.iter().map(|change| change.stack.quantity()).sum();
+        let Some(placed_item) = removed.first().map(|change| change.stack.item().clone()) else {
+            return (None, Vec::new());
+        };
+        match spawn_ground_pile(world, position, placed_item, total_removed) {
+            Ok((pile_id, gain_change)) => {
+                let mut changes = removed;
+                changes.push(gain_change);
+                (Some(pile_id), changes)
+            }
+            Err(_) => (None, removed),
+        }
+    } else {
+        match spawn_ground_pile(world, position, item, quantity) {
+            Ok((pile_id, gain_change)) => (Some(pile_id), vec![gain_change]),
+            Err(_) => (None, Vec::new()),
+        }
+    }
 }
 
 /// `Give`: moves `quantity` items to an adjacent creature (a blocking entity) that carries

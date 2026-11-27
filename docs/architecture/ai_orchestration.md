@@ -168,7 +168,7 @@ pub enum WorldEffect {
         visual: Option<String>,
         settle: Option<Settle>,
     },
-    /// {"op": "spawn", "name": "Smoke", "x": 12, "y": 8, "passable": true, "tags": ["obscuring"], "visual": "thick grey smoke", "settle": {...}}
+    /// {"op": "spawn", "name": "Smoke", "x": 12, "y": 8, "passable": true, "tags": ["obscuring"], "visual": "thick grey smoke", "settle": {...}, "props": null}
     Spawn {
         name: String,
         x: u32,
@@ -177,6 +177,8 @@ pub enum WorldEffect {
         tags: Vec<String>,
         visual: String,
         settle: Option<Settle>,
+        #[serde(default)]
+        props: Option<SpawnProps>,
     },
     /// {"op": "destroy", "id": 5, "reason": "burned to ash"}
     Destroy { id: LocalId, reason: String },
@@ -190,6 +192,9 @@ pub enum WorldEffect {
     /// {"op": "take", "id": 3, "item": "rope", "custom_name": null, "qty": 1}
     /// Set exactly 1 of item (a catalog id) and custom_name.
     Take { id: LocalId, item: Option<String>, custom_name: Option<String>, qty: u32 },
+    /// {"op": "place_item", "from": 0, "x": 14, "y": 20, "item": "longsword", "custom": null, "qty": 1}
+    /// Moves an item from an entity onto a ground pile, or spawns ground loot when from is null.
+    PlaceItem { from: Option<LocalId>, x: u32, y: u32, item: Option<String>, custom: Option<CustomItem>, qty: u32 },
     /// {"op": "damage", "id": 3, "amount": 8, "damage_type": "fire"}
     Damage { id: LocalId, amount: u16, damage_type: DamageType },
     /// {"op": "heal", "id": 0, "amount": 6}
@@ -208,6 +213,24 @@ pub enum WorldEffect {
     RestoreResource { id: LocalId, target: ResourceTarget, amount: u16 },
     /// {"op": "advance_level", "id": 0, "class": "fighter", "subclass": null}
     AdvanceLevel { id: LocalId, class: ClassId, subclass: Option<SubclassId> },
+}
+
+/// Optional 2024 5e mechanical attributes attached to a spawned entity (`null` omits all).
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+#[serde(deny_unknown_fields)]
+pub struct SpawnProps {
+    pub hp: Option<u16>,
+    pub ac: Option<u8>,
+    pub damage_threshold: Option<u16>,
+    pub size: Option<Size>,
+    pub creature_type: Option<CreatureType>,
+    pub walk_speed: Option<u16>,
+    #[serde(default)]
+    pub resistances: Vec<DamageType>,
+    #[serde(default)]
+    pub immunities: Vec<DamageType>,
+    #[serde(default)]
+    pub vulnerabilities: Vec<DamageType>,
 }
 
 /// Narrative-only item outside the catalog, with no combat stats or crafting recipes.

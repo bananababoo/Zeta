@@ -84,6 +84,11 @@ pub enum ValidationError {
     /// `fail` holds effects although `chk` is null.
     #[error("fail must be empty when chk is null, because nothing can fail without a check")]
     FailWithoutCheck,
+    /// `ok` is false although `chk` is set.
+    #[error(
+        "chk must be null when ok is false, because an impossible action cannot be rolled; set ok to true if a check decides it"
+    )]
+    ImpossibleWithCheck,
     /// An `award` or `take` effect names an item the rules do not allow.
     #[error("{location} ({op}): {problem}")]
     Item {
@@ -281,6 +286,9 @@ pub fn validate(
     if resolution.chk.is_none() && !resolution.fail.is_empty() {
         errors.push(ValidationError::FailWithoutCheck);
     }
+    if !resolution.ok && resolution.chk.is_some() {
+        errors.push(ValidationError::ImpossibleWithCheck);
+    }
     for branch in [Branch::Success, Branch::Failure] {
         for (index, effect) in resolution.effects(branch).iter().enumerate() {
             let location = EffectLocation { branch, index };
@@ -364,6 +372,16 @@ fn property_problems(effect: &WorldEffect) -> Vec<PropertyProblem> {
                 });
             }
         }
+        WorldEffect::Spawn {
+            props: Some(props), ..
+        } => {
+            if props.hp == Some(0) {
+                problems.push(PropertyProblem::ZeroAmount { field: "props.hp" });
+            }
+            if props.ac == Some(0) {
+                problems.push(PropertyProblem::ZeroAmount { field: "props.ac" });
+            }
+        }
         _ => {}
     }
     problems
@@ -408,11 +426,14 @@ fn resource_target_problem(target: &ResourceTarget) -> Option<PropertyProblem> {
     }
 }
 
-/// Item rule problems in 1 `award` or `take` effect; empty for every other effect.
+/// Item rule problems in 1 `award`, `take`, or `place_item` effect; empty for every other effect.
 fn item_problems(effect: &WorldEffect, catalog: &Catalog) -> Vec<ItemProblem> {
     let mut problems = Vec::new();
     let (item, has_custom, qty) = match effect {
         WorldEffect::Award {
+            item, custom, qty, ..
+        }
+        | WorldEffect::PlaceItem {
             item, custom, qty, ..
         } => {
             if item.is_some() == custom.is_some() {
@@ -776,6 +797,43 @@ mod tests {
                 "fx[1] (condition): exhaustion_delta 9 must be between -6 and 6",
                 "fx[2] (spend_resource): target.spell_level 10 must be from 1 to 9",
                 "fx[3] (advance_level): subclass \"champion\" belongs to \"fighter\", not \"wizard\"",
+            ]
+        );
+    }
+
+    #[test]
+    fn impossible_action_with_a_check_is_rejected() {
+        let text = r#"{
+            "ok": false,
+            "chk": {"dc": 12, "reason": "throwing a longsword"},
+            "fx": [],
+            "fail": [{"op": "narrate", "text": "It misses."}]
+        }"#;
+        assert_eq!(errors(text), [ValidationError::ImpossibleWithCheck]);
+    }
+
+    #[test]
+    fn place_item_and_spawn_props_validation() {
+        let valid = with_effects(
+            r#"{"op": "place_item", "from": 0, "x": 2, "y": 1, "item": "longsword", "custom": null, "qty": 1},
+            {"op": "place_item", "from": null, "x": 3, "y": 1, "item": "rope", "custom": null, "qty": 1},
+            {"op": "spawn", "name": "Smoke", "x": 4, "y": 1, "passable": true, "tags": [], "visual": "smoke", "settle": null, "props": null},
+            {"op": "spawn", "name": "Barricade", "x": 5, "y": 1, "passable": false, "tags": ["wooden"], "visual": "timber", "settle": null, "props": {"hp": 18, "ac": 15, "damage_threshold": null, "size": "large", "creature_type": null, "walk_speed": null, "resistances": [], "immunities": ["poison", "psychic"], "vulnerabilities": ["fire"]}}"#,
+        );
+        assert!(parse_and_validate(&valid, &snapshot(), BOUNDS, Catalog::srd()).is_ok());
+
+        let messages = item_messages(
+            r#"{"op": "place_item", "from": 9, "x": 25, "y": 1, "item": "not_real", "custom": null, "qty": 1},
+            {"op": "spawn", "name": "Fragile", "x": 1, "y": 1, "passable": false, "tags": [], "visual": "glass", "settle": null, "props": {"hp": 0, "ac": 0}}"#,
+        );
+        assert_eq!(
+            messages,
+            [
+                "fx[0] (place_item): id 9 is not in the Snapshot; valid ids are 0 to 2",
+                "fx[0] (place_item): square (25, 1) is outside the map; x must be below 20 and y below 10",
+                "fx[0] (place_item): item \"not_real\" is not in the item catalog; use an exact catalog id, or a custom item only for a unique story object",
+                "fx[1] (spawn): props.hp must be at least 1",
+                "fx[1] (spawn): props.ac must be at least 1",
             ]
         );
     }

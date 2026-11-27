@@ -13,12 +13,13 @@ use zeta_core::grid::{GridPos, MapBounds};
 use zeta_core::protocol::properties::{
     AbilityScores, ActiveEffects, ArmorClass, CharacterTraits, ClassId, ClassLevels, Concentration,
     ConditionId, ConditionImmunities, Conditions, DamageAffinities, DeathSaves, Health,
-    ResourcePools, RulesetId, SubclassId,
+    ResourcePools, RulesetId, Speed, SubclassId,
 };
 use zeta_core::protocol::{
-    Collider, EntityName, Item, LogEntryKind, NarrationLogEntry, PlayerCharacter, Tags, Visual,
+    Collider, Creature, EntityName, Item, LogEntryKind, NarrationLogEntry, PlayerCharacter, Tags,
+    Visual,
 };
-use zeta_core::resolution::{LocalId, Settle, Volume, WorldEffect};
+use zeta_core::resolution::{LocalId, Settle, SpawnProps, Volume, WorldEffect};
 use zeta_core::ruleset::{Ruleset, RulesetDomain};
 use zeta_core::snapshot::Snapshot;
 
@@ -177,6 +178,7 @@ fn apply_effect(
             tags,
             visual,
             settle,
+            props,
         } => {
             let Some(position) = snapshot.to_world_pos(*x, *y) else {
                 eprintln!(
@@ -196,6 +198,9 @@ fn apply_effect(
             if let Some(settle) = settle {
                 entity.insert(Settling(settle.clone()));
             }
+            if let Some(props) = props {
+                insert_spawn_props(&mut entity, props);
+            }
             let entity = entity.id();
             world.resource_mut::<EntityIndex>().0.insert(id, entity);
             spawned.push(id);
@@ -203,6 +208,49 @@ fn apply_effect(
         WorldEffect::Destroy { id, .. } => destroy(world, snapshot, *id),
         WorldEffect::Award { .. } | WorldEffect::Take { .. } => {
             applied.items.extend(item_effect(world, snapshot, effect));
+        }
+        WorldEffect::PlaceItem {
+            from,
+            x,
+            y,
+            item,
+            custom,
+            qty,
+        } => {
+            let world_pos = snapshot.to_world_pos(*x, *y);
+            let in_bounds = world_pos.is_some_and(|pos| {
+                world
+                    .get_resource::<MapBounds>()
+                    .is_some_and(|bounds| bounds.contains(pos.x, pos.y))
+            });
+            let Some(position) = world_pos.filter(|_| in_bounds) else {
+                eprintln!("warning: skipped out-of-bounds place_item effect at local ({x}, {y})");
+                return;
+            };
+            let holder = match from {
+                Some(local) => {
+                    let Some(id) = world_id(snapshot, *local) else {
+                        return;
+                    };
+                    Some(id)
+                }
+                None => None,
+            };
+            let resolved_item = match (item, custom) {
+                (Some(catalog_id), None) => {
+                    CatalogId::new(catalog_id.as_str()).ok().map(Item::Catalog)
+                }
+                (None, Some(custom)) => Some(Item::Custom(custom.clone())),
+                _ => None,
+            };
+            if let Some(resolved_item) = resolved_item {
+                let (pile_id, changes) =
+                    inventory::place_item(world, holder, position, resolved_item, *qty);
+                if let Some(pile_id) = pile_id {
+                    spawned.push(pile_id);
+                }
+                applied.items.extend(changes);
+            }
         }
         // The Event Log record holds the summary; nothing in the live world changes.
         WorldEffect::History { .. } => {}
@@ -229,6 +277,38 @@ fn apply_effect(
         | WorldEffect::AdvanceLevel { .. } => {
             apply_property_effect(world, snapshot, effect);
         }
+    }
+}
+
+/// Attaches only the 2024 5e components requested in `props` to a newly spawned entity.
+fn insert_spawn_props(entity: &mut bevy_ecs::world::EntityWorldMut<'_>, props: &SpawnProps) {
+    if let Some(hp) = props.hp {
+        entity.insert(Health::full(hp));
+    }
+    if props.ac.is_some() || props.damage_threshold.is_some() {
+        entity.insert(ArmorClass {
+            base: props.ac.unwrap_or(10),
+            damage_threshold: props.damage_threshold.unwrap_or(0),
+        });
+    }
+    if let Some(size) = props.size {
+        entity.insert(size);
+    }
+    if let Some(creature_type) = props.creature_type {
+        entity.insert((Creature, creature_type));
+    }
+    if let Some(walk_speed) = props.walk_speed {
+        entity.insert(Speed::walk_only(walk_speed));
+    }
+    if !props.resistances.is_empty()
+        || !props.immunities.is_empty()
+        || !props.vulnerabilities.is_empty()
+    {
+        entity.insert(DamageAffinities {
+            resistances: props.resistances.iter().copied().collect(),
+            immunities: props.immunities.iter().copied().collect(),
+            vulnerabilities: props.vulnerabilities.iter().copied().collect(),
+        });
     }
 }
 
