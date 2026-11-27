@@ -75,7 +75,7 @@ The planet is divided into `64 × 64` 5-foot tile chunks (`320 × 320` feet, `32
 
 At gameplay zoom each streamed chunk renders through `TerrainSplatMaterial`, which samples a `texture_2d_array`. A per-chunk control map at `SPLAT_PIXELS_PER_TILE` pixels per tile stores layer indexes and weights for each pixel. The material also applies baked hillshade and a climate tint. The overview zoom keeps the existing color raster path.
 
-The base control map comes from `ground_cover` per tile, blended across tile edges with `tile_hash` noise so 5-foot squares never read as blocks. The terrain palette file in `assets/terrain/` lists every texture in the array, and the array index of a texture is its entry order; the entry fields are listed in the Terrain Palette Entry schema. All palette textures share 1 size and 1 format. Map configurations in `assets/maps/` reference palette ids, never raw texture paths.
+The base control map comes from `ground_cover` per tile, blended across tile edges with `tile_hash` noise so 5-foot squares never read as blocks. The terrain palette file in `assets/terrain/` lists every texture in the array, and the array index of a texture is its entry order; the entry fields are listed in the Terrain Palette Entry schema. All palette textures share 1 size and 1 format. The palette holds several texture variants per ground type, chosen by biome, and the client blends variants by `tile_hash` noise so a large area never reads as 1 repeating texture. Map configurations in `assets/maps/` reference palette ids, never raw texture paths.
 
 Texture repeats are computed as `tile mod repeat_period` with integer math on the processor, and each chunk passes the result to the shader as a UV offset. Raw face tile coordinates (up to about 1.8 million) never enter an `f32` shader coordinate.
 
@@ -83,7 +83,7 @@ Texture repeats are computed as `tile mod repeat_period` with integer math on th
 Deterministic generation uses 0 bytes of disk storage for untouched wilderness while keeping server passability and client visuals identical on every 5-foot square. One texture array indexed per pixel lets any number of cover types meet inside 1 chunk with 1 shader, so chunk edges and region edges need no special case. An `f32` holds about 7 significant digits, so raw tile coordinates would lose sub-tile precision; the integer modulo keeps texture repeats continuous across chunk and region edges.
 
 ### Boundaries
-Does not define the fractal noise parameters. Palette contents and texture choices are data in the palette file, never hardcoded in Rust.
+Does not define the fractal noise parameters. Texture names live only in the palette file; Rust iterates the palette and never names a texture.
 
 ---
 
@@ -116,7 +116,7 @@ Does not define the in-engine map editor interface or live Event Log persistence
 ### What
 Ground clutter is small decorative sprites, such as grass tufts and stones, scattered on the ground by a client-only Bevy plugin. The plugin reads `ChunkGroundCover`, the climate foliage value, and `tile_hash`, and spawns each sprite as a child of its chunk so the sprite despawns with the chunk. It skips every tile whose palette entry has `clutter: false` and every tile flagged `region_painted`.
 
-A clutter file in `assets/terrain/` maps each palette id to a weighted sprite list and a density scale. The sprites are a curated set of about 8–16 copied from the nature folder of the local asset warehouse into `assets/terrain/`, using only `painterly` art (see [`../design/visual_style_guide.md`](../design/visual_style_guide.md) Section 3).
+A clutter file in `assets/terrain/` maps each palette id to a weighted sprite list and a density scale. Sprite names, weights, and the palette id mapping live only in this file; the plugin loads whatever the file lists. The sprites are a curated set of about 8–16 copied from the nature folder of the local asset warehouse into `assets/terrain/`, using only `painterly` art (see [`../design/visual_style_guide.md`](../design/visual_style_guide.md) Section 3).
 
 ### Why
 Seeding placement from `tile_hash` puts the same sprite on the same square for every player without network traffic. Reading only `ChunkGroundCover` keeps clutter off water, roads, paths, and town floors without the plugin knowing region or palette internals.
