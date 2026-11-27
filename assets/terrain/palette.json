@@ -1,0 +1,157 @@
+{
+  "entries": [
+    {
+      "id": "grass_lush",
+      "texture": "terrain/palette/grass_lush.png",
+      "tiles_per_repeat": 4,
+      "ground_cover": "lush_grass",
+      "clutter": true
+    },
+    {
+      "id": "grass_meadow",
+      "texture": "terrain/palette/grass_meadow.png",
+      "tiles_per_repeat": 3,
+      "ground_cover": "grass",
+      "clutter": true
+    },
+    {
+      "id": "grass_forest",
+      "texture": "terrain/palette/grass_forest.png",
+      "tiles_per_repeat": 4,
+      "ground_cover": "grass",
+      "clutter": true
+    },
+    {
+      "id": "grass_dry",
+      "texture": "terrain/palette/grass_dry.png",
+      "tiles_per_repeat": 4,
+      "ground_cover": "dry_grass",
+      "clutter": true
+    },
+    {
+      "id": "grass_savanna",
+      "texture": "terrain/palette/grass_savanna.png",
+      "tiles_per_repeat": 3,
+      "ground_cover": "dry_grass",
+      "clutter": true
+    },
+    {
+      "id": "grass_cold",
+      "texture": "terrain/palette/grass_cold.png",
+      "tiles_per_repeat": 3,
+      "ground_cover": "tundra",
+      "clutter": true
+    },
+    {
+      "id": "tundra",
+      "texture": "terrain/palette/tundra.png",
+      "tiles_per_repeat": 3,
+      "ground_cover": "tundra",
+      "clutter": true
+    },
+    {
+      "id": "forest_floor",
+      "texture": "terrain/palette/forest_floor.png",
+      "tiles_per_repeat": 4,
+      "ground_cover": "forest_floor",
+      "clutter": true
+    },
+    {
+      "id": "swamp",
+      "texture": "terrain/palette/swamp.png",
+      "tiles_per_repeat": 6,
+      "ground_cover": "swamp",
+      "clutter": true
+    },
+    {
+      "id": "mud",
+      "texture": "terrain/palette/mud.png",
+      "tiles_per_repeat": 4,
+      "ground_cover": "swamp",
+      "clutter": false
+    },
+    {
+      "id": "dirt",
+      "texture": "terrain/palette/dirt.png",
+      "tiles_per_repeat": 4,
+      "ground_cover": "dirt",
+      "clutter": true
+    },
+    {
+      "id": "dirt_dry",
+      "texture": "terrain/palette/dirt_dry.png",
+      "tiles_per_repeat": 3,
+      "ground_cover": "dirt",
+      "clutter": true
+    },
+    {
+      "id": "rock_gray",
+      "texture": "terrain/palette/rock_gray.png",
+      "tiles_per_repeat": 6,
+      "ground_cover": "rock",
+      "clutter": true
+    },
+    {
+      "id": "rock_brown",
+      "texture": "terrain/palette/rock_brown.png",
+      "tiles_per_repeat": 6,
+      "ground_cover": "rock",
+      "clutter": true
+    },
+    {
+      "id": "rock_mountain",
+      "texture": "terrain/palette/rock_mountain.png",
+      "tiles_per_repeat": 6,
+      "ground_cover": "rock",
+      "clutter": true
+    },
+    {
+      "id": "rock_snow",
+      "texture": "terrain/palette/rock_snow.png",
+      "tiles_per_repeat": 8,
+      "ground_cover": "snow",
+      "clutter": true
+    },
+    {
+      "id": "snow",
+      "texture": "terrain/palette/snow.png",
+      "tiles_per_repeat": 6,
+      "ground_cover": "snow",
+      "clutter": true
+    },
+    {
+      "id": "ice",
+      "texture": "terrain/palette/ice.png",
+      "tiles_per_repeat": 6,
+      "clutter": false
+    },
+    {
+      "id": "sand_beach",
+      "texture": "terrain/palette/sand_beach.png",
+      "tiles_per_repeat": 4,
+      "ground_cover": "beach",
+      "clutter": true
+    },
+    {
+      "id": "sand_desert",
+      "texture": "terrain/palette/sand_desert.png",
+      "tiles_per_repeat": 5,
+      "ground_cover": "desert_sand",
+      "clutter": true
+    },
+    {
+      "id": "water_ocean",
+      "texture": "terrain/palette/water_ocean.png",
+      "tiles_per_repeat": 8,
+      "ground_cover": "deep_water",
+      "clutter": false
+    },
+    {
+      "id": "water_shallow",
+      "texture": "terrain/palette/water_shallow.png",
+      "tiles_per_repeat": 6,
+      "ground_cover": "shallow_water",
+      "clutter": false
+    }
+  ]
+}
