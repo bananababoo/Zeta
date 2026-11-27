@@ -1,7 +1,9 @@
 //! Terrain splat bake: control map, shade map, and ground facts of 1 streamed planet chunk.
 //!
 //! Contract: `terrain_contract.md` Section 4. The base ground of every tile comes from
-//! [`ground_cover`] and the palette variant picked by [`TerrainPalette::variant_at`]. Control
+//! [`ground_cover`]; the texture variants of 1 cover cross-fade by [`variant_value`] noise
+//! ([`TerrainPalette::variant_mix`]), and each tile's ground fact is the variant at its center
+//! ([`TerrainPalette::variant_at`]). Control
 //! texels blend the 4 nearest tile covers with smoothstep weights, and the blend position is
 //! displaced by value noise in face texel coordinates, so 5-foot squares never read as blocks.
 //! Authored regions then composite only their painted layers on top, faded by the polygon's
@@ -22,8 +24,8 @@ use bevy::image::{Image, ImageSampler};
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use zeta_core::world::{
-    CHUNK_SIZE, ChunkCoord, CubeFace, GroundCoverInput, PlanetClimateMaps, PlanetHeightmaps,
-    SHORE_DISTANCE_MAX_TILES, ground_cover, hash_unit, sample_climate, sample_tile,
+    CHUNK_SIZE, ChunkCoord, CubeFace, GroundCover, GroundCoverInput, PlanetClimateMaps,
+    PlanetHeightmaps, SHORE_DISTANCE_MAX_TILES, ground_cover, sample_climate, sample_tile,
     shore_distances, step_tile, tile_to_unit_vec,
 };
 
@@ -32,7 +34,9 @@ use crate::planet_stream::spherical_hillshade;
 use crate::terrain::{
     ResolvedLayer, SPLAT_PIXELS_PER_TILE, count_to_f32, layer_coverage, smoothstep,
 };
-use crate::terrain_palette::{MAX_PALETTE_ENTRIES, TerrainPalette};
+use crate::terrain_palette::{
+    MAX_PALETTE_ENTRIES, TerrainPalette, value_noise_unit, variant_value,
+};
 
 /// Tiles per chunk side as a `usize` index bound.
 pub const CHUNK_TILES: usize = CHUNK_SIZE as usize;
@@ -49,16 +53,22 @@ const TEXELS_PER_TILE_I64: i64 = SPLAT_PIXELS_PER_TILE as i64;
 pub const CONTROL_SIDE: usize = CHUNK_TILES * TEXELS_PER_TILE + 2;
 /// Shade map side in texels: 1 texel per tile plus a 1-tile halo on each side.
 pub const SHADE_SIDE: usize = CHUNK_TILES + 2;
+/// Cover grid halo in tiles: edge noise moves a texel's 4 blend cells up to 2 tiles away
+/// from its own tile, and halo texels sit 1 tile outside the chunk.
+const COVER_HALO: usize = 3;
+/// Cover grid side in tiles: chunk tiles plus [`COVER_HALO`] on each side.
+const COVER_SIDE: usize = CHUNK_TILES + 2 * COVER_HALO;
 /// Padding that makes [`shore_distances`] exact inside the cover grid.
 const SHORE_PAD: usize = SHORE_DISTANCE_MAX_TILES as usize;
 /// Side of the sampled tile window: cover grid plus shore padding on each side.
-const WINDOW_SIDE: usize = SHADE_SIDE + 2 * SHORE_PAD;
+const WINDOW_SIDE: usize = COVER_SIDE + 2 * SHORE_PAD;
 /// Tiles between the window's top-left tile and the chunk origin tile.
-const WINDOW_OFFSET: i64 = 1 + SHORE_DISTANCE_MAX_TILES as i64;
+const WINDOW_OFFSET: i64 = COVER_HALO as i64 + SHORE_DISTANCE_MAX_TILES as i64;
 /// Cover weights reach 0 and 1 this far from the midpoint between 2 tile centers.
-const BLEND_EDGE: (f32, f32) = (0.2, 0.8);
-/// Edge noise octaves: lattice spacing in control texels and amplitude in tiles.
-const WARP_OCTAVES: [(i64, f32); 2] = [(8, 0.25), (3, 0.1)];
+const BLEND_EDGE: (f32, f32) = (0.1, 0.9);
+/// Edge noise octaves: lattice spacing in control texels and amplitude in tiles. The sum
+/// stays below 1 tile; it is large enough that cover borders meander across tile lines.
+const WARP_OCTAVES: [(i64, f32); 3] = [(32, 0.55), (8, 0.3), (3, 0.1)];
 /// [`hash_unit`] salt of the horizontal edge noise.
 const WARP_SALT_X: u64 = 0x7370_6c61_7477_7801;
 /// [`hash_unit`] salt of the vertical edge noise.
@@ -261,7 +271,20 @@ pub fn bake_chunk_splat(
                 warp_noise(face_salt ^ WARP_SALT_Y, global.0, global.1),
             );
             let mut weights = [0.0_f32; MAX_PALETTE_ENTRIES];
-            add_cover_weights(&cover, (rel_x, rel_y), warp, &mut weights);
+            let variant_noise = variant_value(
+                coord.face,
+                global.0 * 2 + 1,
+                global.1 * 2 + 1,
+                TEXELS_PER_TILE_I64 * 2,
+            );
+            add_cover_weights(
+                palette,
+                &cover,
+                (rel_x, rel_y),
+                warp,
+                variant_noise,
+                &mut weights,
+            );
             let mut brightness = 1.0;
             paint_regions(
                 &touching,
@@ -279,7 +302,9 @@ pub fn bake_chunk_splat(
     for local_y in 0..CHUNK_TILES {
         for local_x in 0..CHUNK_TILES {
             let mut weights = [0.0_f32; MAX_PALETTE_ENTRIES];
-            weights[palette_slot(cover[(local_y + 1) * SHADE_SIDE + local_x + 1])] = 1.0;
+            weights[palette_slot(
+                cover[(local_y + COVER_HALO) * COVER_SIDE + local_x + COVER_HALO].tile_variant,
+            )] = 1.0;
             let mut brightness = 1.0;
             let center = Vec2::new(
                 i64_to_f32(index_to_i64(local_x)) + 0.5,
@@ -338,14 +363,24 @@ pub fn bake_rect_splat(width: u32, height: u32, base: u8, layers: &[ResolvedLaye
     }
 }
 
-/// Palette index per cover cell and shade texels over the [`SHADE_SIDE`]² grid (chunk tiles
-/// plus a 1-tile halo); cover cell `(cx, cy)` is chunk tile `(cx - 1, cy - 1)`.
+/// Ground cover of 1 tile of the cover grid.
+#[derive(Clone, Copy)]
+struct CoverCell {
+    /// Cover from [`ground_cover`]; texels blend its variants with [`TerrainPalette::variant_mix`].
+    kind: GroundCover,
+    /// Variant at the tile center ([`TerrainPalette::variant_at`]), the tile's ground fact.
+    tile_variant: u8,
+}
+
+/// Cover cells over the [`COVER_SIDE`]² grid (cover cell `(cx, cy)` is chunk tile
+/// `(cx - COVER_HALO, cy - COVER_HALO)`) and shade texels over the [`SHADE_SIDE`]² grid
+/// (chunk tiles plus a 1-tile halo).
 fn bake_cover_and_shade(
     maps: &PlanetHeightmaps,
     climate: &PlanetClimateMaps,
     palette: &TerrainPalette,
     coord: ChunkCoord,
-) -> (Vec<u8>, Vec<u8>) {
+) -> (Vec<CoverCell>, Vec<u8>) {
     let origin = coord.origin_tile();
     let mut tiles = Vec::with_capacity(WINDOW_SIDE * WINDOW_SIDE);
     let mut samples = Vec::with_capacity(WINDOW_SIDE * WINDOW_SIDE);
@@ -366,10 +401,17 @@ fn bake_cover_and_shade(
     let basis = coord.face.basis();
     let face_right = basis.right_u.map(f64::from);
     let face_down = basis.down_v.map(f64::from);
-    let mut cover = vec![0_u8; SHADE_SIDE * SHADE_SIDE];
+    let mut cover = vec![
+        CoverCell {
+            kind: GroundCover::ALL[0],
+            tile_variant: 0,
+        };
+        COVER_SIDE * COVER_SIDE
+    ];
     let mut shade = vec![0_u8; SHADE_SIDE * SHADE_SIDE * 4];
-    for cy in 0..SHADE_SIDE {
-        for cx in 0..SHADE_SIDE {
+    let shade_start = COVER_HALO - 1;
+    for cy in 0..COVER_SIDE {
+        for cx in 0..COVER_SIDE {
             let w = (cy + SHORE_PAD) * WINDOW_SIDE + cx + SHORE_PAD;
             let sample = samples[w];
             let neighbors = [w - 1, w + 1, w - WINDOW_SIDE, w + WINDOW_SIDE];
@@ -386,8 +428,18 @@ fn bake_cover_and_shade(
                 slope_step_ft,
                 shore_distance_tiles: shore[w],
             });
-            cover[cy * SHADE_SIDE + cx] = palette.variant_at(kind, tiles[w]);
+            cover[cy * COVER_SIDE + cx] = CoverCell {
+                kind,
+                tile_variant: palette.variant_at(kind, tiles[w]),
+            };
 
+            let (Some(sx), Some(sy)) = (cx.checked_sub(shade_start), cy.checked_sub(shade_start))
+            else {
+                continue;
+            };
+            if sx >= SHADE_SIDE || sy >= SHADE_SIDE {
+                continue;
+            }
             let slope_east =
                 f64::from(samples[w + 1].elevation_ft - samples[w - 1].elevation_ft) * 0.5;
             let slope_south = f64::from(
@@ -409,7 +461,7 @@ fn bake_cover_and_shade(
                     [0_usize, 1, 2].map(|c| DRY_TINT[c] + (WET_TINT[c] - DRY_TINT[c]) * wet),
                 )
             };
-            let offset = (cy * SHADE_SIDE + cx) * 4;
+            let offset = (sy * SHADE_SIDE + sx) * 4;
             for channel in 0..3 {
                 shade[offset + channel] = unit_to_u8(f64_to_f32(factor) * tint[channel] * 0.5);
             }
@@ -438,15 +490,18 @@ fn texel_tile_position(rel_x: i64, rel_y: i64) -> Vec2 {
 }
 
 /// Adds the smoothstep weights of the 4 cover cells around texel `(rel_x, rel_y)`, displaced
-/// by `warp` tiles.
+/// by `warp` tiles. Each cell's weight is shared among its cover's variants by
+/// [`TerrainPalette::variant_mix`] at the texel's `variant_noise`.
 ///
 /// The tile and sub-tile parts are kept apart, so the fraction depends only on the texel's
 /// position inside its tile and the shared noise: neighboring chunks compute identical weights
 /// for the texels they share.
 fn add_cover_weights(
-    cover: &[u8],
+    palette: &TerrainPalette,
+    cover: &[CoverCell],
     (rel_x, rel_y): (i64, i64),
     warp: Vec2,
+    variant_noise: f32,
     weights: &mut [f32; MAX_PALETTE_ENTRIES],
 ) {
     let per_tile = i64_to_f32(TEXELS_PER_TILE_I64);
@@ -458,10 +513,10 @@ fn add_cover_weights(
     let shifted = fraction + warp - Vec2::splat(0.5);
     let floor = shifted.floor();
     let blend = shifted - floor;
-    let last = index_to_i64(SHADE_SIDE - 2);
+    let last = index_to_i64(COVER_SIDE - 2);
     let cell = |tile: i64, step: f32| {
-        // Cover cell = chunk tile + 1 (halo).
-        let index = (tile + f32_floor_to_i64(step) + 1).clamp(0, last);
+        // Cover cell = chunk tile + COVER_HALO.
+        let index = (tile + f32_floor_to_i64(step) + index_to_i64(COVER_HALO)).clamp(0, last);
         usize::try_from(index).unwrap_or(0)
     };
     let cx = cell(rel_x.div_euclid(TEXELS_PER_TILE_I64), floor.x);
@@ -475,7 +530,9 @@ fn add_cover_weights(
         (cx + 1, cy + 1, fx * fy),
     ];
     for (x, y, weight) in corners {
-        weights[palette_slot(cover[y * SHADE_SIDE + x])] += weight;
+        for (index, share) in palette.variant_mix(cover[y * COVER_SIDE + x].kind, variant_noise) {
+            weights[palette_slot(index)] += weight * share;
+        }
     }
 }
 
@@ -569,7 +626,7 @@ fn palette_slot(index: u8) -> usize {
     usize::from(index).min(MAX_PALETTE_ENTRIES - 1)
 }
 
-/// Edge noise in tiles at face control texel `(x, y)`, in about `[-0.35, 0.35]`.
+/// Edge noise in tiles at face control texel `(x, y)`, in about `[-0.95, 0.95]`.
 fn warp_noise(salt: u64, x: i64, y: i64) -> f32 {
     WARP_OCTAVES
         .iter()
@@ -582,23 +639,7 @@ fn warp_noise(salt: u64, x: i64, y: i64) -> f32 {
 
 /// Smooth value noise in `[-1.0, 1.0]` over a lattice every `spacing` texels.
 fn value_noise(salt: u64, x: i64, y: i64, spacing: i64) -> f32 {
-    let (cell_x, cell_y) = (x.div_euclid(spacing), y.div_euclid(spacing));
-    let smooth = |value: i64| {
-        let t = i64_to_f32(value.rem_euclid(spacing)) / i64_to_f32(spacing);
-        t * t * (3.0 - 2.0 * t)
-    };
-    let (tx, ty) = (smooth(x), smooth(y));
-    let corner = |dx: i64, dy: i64| lattice_unit(salt, cell_x + dx, cell_y + dy);
-    let top = corner(0, 0) + (corner(1, 0) - corner(0, 0)) * tx;
-    let bottom = corner(0, 1) + (corner(1, 1) - corner(0, 1)) * tx;
-    (top + (bottom - top) * ty) * 2.0 - 1.0
-}
-
-/// Uniform value in `[0.0, 1.0)` of lattice point `(x, y)`.
-fn lattice_unit(salt: u64, x: i64, y: i64) -> f32 {
-    // Face texel coordinates stay below 2^25, so the low 32 bits identify each lattice point.
-    let low = |value: i64| u64::try_from(value & 0xFFFF_FFFF).unwrap_or(0);
-    hash_unit((low(x) << 32) | low(y), salt)
+    value_noise_unit(salt, x, y, spacing) * 2.0 - 1.0
 }
 
 fn index_to_i64(value: usize) -> i64 {

@@ -42,7 +42,9 @@ use crate::chunk_splat::{
     CONTROL_SIDE, ChunkRegionPaint, ChunkSplatBake, RegionPaint, SHADE_SIDE, SPLAT_MIN_TILE_PIXELS,
     bake_chunk_splat, splat_texture,
 };
-use crate::planet_io::{PlanetIoError, load_planet_heightmaps, planet_faces_dir};
+use crate::planet_io::{
+    PlanetIoError, load_planet_climate_maps, load_planet_heightmaps, planet_faces_dir,
+};
 use crate::terrain::{SPLAT_PIXELS_PER_TILE, TerrainSplatMaterial};
 use crate::terrain_palette::{
     TerrainPalette, TerrainPaletteGpu, add_terrain_palette_plugin, layer_params,
@@ -1069,7 +1071,18 @@ fn ensure_planet_world(mut commands: Commands, existing: Option<Res<PlanetWorld>
         return;
     }
     match PlanetWorld::load_default() {
-        Ok(world) => commands.insert_resource(world),
+        Ok(world) => {
+            // Climate drives the gameplay splat ground. A failure is reported and the
+            // planet still draws through the color raster, so it never stays hidden.
+            let world = match load_planet_climate_maps(&planet_faces_dir()) {
+                Ok(climate) => world.with_climate(climate),
+                Err(error) => {
+                    error!("could not load Sera climate maps, drawing raster ground: {error}");
+                    world
+                }
+            };
+            commands.insert_resource(world);
+        }
         Err(error) => error!("could not load Sera planet faces: {error}"),
     }
 }
