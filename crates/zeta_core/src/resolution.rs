@@ -7,10 +7,10 @@
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::catalog::{Ability, DamageType, Skill};
+use crate::catalog::DamageType;
 use crate::protocol::inventory::CustomItem;
 use crate::protocol::properties::{
-    ActiveEffect, ClassId, ConditionId, HazardId, ResourceId, ResourceTarget, SubclassId,
+    ActiveEffect, ClassId, ConditionId, HazardId, ResourceTarget, SubclassId,
 };
 
 /// Local integer identifier assigned per request in the Snapshot.
@@ -399,14 +399,6 @@ impl AiResolution {
                     "type": "string",
                     "enum": ["whisper", "normal", "shout"]
                 },
-                "DamageType": string_enum_schema(&DamageType::ALL.map(DamageType::as_str)),
-                "ConditionId": string_enum_schema(&ConditionId::ALL.map(ConditionId::as_str)),
-                "HazardId": string_enum_schema(&HazardId::ALL.map(HazardId::as_str)),
-                "ClassId": string_enum_schema(&ClassId::ALL.map(ClassId::as_str)),
-                "SubclassId": string_enum_schema(&SubclassId::ALL.map(SubclassId::as_str)),
-                "Ability": string_enum_schema(&Ability::ALL.map(Ability::as_str)),
-                "Skill": string_enum_schema(&Skill::ALL.map(Skill::as_str)),
-                "ResourceId": string_enum_schema(&ResourceId::ALL.map(ResourceId::as_str)),
                 "Dice": object_schema(
                     &serde_json::json!({
                         "count": { "type": "integer" },
@@ -424,13 +416,6 @@ impl AiResolution {
     }
 }
 
-fn string_enum_schema(values: &[&str]) -> serde_json::Value {
-    serde_json::json!({
-        "type": "string",
-        "enum": values,
-    })
-}
-
 fn nullable_ref(def: &str) -> serde_json::Value {
     serde_json::json!({
         "anyOf": [
@@ -440,50 +425,32 @@ fn nullable_ref(def: &str) -> serde_json::Value {
     })
 }
 
+/// Every object in the wire JSON Schema marks all of its properties `required` (using
+/// nullable types instead of omitted keys) and leaves large closed enums as plain strings
+/// validated by Rust `serde` + `validation.rs`. Otherwise Gemini's structured-output
+/// finite-state grammar hits its serving state limit (HTTP 400).
 fn stat_modifier_json_schema() -> serde_json::Value {
     object_schema(
         &serde_json::json!({
-            "kind": {
-                "type": "string",
-                "enum": [
-                    "ac_bonus",
-                    "speed_bonus_ft",
-                    "roll_bonus",
-                    "advantage",
-                    "disadvantage",
-                    "ability_score_min",
-                    "ability_score_bonus",
-                    "damage_resistance",
-                    "damage_immunity",
-                    "damage_vulnerability"
-                ]
-            },
+            "kind": { "type": "string" },
             "value": { "type": "integer" },
             "dice": nullable_ref("Dice"),
             "dice_negative": { "type": "boolean" },
-            "roll_scope": {
-                "anyOf": [
-                    {
-                        "type": "string",
-                        "enum": [
-                            "all_d20_tests",
-                            "attack_rolls",
-                            "ability_checks",
-                            "saving_throws",
-                            "saving_throws_vs_magic",
-                            "concentration_saves",
-                            "initiative",
-                            "death_saves"
-                        ]
-                    },
-                    { "type": "null" }
-                ]
-            },
-            "ability": nullable_ref("Ability"),
-            "skill": nullable_ref("Skill"),
-            "damage_type": nullable_ref("DamageType")
+            "roll_scope": { "type": ["string", "null"] },
+            "ability": { "type": ["string", "null"] },
+            "skill": { "type": ["string", "null"] },
+            "damage_type": { "type": ["string", "null"] }
         }),
-        &["kind"],
+        &[
+            "kind",
+            "value",
+            "dice",
+            "dice_negative",
+            "roll_scope",
+            "ability",
+            "skill",
+            "damage_type",
+        ],
     )
 }
 
@@ -499,29 +466,20 @@ fn active_effect_json_schema() -> serde_json::Value {
                 "items": { "$ref": "#/$defs/StatModifier" }
             }
         }),
-        &["id", "name"],
+        &["id", "name", "source", "duration_rounds", "modifiers"],
     )
 }
 
 fn resource_target_json_schema() -> serde_json::Value {
     object_schema(
         &serde_json::json!({
-            "kind": {
-                "type": "string",
-                "enum": [
-                    "spell_slot",
-                    "pact_slot",
-                    "class_pool",
-                    "feature_use",
-                    "item_charge"
-                ]
-            },
+            "kind": { "type": "string" },
             "spell_level": { "type": ["integer", "null"] },
-            "resource": nullable_ref("ResourceId"),
+            "resource": { "type": ["string", "null"] },
             "feature_id": { "type": ["string", "null"] },
             "stack_id": { "type": ["integer", "null"] }
         }),
-        &["kind"],
+        &["kind", "spell_level", "resource", "feature_id", "stack_id"],
     )
 }
 
@@ -616,7 +574,7 @@ fn property_effect_schemas() -> [serde_json::Value; 9] {
                 "op": { "type": "string", "enum": ["damage"] },
                 "id": { "type": "integer" },
                 "amount": { "type": "integer" },
-                "damage_type": { "$ref": "#/$defs/DamageType" }
+                "damage_type": { "type": "string" }
             }),
             &["op", "id", "amount", "damage_type"],
         ),
@@ -640,13 +598,21 @@ fn property_effect_schemas() -> [serde_json::Value; 9] {
             &serde_json::json!({
                 "op": { "type": "string", "enum": ["condition"] },
                 "id": { "type": "integer" },
-                "add": { "type": "array", "items": { "$ref": "#/$defs/ConditionId" } },
-                "remove": { "type": "array", "items": { "$ref": "#/$defs/ConditionId" } },
+                "add": { "type": "array", "items": { "type": "string" } },
+                "remove": { "type": "array", "items": { "type": "string" } },
                 "exhaustion_delta": { "type": "integer" },
-                "add_hazards": { "type": "array", "items": { "$ref": "#/$defs/HazardId" } },
-                "remove_hazards": { "type": "array", "items": { "$ref": "#/$defs/HazardId" } }
+                "add_hazards": { "type": "array", "items": { "type": "string" } },
+                "remove_hazards": { "type": "array", "items": { "type": "string" } }
             }),
-            &["op", "id"],
+            &[
+                "op",
+                "id",
+                "add",
+                "remove",
+                "exhaustion_delta",
+                "add_hazards",
+                "remove_hazards",
+            ],
         ),
         object_schema(
             &serde_json::json!({
@@ -655,7 +621,7 @@ fn property_effect_schemas() -> [serde_json::Value; 9] {
                 "effect": { "$ref": "#/$defs/ActiveEffect" },
                 "concentrate": { "type": "boolean" }
             }),
-            &["op", "id", "effect"],
+            &["op", "id", "effect", "concentrate"],
         ),
         object_schema(
             &serde_json::json!({
@@ -687,10 +653,10 @@ fn property_effect_schemas() -> [serde_json::Value; 9] {
             &serde_json::json!({
                 "op": { "type": "string", "enum": ["advance_level"] },
                 "id": { "type": "integer" },
-                "class": { "$ref": "#/$defs/ClassId" },
-                "subclass": nullable_ref("SubclassId")
+                "class": { "type": "string" },
+                "subclass": { "type": ["string", "null"] }
             }),
-            &["op", "id", "class"],
+            &["op", "id", "class", "subclass"],
         ),
     ]
 }
@@ -1017,6 +983,42 @@ mod tests {
         );
         for variant in variants {
             assert_eq!(variant["additionalProperties"], false);
+        }
+        assert_every_object_requires_all_properties(&schema);
+    }
+
+    /// Prevents exponential structured-output grammar state explosion (Gemini HTTP 400):
+    /// every JSON Schema object must list all of its declared properties in `required`.
+    fn assert_every_object_requires_all_properties(value: &serde_json::Value) {
+        match value {
+            serde_json::Value::Object(map) => {
+                if map.get("type").and_then(serde_json::Value::as_str) == Some("object")
+                    && let Some(props) =
+                        map.get("properties").and_then(serde_json::Value::as_object)
+                {
+                    let required: std::collections::BTreeSet<&str> = map
+                        .get("required")
+                        .and_then(serde_json::Value::as_array)
+                        .map_or_default(|arr| {
+                            arr.iter().filter_map(serde_json::Value::as_str).collect()
+                        });
+                    let declared: std::collections::BTreeSet<&str> =
+                        props.keys().map(String::as_str).collect();
+                    assert_eq!(
+                        required, declared,
+                        "every object schema must require all declared properties to keep provider grammar states bounded"
+                    );
+                }
+                for child in map.values() {
+                    assert_every_object_requires_all_properties(child);
+                }
+            }
+            serde_json::Value::Array(items) => {
+                for item in items {
+                    assert_every_object_requires_all_properties(item);
+                }
+            }
+            _ => {}
         }
     }
 
