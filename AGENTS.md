@@ -113,9 +113,13 @@ Update this list as milestones finish or new work is added. Each milestone build
    - Zero-AI deterministic crafting window, player/NPC shops, barter UI, and Campaign/Downtime mode rules.
 5. **Milestone 5 — Moderation, Sprites & Voice (`docs/architecture/technical_architecture.md` Sections 1–3):**
    - Automated AI output filter + player report button, curated sprite library + background sprite generation, and proximity voice controls.
-6. **Elevation (agreed direction; revisit when the map is built, not before):**
+6. **Terrain: Climate, Blended Ground & Clutter (`docs/architecture/world_geography.md` Sections 3–6):** built; awaiting a Game Director playtest.
+   - Climate face maps (regenerate with `tools/build_climate_faces.py`; needs numpy, Pillow, scipy), `ground_cover` in `zeta_core`, splat-composited chunks from `assets/terrain/palette.json`, authored regions blended into chunks, and client-only clutter from `assets/terrain/clutter.json`.
+   - Known limits: variant/edge noise is salted per cube face, so the pattern can change at a face edge; the overview zoom still draws flat raster colors.
+   - Later: clutter as server obstacles (3B), biome override ids in the climate alpha channel (none decided yet).
+7. **Elevation (agreed direction; revisit when the map is built, not before):**
    - Ground height per tile in 5 ft steps, plus surface entities you can stand on (bridges, floors) with their own height.
    - Cliffs, slopes, and downhill are derived from neighbor heights, never stored.
    - The Snapshot gets derived facts (height difference, lowest point between, walking route length, adjacent drops), never raw grids. Feature names ("Old Ravine") come from Game Director-named areas, not detection.
    - Additive: a new `Elevation` component and terrain layer appended to the protocol; `GridPos` stays unchanged.
-7. **Open Questions:** Tooling Language (`technical_architecture.md`), Snapshot Maximum Count (`ai_orchestration.md`), Test Suite Thresholds (`realism_prototype.md`), Downtime Gameplay (`game_design.md`).
+8. **Open Questions:** Tooling Language (`technical_architecture.md`), Snapshot Maximum Count (`ai_orchestration.md`), Test Suite Thresholds (`realism_prototype.md`), Downtime Gameplay (`game_design.md`).
