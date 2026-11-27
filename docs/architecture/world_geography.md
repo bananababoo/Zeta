@@ -75,7 +75,7 @@ The planet is divided into `64 × 64` 5-foot tile chunks (`320 × 320` feet, `32
 
 At gameplay zoom each streamed chunk renders through `TerrainSplatMaterial`, which samples a `texture_2d_array`. A per-chunk control map at `SPLAT_PIXELS_PER_TILE` pixels per tile stores layer indexes and weights for each pixel. The material also applies baked hillshade and a climate tint. The overview zoom keeps the existing color raster path. If the climate maps fail to load, the client logs an error and draws every zoom with the raster path. [`crates/zeta_client/src/chunk_splat.rs`](../../crates/zeta_client/src/chunk_splat.rs) bakes the control map.
 
-The base control map comes from `ground_cover` per tile. Each texel blends the covers of its nearest tiles, and value noise in face texel coordinates moves the border so 5-foot squares never read as blocks. [`assets/terrain/palette.json`](../../assets/terrain/palette.json) lists every texture in the array, and the array index of a texture is its entry order; the entry fields are listed in the Terrain Palette Entry schema. All palette textures share 1 size and 1 format. The palette holds several texture variants per ground type, chosen by biome, and value noise cross-fades the variants of 1 cover so a large area never reads as 1 repeating texture. Map configurations in `assets/maps/` and region files in `assets/world/regions/` reference palette ids, never raw texture paths. [`crates/zeta_client/src/terrain_palette.rs`](../../crates/zeta_client/src/terrain_palette.rs) loads the palette into the `TerrainPalette` resource.
+The base control map comes from `ground_cover` per tile. Each texel blends the covers of its nearest tiles, and value noise in face texel coordinates moves the border so 5-foot squares never read as blocks. [`assets/terrain/palette.json`](../../assets/terrain/palette.json) lists every texture in the array, and the array index of a texture is its entry order; the entry fields are listed in the Terrain Palette Entry schema. All palette textures share 1 size and 1 format. The palette holds several texture variants per `GroundCover` value, and value noise cross-fades the variants of 1 cover so a large area never reads as 1 repeating texture. Map configurations in `assets/maps/` and region files in `assets/world/regions/` reference palette ids, never raw texture paths. [`crates/zeta_client/src/terrain_palette.rs`](../../crates/zeta_client/src/terrain_palette.rs) loads the palette into the `TerrainPalette` resource.
 
 Texture repeats are computed as `tile mod repeat_period` with integer math on the processor, and each chunk passes the result to the shader as a UV offset. Raw face tile coordinates (up to about 1.8 million) never enter an `f32` shader coordinate.
 
@@ -101,7 +101,7 @@ When a `64 × 64` chunk loads, it composites layers in 1 fixed order:
 
 An authored region writes only its painted layers into the control map of every chunk it intersects, feathered by the region's `edge_feather`. A region has no separate mesh drawn over the planet. The grid overlay and `entity_cells` stay derived from live state.
 
-At gameplay zoom each chunk entity carries a `ChunkGroundCover` component: the palette index of the texture at the center of each of its `64 × 64` tiles and a per-tile `region_painted` flag, stored row by row. Ground clutter (Section 6) reads only this component.
+At gameplay zoom each chunk entity carries a `ChunkGroundCover` component: `dominant`, the palette index of the texture at the center of each of its `64 × 64` tiles and `region_painted`, a per-tile flag, both stored row by row. Ground clutter (Section 6) reads only this component.
 
 ### Why
 Self-contained polygon region files keep authored towns readable and clean in version control while fitting curved rivers, coastlines, and borders without rectangular overlap conflicts. Enforcing non-overlap in automated checks catches boundary collisions at once instead of hiding silent layer-order bugs. Writing region paint into the same control maps as the base layer lets a road blend into the surrounding grass through 1 material, where a separate region mesh left a visible rectangle edge.
@@ -147,4 +147,4 @@ Each entry in the terrain palette file has these fields.
 | `texture` | Asset path | Texture loaded into the array at this entry's index |
 | `tiles_per_repeat` | Number | 5-foot tiles covered by 1 repeat of the texture |
 | `ground_cover` | Optional `GroundCover` name | Ground cover value this entry renders |
-| `clutter` | Boolean | `false` for water, roads, paths, and town floors |
+| `clutter` | Optional boolean, default `false` | Whether ground clutter grows on this entry; `false` for water, roads, paths, and town floors |

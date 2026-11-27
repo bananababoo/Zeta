@@ -4,7 +4,7 @@
 |---|---|
 | **Status** | `Draft` |
 | **Scope** | Client interface theme, typography, monochrome icons, ground clutter art style, and map lighting cohesion |
-| **Last Updated** | `2026-11-26` |
+| **Last Updated** | `2026-11-27` |
 | **Decision Authority** | Game Director (Project Owner) |
 
 ---
