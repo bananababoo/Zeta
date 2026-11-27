@@ -15,6 +15,7 @@ use std::collections::BTreeMap;
 
 use bevy::math::Vec2;
 use serde::Deserialize;
+use zeta_core::world::hash_unit;
 
 /// Path of the clutter table, relative to `assets/`.
 pub const CLUTTER_CONFIG_PATH: &str = "terrain/clutter.json";
@@ -165,14 +166,14 @@ impl ClutterRule {
 }
 
 /// Everything the placement of 1 tile depends on.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ClutterTileInput {
     /// Dominant palette index of the tile.
     pub palette_index: usize,
     /// Whether an authored region painted this tile (roads, paths, town floors).
     pub region_painted: bool,
-    /// Climate foliage density, `0..=255`.
-    pub foliage: u8,
+    /// Climate foliage density in `[0, 1]` (`ClimateSample::foliage`).
+    pub foliage: f32,
     /// Stable per-tile hash (`zeta_core::world::tile_hash`).
     pub hash: u64,
 }
@@ -207,33 +208,33 @@ impl ClutterTable {
         }
         let rule = self.rule(input.palette_index)?;
         let chance = if rule.follows_foliage {
-            rule.density * f32::from(input.foliage) / 255.0
+            rule.density * input.foliage.clamp(0.0, 1.0)
         } else {
             rule.density
         };
-        if unit_fraction(input.hash, SALT_SPAWN) >= chance {
+        if hash_unit(input.hash, SALT_SPAWN) >= chance {
             return None;
         }
-        let sprite_index = pick_weighted(&rule.sprites, mix(input.hash ^ SALT_SPRITE));
+        let sprite_index = pick_weighted(&rule.sprites, hash_unit(input.hash, SALT_SPRITE));
         let sprite = &rule.sprites[sprite_index];
         let size_tiles = sprite.min_size_tiles
-            + (sprite.max_size_tiles - sprite.min_size_tiles) * unit_fraction(input.hash, SALT_SIZE);
+            + (sprite.max_size_tiles - sprite.min_size_tiles) * hash_unit(input.hash, SALT_SIZE);
         let slack = (1.0 - size_tiles) * 0.5;
         let offset_tiles = Vec2::new(
-            (unit_fraction(input.hash, SALT_OFFSET_X) * 2.0 - 1.0) * slack,
-            (unit_fraction(input.hash, SALT_OFFSET_Y) * 2.0 - 1.0) * slack,
+            (hash_unit(input.hash, SALT_OFFSET_X) * 2.0 - 1.0) * slack,
+            (hash_unit(input.hash, SALT_OFFSET_Y) * 2.0 - 1.0) * slack,
         );
         Some(ClutterPlacement {
             sprite: sprite_index,
             offset_tiles,
             size_tiles,
-            flip_x: mix(input.hash ^ SALT_FLIP) & 1 == 1,
+            flip_x: hash_unit(input.hash, SALT_FLIP) < 0.5,
         })
     }
 }
 
-// Each decision draws from its own salted stream of the tile hash so they stay independent
-// of each other and of other systems (terrain blending) that read the same hash.
+// Each decision uses its own salt so the decisions stay uncorrelated with each other and
+// with other systems (terrain blending) that read the same tile hash.
 const SALT_SPAWN: u64 = 0x636c_7574_7465_7201;
 const SALT_SPRITE: u64 = 0x636c_7574_7465_7202;
 const SALT_SIZE: u64 = 0x636c_7574_7465_7203;
@@ -241,28 +242,16 @@ const SALT_OFFSET_X: u64 = 0x636c_7574_7465_7204;
 const SALT_OFFSET_Y: u64 = 0x636c_7574_7465_7205;
 const SALT_FLIP: u64 = 0x636c_7574_7465_7206;
 
-/// `SplitMix64` finalizer: spreads every input bit across the output.
-const fn mix(mut value: u64) -> u64 {
-    value = (value ^ (value >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
-    value = (value ^ (value >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
-    value ^ (value >> 31)
-}
-
-/// Uniform fraction in `[0, 1)` from the salted stream `salt` of `hash`.
-fn unit_fraction(hash: u64, salt: u64) -> f32 {
-    let top = u16::try_from(mix(hash ^ salt) >> 48).unwrap_or(0);
-    f32::from(top) / 65_536.0
-}
-
-fn pick_weighted(sprites: &[ClutterSprite], roll: u64) -> usize {
-    let total: u64 = sprites.iter().map(|sprite| u64::from(sprite.weight)).sum();
-    let mut remaining = roll % total.max(1);
+/// Picks a sprite index with probability proportional to its weight; `roll` is in `[0, 1)`.
+fn pick_weighted(sprites: &[ClutterSprite], roll: f32) -> usize {
+    let total: f64 = sprites.iter().map(|sprite| f64::from(sprite.weight)).sum();
+    let target = f64::from(roll) * total;
+    let mut cumulative = 0.0;
     for (index, sprite) in sprites.iter().enumerate() {
-        let weight = u64::from(sprite.weight);
-        if remaining < weight {
+        cumulative += f64::from(sprite.weight);
+        if target < cumulative {
             return index;
         }
-        remaining -= weight;
     }
     sprites.len().saturating_sub(1)
 }
@@ -308,7 +297,7 @@ mod tests {
         ClutterTileInput {
             palette_index,
             region_painted: false,
-            foliage: 255,
+            foliage: 1.0,
             hash,
         }
     }
@@ -351,23 +340,23 @@ mod tests {
     #[test]
     fn spawn_rate_follows_density_and_foliage() {
         let table = test_table();
-        let count = |palette_index: usize, foliage: u8| {
+        let count = |palette_index: usize, foliage: f32| {
             (0..20_000_u64)
                 .filter(|&hash| {
                     table
                         .place(ClutterTileInput {
                             foliage,
-                            ..input(palette_index, hash)
+                            ..input(palette_index, hash.wrapping_mul(0x9e37_79b9_7f4a_7c15))
                         })
                         .is_some()
                 })
                 .count()
         };
-        assert_eq!(count(0, 255), 20_000, "density 1 at full foliage fills every tile");
-        assert_eq!(count(0, 0), 0, "no foliage means no plants");
-        let half = count(0, 128);
+        assert_eq!(count(0, 1.0), 20_000, "density 1 at full foliage fills every tile");
+        assert_eq!(count(0, 0.0), 0, "no foliage means no plants");
+        let half = count(0, 0.5);
         assert!((9_000..11_000).contains(&half), "half foliage gave {half}");
-        let gravel_bare = count(2, 0);
+        let gravel_bare = count(2, 0.0);
         assert!(
             (9_000..11_000).contains(&gravel_bare),
             "pebbles ignore foliage, gave {gravel_bare}"
