@@ -1,5 +1,5 @@
-//! Generic authored map region loader, non-overlap validator, and soft polygon mask
-//! rasterizer.
+//! Generic authored map region loader, non-overlap validator, and feathered polygon coverage
+//! ([`polygon_alpha`]) used by the chunk splat bake.
 //!
 //! Rules: `docs/architecture/world_geography.md` Section 4. Every authored region file in
 //! `assets/world/regions/*.json` declares a simple polygon footprint in face 5-foot tile
@@ -14,10 +14,7 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
-use bevy::asset::RenderAssetUsages;
-use bevy::image::{ImageSampler, ImageSamplerDescriptor};
 use bevy::prelude::*;
-use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use serde::Deserialize;
 use zeta_core::grid::{GridPos, MapBounds};
 use zeta_core::protocol::{EntityName, Tags};
@@ -26,16 +23,12 @@ use zeta_core::world::{
 };
 
 use crate::layout::FloatingOrigin;
-use crate::terrain::{
-    EntityStyleRule, MapConfig, SPLAT_PIXELS_PER_TILE, assets_root, load_repeating_texture,
-};
+use crate::terrain::{EntityStyleRule, MapConfig, assets_root, smoothstep};
 
 /// Directory containing authored region JSON files, relative to `assets/`.
 pub const WORLD_REGIONS_DIR: &str = "world/regions";
 /// Default inward feather distance (in grid squares) along an authored polygon boundary.
 const DEFAULT_EDGE_FEATHER: f32 = 1.25;
-/// Maximum terrain materials supported by `TerrainSplatMaterial`.
-const MAX_MATERIALS: usize = 4;
 
 fn default_edge_feather() -> f32 {
     DEFAULT_EDGE_FEATHER
@@ -242,37 +235,40 @@ impl AuthoredRegion {
         )
     }
 
-    /// Rasterizes the soft polygon alpha mask image for this region.
+    /// Polygon vertices in region-local grid squares (relative to the bounding box top-left),
+    /// without a repeated closing vertex.
     #[must_use]
-    pub fn build_mask_image(&self) -> Image {
-        build_polygon_mask(&self.polygon, self.bounds, self.edge_feather)
+    pub fn local_ring(&self) -> Vec<Vec2> {
+        let mut ring: Vec<Vec2> = self
+            .polygon
+            .iter()
+            .map(|&[vx, vy]| {
+                Vec2::new(
+                    local_offset_to_f32(vx - self.bounds.min_x),
+                    local_offset_to_f32(vy - self.bounds.min_y),
+                )
+            })
+            .collect();
+        if ring.len() > 1 && ring.first() == ring.last() {
+            ring.pop();
+        }
+        ring
     }
 }
 
-/// GPU-ready authored region with preloaded repeating terrain textures, entity sprites, and
-/// soft polygon alpha mask.
+/// Authored region with preloaded entity sprites.
+///
+/// Region terrain is not a separate quad: its painted layers are composited into the
+/// control maps of the planet chunks it touches (`chunk_splat`).
 #[derive(Clone, Debug)]
 pub struct LoadedAuthoredRegion {
     /// Validated region geometry and visual configuration.
     pub region: AuthoredRegion,
-    /// Preloaded repeating terrain texture handles for slots 0..4.
-    pub material_textures: [Handle<Image>; MAX_MATERIALS],
-    /// Per-slot UV scale multipliers for slots 0..4.
-    pub material_scales: Vec4,
     /// Preloaded entity style rules paired with their optional sprite handles.
     pub entity_styles: Vec<(EntityStyleRule, Option<Handle<Image>>)>,
-    /// Pre-rasterized soft polygon mask image handle.
-    pub mask_handle: Handle<Image>,
 }
 
 impl LoadedAuthoredRegion {
-    /// Per-region ambient lighting tint as a `Vec4` uniform for `TerrainSplatMaterial`.
-    #[must_use]
-    pub fn ambient_vec4(&self) -> Vec4 {
-        let [r, g, b] = self.region.config.ambient_tint;
-        Vec4::new(r, g, b, 1.0)
-    }
-
     /// Per-region ambient lighting tint as a Bevy `Color` for entity sprites.
     #[must_use]
     pub fn ambient_color(&self) -> Color {
@@ -420,73 +416,38 @@ pub fn read_authored_regions_from_dir(dir: &Path) -> Result<Vec<AuthoredRegion>,
     Ok(regions)
 }
 
-/// Loads all validated authored regions from `dir` and preloads their GPU textures and masks.
+/// Loads all validated authored regions from `dir` and preloads their entity sprites.
 ///
 /// # Errors
 /// Returns any parsing or non-overlap validation error from [`read_authored_regions_from_dir`].
 pub fn load_authored_regions(
     asset_server: &AssetServer,
-    images: &mut Assets<Image>,
     dir: &Path,
 ) -> Result<LoadedAuthoredRegions, String> {
     let regions = read_authored_regions_from_dir(dir)?;
-    let mut loaded = Vec::with_capacity(regions.len());
-
-    for region in regions {
-        let first_tex =
-            load_repeating_texture(asset_server, region.config.materials[0].texture.clone());
-        let mut material_textures = [
-            first_tex.clone(),
-            first_tex.clone(),
-            first_tex.clone(),
-            first_tex,
-        ];
-        let mut scales = [1.0_f32; MAX_MATERIALS];
-        for (slot, material) in region
-            .config
-            .materials
-            .iter()
-            .take(MAX_MATERIALS)
-            .enumerate()
-        {
-            material_textures[slot] =
-                load_repeating_texture(asset_server, material.texture.clone());
-            scales[slot] = material.scale;
-        }
-        let entity_styles = region
-            .config
-            .entity_styles
-            .iter()
-            .cloned()
-            .map(|rule| {
-                let handle = rule
-                    .sprite
-                    .as_ref()
-                    .map(|path| asset_server.load(path.clone()));
-                (rule, handle)
-            })
-            .collect();
-        // `Assets::add`: bevy_asset-0.20.1/src/assets.rs:401.
-        let mask_handle = images.add(region.build_mask_image());
-
-        loaded.push(LoadedAuthoredRegion {
-            region,
-            material_textures,
-            material_scales: Vec4::from_array(scales),
-            entity_styles,
-            mask_handle,
-        });
-    }
-
+    let loaded = regions
+        .into_iter()
+        .map(|region| {
+            let entity_styles = region
+                .config
+                .entity_styles
+                .iter()
+                .cloned()
+                .map(|rule| {
+                    let handle = rule
+                        .sprite
+                        .as_ref()
+                        .map(|path| asset_server.load(path.clone()));
+                    (rule, handle)
+                })
+                .collect();
+            LoadedAuthoredRegion {
+                region,
+                entity_styles,
+            }
+        })
+        .collect();
     Ok(LoadedAuthoredRegions { regions: loaded })
-}
-
-#[expect(
-    clippy::cast_precision_loss,
-    reason = "region dimensions and mask pixel counts stay far below 2^23"
-)]
-fn count_to_f32(value: u32) -> f32 {
-    value as f32
 }
 
 #[expect(
@@ -495,23 +456,6 @@ fn count_to_f32(value: u32) -> f32 {
 )]
 fn local_offset_to_f32(value: i64) -> f32 {
     value as f32
-}
-
-#[expect(
-    clippy::cast_possible_truncation,
-    clippy::cast_sign_loss,
-    reason = "value is clamped to [0.0, 1.0] before scaling to 0..=255"
-)]
-fn alpha_to_u8(value: f32) -> u8 {
-    (value.clamp(0.0, 1.0) * 255.0).round() as u8
-}
-
-fn smoothstep(edge0: f32, edge1: f32, value: f32) -> f32 {
-    if (edge1 - edge0).abs() <= f32::EPSILON {
-        return if value < edge0 { 0.0 } else { 1.0 };
-    }
-    let t = ((value - edge0) / (edge1 - edge0)).clamp(0.0, 1.0);
-    t * t * (3.0 - 2.0 * t)
 }
 
 fn point_to_segment_distance(point: Vec2, start: Vec2, end: Vec2) -> f32 {
@@ -544,92 +488,26 @@ fn point_in_ring_f32(point: Vec2, ring: &[Vec2]) -> bool {
     inside
 }
 
-/// Rasterizes an arbitrary simple polygon (convex or concave) into an RGBA8 mask image over
-/// `bounds`, with `0` outside the polygon and a smooth inward feather of `edge_feather` tiles.
+/// Soft polygon alpha at `point` for an arbitrary simple polygon `ring` (convex or concave):
+/// `0.0` outside, rising smoothly to `1.0` over `edge_feather` grid squares inward.
 #[must_use]
-pub fn build_polygon_mask(polygon: &[[i64; 2]], bounds: RegionBounds, edge_feather: f32) -> Image {
-    let width = bounds.width_tiles().max(1) * SPLAT_PIXELS_PER_TILE;
-    let height = bounds.height_tiles().max(1) * SPLAT_PIXELS_PER_TILE;
-    let scale = count_to_f32(SPLAT_PIXELS_PER_TILE);
-
-    let mut ring: Vec<Vec2> = polygon
-        .iter()
-        .map(|&[vx, vy]| {
-            Vec2::new(
-                local_offset_to_f32(vx - bounds.min_x),
-                local_offset_to_f32(vy - bounds.min_y),
-            )
-        })
-        .collect();
-    if ring.len() > 1 && ring.first() == ring.last() {
-        ring.pop();
+pub fn polygon_alpha(point: Vec2, ring: &[Vec2], edge_feather: f32) -> f32 {
+    if !point_in_ring_f32(point, ring) {
+        return 0.0;
     }
-
-    let mut data = vec![0_u8; (width * height * 4) as usize];
-    let edge_count = ring.len();
-
-    for py in 0..height {
-        let tile_y = (count_to_f32(py) + 0.5) / scale;
-        for px in 0..width {
-            let tile_x = (count_to_f32(px) + 0.5) / scale;
-            let point = Vec2::new(tile_x, tile_y);
-
-            let alpha = if point_in_ring_f32(point, &ring) {
-                if edge_feather <= 0.0 || edge_count < 3 {
-                    1.0
-                } else {
-                    let mut min_dist = f32::INFINITY;
-                    for idx in 0..edge_count {
-                        let d = point_to_segment_distance(
-                            point,
-                            ring[idx],
-                            ring[(idx + 1) % edge_count],
-                        );
-                        min_dist = min_dist.min(d);
-                    }
-                    smoothstep(0.0, edge_feather, min_dist)
-                }
-            } else {
-                0.0
-            };
-
-            let byte = alpha_to_u8(alpha);
-            let index = ((py * width + px) * 4) as usize;
-            data[index] = byte;
-            data[index + 1] = byte;
-            data[index + 2] = byte;
-            data[index + 3] = byte;
-        }
+    if edge_feather <= 0.0 {
+        return 1.0;
     }
-
-    // `Image::new`: bevy_image-0.20.1/src/image.rs:1123.
-    // `TextureFormat::Rgba8Unorm`: wgpu-types-30.0.2/src/texture/format.rs:185.
-    let mut image = Image::new(
-        Extent3d {
-            width,
-            height,
-            depth_or_array_layers: 1,
-        },
-        TextureDimension::D2,
-        data,
-        TextureFormat::Rgba8Unorm,
-        RenderAssetUsages::RENDER_WORLD,
-    );
-    image.sampler = ImageSampler::Descriptor(ImageSamplerDescriptor::linear());
-    image
+    let count = ring.len();
+    let min_dist = (0..count)
+        .map(|idx| point_to_segment_distance(point, ring[idx], ring[(idx + 1) % count]))
+        .fold(f32::INFINITY, f32::min);
+    smoothstep(0.0, edge_feather, min_dist)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn sample_mask(image: &Image, bounds: RegionBounds, tile_x: u32, tile_y: u32) -> u8 {
-        let data = image.data.as_ref().expect("mask bytes");
-        let width = bounds.width_tiles() * SPLAT_PIXELS_PER_TILE;
-        let px = tile_x * SPLAT_PIXELS_PER_TILE + SPLAT_PIXELS_PER_TILE / 2;
-        let py = tile_y * SPLAT_PIXELS_PER_TILE + SPLAT_PIXELS_PER_TILE / 2;
-        data[((py * width + px) * 4) as usize]
-    }
 
     fn minimal_region_json(id: &str, polygon: &str) -> String {
         format!(
@@ -637,7 +515,7 @@ mod tests {
                 "id": "{id}",
                 "face": "pos_x",
                 "polygon": {polygon},
-                "materials": [{{ "id": "land", "texture": "terrain/grass.png" }}]
+                "materials": [{{ "id": "land", "palette": "grass_lush" }}]
             }}"#
         )
     }
@@ -645,6 +523,7 @@ mod tests {
     #[test]
     fn every_authored_region_in_assets_parses_is_non_overlapping_and_references_existing_files() {
         let root = assets_root();
+        let palette = crate::terrain_palette::TerrainPalette::load().expect("shipped palette");
         let regions = read_authored_regions_from_dir(&world_regions_dir())
             .expect("all assets/world/regions/*.json must parse and be non-overlapping");
         assert!(
@@ -657,14 +536,8 @@ mod tests {
         assert_eq!(validate_non_overlapping(&footprints), Ok(()));
 
         for region in &regions {
-            for material in &region.config.materials {
-                assert!(
-                    root.join(&material.texture).is_file(),
-                    "region '{}': missing terrain texture {}",
-                    region.id,
-                    material.texture
-                );
-            }
+            crate::terrain::resolve_material_palette(&region.config, &palette)
+                .unwrap_or_else(|error| panic!("region '{}': {error}", region.id));
             for rule in &region.config.entity_styles {
                 if let Some(sprite) = &rule.sprite {
                     assert!(
@@ -723,33 +596,26 @@ mod tests {
     #[test]
     fn polygon_mask_handles_concave_shapes_and_feathers_edges() {
         // Concave L-shape occupying [0..12, 0..12] minus the [6..12, 0..6] top-right bay.
-        let l_poly = vec![
-            [1000, 2000],
-            [1006, 2000],
-            [1006, 2006],
-            [1012, 2006],
-            [1012, 2012],
-            [1000, 2012],
-        ];
-        let bounds = RegionBounds {
-            min_x: 1000,
-            min_y: 2000,
-            max_x: 1012,
-            max_y: 2012,
-        };
-        let mask = build_polygon_mask(&l_poly, bounds, 1.5);
+        let config: AuthoredRegionConfig = serde_json::from_str(&minimal_region_json(
+            "l_shape",
+            "[[1000, 2000], [1006, 2000], [1006, 2006], [1012, 2006], [1012, 2012], [1000, 2012]]",
+        ))
+        .expect("valid region json");
+        let region = AuthoredRegion::from_config(config).expect("valid region");
+        let ring = region.local_ring();
+        let alpha = |x: f32, y: f32| polygon_alpha(Vec2::new(x + 0.5, y + 0.5), &ring, 1.5);
 
         // Deep inside the vertical leg (local tile 3, 3 -> >= 2.5 tiles from all edges): solid.
-        assert_eq!(sample_mask(&mask, bounds, 3, 3), 255);
+        assert!((alpha(3.0, 3.0) - 1.0).abs() < f32::EPSILON);
         // Deep inside the bottom-right foot (local tile 9, 9): solid.
-        assert_eq!(sample_mask(&mask, bounds, 9, 9), 255);
+        assert!((alpha(9.0, 9.0) - 1.0).abs() < f32::EPSILON);
         // Near the left boundary (local tile 0, 3 -> 0.5 tiles from x=0 with feather 1.5): feathered.
-        let edge_alpha = sample_mask(&mask, bounds, 0, 3);
+        let edge_alpha = alpha(0.0, 3.0);
         assert!(
-            edge_alpha > 0 && edge_alpha < 255,
+            edge_alpha > 0.0 && edge_alpha < 1.0,
             "expected soft feathering near boundary, got {edge_alpha}"
         );
         // Inside the concave top-right cutout (local tile 9, 2): strictly transparent.
-        assert_eq!(sample_mask(&mask, bounds, 9, 2), 0);
+        assert!(alpha(9.0, 2.0).abs() < f32::EPSILON);
     }
 }

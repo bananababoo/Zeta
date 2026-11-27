@@ -1,8 +1,9 @@
-//! Generic external map configuration, GPU terrain splatmap material, and splatmap
-//! rasterizer.
+//! Generic external map configuration, the GPU terrain splat material, and brush layer
+//! coverage.
 //!
-//! No terrain category or entity name is hardcoded in Rust. Every material texture, brush
-//! layer, and entity visual rule comes from an external JSON map config file.
+//! No terrain category or entity name is hardcoded in Rust. Every brush layer and entity
+//! visual rule comes from an external JSON map config file, and every material names a
+//! palette entry of `assets/terrain/palette.json` (`terrain_palette`), never a texture path.
 //!
 //! Coordinate contract: every position, width, radius, padding, feather, wobble, and sprite
 //! size in [`MapConfig`] is in **grid squares** (`1.0` = 1 five-foot square). `width` on a
@@ -12,38 +13,34 @@
 
 use std::path::{Path, PathBuf};
 
-use bevy::asset::RenderAssetUsages;
-use bevy::image::{ImageAddressMode, ImageLoaderSettings, ImageSampler, ImageSamplerDescriptor};
 use bevy::prelude::*;
-use bevy::render::render_resource::{AsBindGroup, Extent3d, TextureDimension, TextureFormat};
+use bevy::render::render_resource::AsBindGroup;
 use bevy::shader::ShaderRef;
 use bevy::sprite_render::{AlphaMode2d, Material2d};
 use serde::Deserialize;
-use zeta_core::grid::{GridPos, MapBounds};
+use zeta_core::grid::GridPos;
 use zeta_core::protocol::{EntityName, Tags};
+
+use crate::terrain_palette::{MAX_PALETTE_ENTRIES, TerrainPalette};
 
 /// Default map config path relative to the `assets/` directory.
 pub const DEFAULT_MAP_CONFIG: &str = "maps/river_crossing.json";
-/// Pixels of splatmap resolution per 5-foot map square.
+/// Control map texels per 5-foot square (`terrain_contract.md` Section 4).
 pub(crate) const SPLAT_PIXELS_PER_TILE: u32 = 8;
-/// Maximum terrain materials supported by the 4-layer GPU splatmap shader.
-const MAX_MATERIALS: usize = 4;
 
 /// External map visual definition loaded from JSON.
 #[derive(Clone, Debug, Deserialize)]
 pub struct MapConfig {
-    /// How many grid squares 1 repeat of a seamless terrain texture spans.
-    #[serde(default = "default_tiles_per_repeat")]
-    pub tiles_per_repeat: f32,
     /// Opacity of the subtle 5-foot grid overlay (`0.0` hides the grid).
     #[serde(default = "default_grid_alpha")]
     pub grid_alpha: f32,
-    /// Per-map ambient RGB tint applied to both terrain and entity sprites to unify mixed art packs.
+    /// Per-map ambient RGB tint applied to entity sprites to unify mixed art packs.
     #[serde(default = "default_ambient_tint")]
     pub ambient_tint: [f32; 3],
-    /// Ordered terrain materials: slot 0 is the base fill, slots 1..=3 map to splat channels.
+    /// Terrain materials referenced by `layers`. The first material fills the ground of a
+    /// standalone map; a planet region draws only its `layers` over the planet ground.
     pub materials: Vec<TerrainMaterialDef>,
-    /// Ordered brush layers painted into the terrain splatmap.
+    /// Ordered brush layers painted into the terrain control map.
     #[serde(default)]
     pub layers: Vec<TerrainLayer>,
     /// Ordered visual rules applied to replicated entities; first match wins.
@@ -53,17 +50,12 @@ pub struct MapConfig {
 
 /// 1 configurable terrain material category (e.g. land, path, water, snow).
 #[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct TerrainMaterialDef {
     /// Category name referenced by `layers`.
     pub id: String,
-    /// Asset path to the seamless texture, relative to `assets/`.
-    pub texture: String,
-    /// UV repeat scale multiplier for this texture.
-    #[serde(default = "default_scale")]
-    pub scale: f32,
-    /// Optional future procedural detail configuration for this category.
-    #[serde(default)]
-    pub detail: Option<serde_json::Value>,
+    /// Palette entry id (`assets/terrain/palette.json`) drawn for this category.
+    pub palette: String,
 }
 
 /// 1 painted terrain brush layer.
@@ -207,27 +199,16 @@ impl EntityStyleRule {
     }
 }
 
-/// Loaded map config and preloaded Bevy texture handles, kept as a client resource.
+/// Loaded map config and preloaded entity sprite handles, kept as a client resource.
 #[derive(Resource, Clone, Debug)]
 pub struct LoadedMapConfig {
     /// Parsed external map configuration.
     pub config: MapConfig,
-    /// Preloaded repeating terrain texture handles for slots 0..4.
-    pub material_textures: [Handle<Image>; MAX_MATERIALS],
-    /// Per-slot UV scale multipliers for slots 0..4.
-    pub material_scales: Vec4,
     /// Preloaded entity style rules paired with their optional sprite handles.
     pub entity_styles: Vec<(EntityStyleRule, Option<Handle<Image>>)>,
 }
 
 impl LoadedMapConfig {
-    /// Per-map ambient lighting tint as a `Vec4` uniform for `TerrainSplatMaterial`.
-    #[must_use]
-    pub fn ambient_vec4(&self) -> Vec4 {
-        let [r, g, b] = self.config.ambient_tint;
-        Vec4::new(r, g, b, 1.0)
-    }
-
     /// Per-map ambient lighting tint as a Bevy `Color` for map entity sprites.
     #[must_use]
     pub fn ambient_color(&self) -> Color {
@@ -248,43 +229,32 @@ impl LoadedMapConfig {
     }
 }
 
-/// GPU material that blends up to 4 configurable terrain textures through an RGBA splatmap.
+/// GPU material that blends palette texture-array layers through a per-chunk control map.
+///
+/// Bindings match `assets/shaders/terrain_splat.wgsl` (`terrain_contract.md` Section 4).
 // `Material2d` + `AsBindGroup`: bevy_sprite_render-0.20.1/src/mesh2d/material.rs:148.
+// `texture(N, dimension = "2d_array")`, texture without sampler:
+// bevy_render-0.20.1/src/render_resource/bind_group.rs:174-189.
 #[derive(AsBindGroup, Debug, Clone, Asset, TypePath)]
 pub struct TerrainSplatMaterial {
-    /// `(grid_width, grid_height, tiles_per_repeat, grid_alpha)`.
+    /// `(width_tiles, height_tiles, grid_alpha, control_texels_per_tile)`.
     #[uniform(0)]
     pub params: Vec4,
-    /// Per-material UV scale multipliers for `layer0`..`layer3`.
+    /// Per palette layer: `xy` = quad origin tile modulo the layer repeat, `z` = 1 / repeat.
     #[uniform(0)]
-    pub scales: Vec4,
-    /// Per-map ambient lighting tint (`rgb`, `1.0`).
-    #[uniform(0)]
-    pub ambient_tint: Vec4,
-    /// RGBA splat weights: `R = layer1`, `G = layer2`, `B = layer3`, `A = edge darkening`.
+    pub layer_params: [Vec4; MAX_PALETTE_ENTRIES],
+    /// Control map (`RGBA8Unorm`, 1-texel halo): `R`/`G` palette indices of layers A/B,
+    /// `B` weight of layer B, `A` brightness. Read with `textureLoad`, so no sampler.
     #[texture(1)]
-    #[sampler(2)]
-    pub splat: Handle<Image>,
-    /// Base terrain texture (slot 0).
-    #[texture(3)]
-    #[sampler(4)]
-    pub layer0: Handle<Image>,
-    /// Terrain texture for splat channel R (slot 1).
-    #[texture(5)]
-    #[sampler(6)]
-    pub layer1: Handle<Image>,
-    /// Terrain texture for splat channel G (slot 2).
-    #[texture(7)]
-    #[sampler(8)]
-    pub layer2: Handle<Image>,
-    /// Terrain texture for splat channel B (slot 3).
-    #[texture(9)]
-    #[sampler(10)]
-    pub layer3: Handle<Image>,
-    /// Soft polygon mask (`R` channel in `[0.0, 1.0]`) feathering region boundaries over Sera.
-    #[texture(11)]
-    #[sampler(12)]
-    pub region_mask: Handle<Image>,
+    pub control: Handle<Image>,
+    /// Per-tile hillshade x climate tint / 2 with a 1-tile halo.
+    #[texture(2)]
+    #[sampler(3)]
+    pub shade: Handle<Image>,
+    /// Palette texture array (`TerrainPaletteGpu`).
+    #[texture(4, dimension = "2d_array")]
+    #[sampler(5)]
+    pub layers: Handle<Image>,
 }
 
 impl Material2d for TerrainSplatMaterial {
@@ -293,34 +263,10 @@ impl Material2d for TerrainSplatMaterial {
     }
 
     // `Material2d::alpha_mode`: bevy_sprite_render-0.20.1/src/mesh2d/material.rs:167.
-    // `AlphaMode2d::Blend`: bevy_sprite_render-0.20.1/src/mesh2d/material.rs:276.
+    // `AlphaMode2d::Opaque`: bevy_sprite_render-0.20.1/src/mesh2d/material.rs:263.
     fn alpha_mode(&self) -> AlphaMode2d {
-        AlphaMode2d::Blend
+        AlphaMode2d::Opaque
     }
-}
-
-/// Returns a solid opaque `1x1` mask image for rectangular maps without polygon feathering.
-#[must_use]
-pub fn full_region_mask_image() -> Image {
-    // `Image::new`: bevy_image-0.20.1/src/image.rs:1123.
-    // `TextureFormat::Rgba8Unorm`: wgpu-types-30.0.2/src/texture/format.rs:185.
-    let mut image = Image::new(
-        Extent3d {
-            width: 1,
-            height: 1,
-            depth_or_array_layers: 1,
-        },
-        TextureDimension::D2,
-        vec![255, 255, 255, 255],
-        TextureFormat::Rgba8Unorm,
-        RenderAssetUsages::RENDER_WORLD,
-    );
-    image.sampler = ImageSampler::Descriptor(ImageSamplerDescriptor::linear());
-    image
-}
-
-fn default_tiles_per_repeat() -> f32 {
-    4.5
 }
 
 fn default_grid_alpha() -> f32 {
@@ -329,10 +275,6 @@ fn default_grid_alpha() -> f32 {
 
 fn default_ambient_tint() -> [f32; 3] {
     [1.0, 1.0, 1.0]
-}
-
-fn default_scale() -> f32 {
-    1.0
 }
 
 fn default_blend() -> f32 {
@@ -381,7 +323,7 @@ pub fn read_map_config(relative_path: &str) -> Result<MapConfig, String> {
     Ok(config)
 }
 
-/// Loads and parses a [`MapConfig`] JSON file from `assets/` and preloads its textures.
+/// Loads and parses a [`MapConfig`] JSON file from `assets/` and preloads its entity sprites.
 ///
 /// # Errors
 ///
@@ -392,20 +334,6 @@ pub fn load_map_config(
     relative_path: &str,
 ) -> Result<LoadedMapConfig, String> {
     let config = read_map_config(relative_path)?;
-
-    let first_tex = load_repeating_texture(asset_server, config.materials[0].texture.clone());
-    let mut material_textures = [
-        first_tex.clone(),
-        first_tex.clone(),
-        first_tex.clone(),
-        first_tex,
-    ];
-    let mut scales = [1.0_f32; MAX_MATERIALS];
-    for (slot, material) in config.materials.iter().take(MAX_MATERIALS).enumerate() {
-        material_textures[slot] = load_repeating_texture(asset_server, material.texture.clone());
-        scales[slot] = material.scale;
-    }
-
     let entity_styles = config
         .entity_styles
         .iter()
@@ -421,59 +349,113 @@ pub fn load_map_config(
 
     Ok(LoadedMapConfig {
         config,
-        material_textures,
-        material_scales: Vec4::from_array(scales),
         entity_styles,
     })
 }
 
-/// Loads a seamless terrain texture configured with repeating UV addressing.
-pub fn load_repeating_texture(asset_server: &AssetServer, path: String) -> Handle<Image> {
-    // `AssetServer::load_builder`: bevy_asset-0.20.1/src/server/mod.rs:371.
-    // `LoadBuilder::with_settings`: bevy_asset-0.20.1/src/server/mod.rs:1737.
-    // `ImageLoaderSettings::sampler`: bevy_image-0.20.1/src/image_loader.rs:151.
-    // `ImageAddressMode::Repeat`: bevy_image-0.20.1/src/image.rs:747.
-    asset_server
-        .load_builder()
-        .with_settings(|settings: &mut ImageLoaderSettings| {
-            settings.sampler = ImageSampler::Descriptor(ImageSamplerDescriptor {
-                address_mode_u: ImageAddressMode::Repeat,
-                address_mode_v: ImageAddressMode::Repeat,
-                ..ImageSamplerDescriptor::linear()
-            });
+/// Palette index of every material of `config`, in `materials` order.
+///
+/// # Errors
+///
+/// Returns an error naming the material when its `palette` id is not in `palette`, or naming
+/// the layer when its `material` is not in `materials`.
+pub fn resolve_material_palette(
+    config: &MapConfig,
+    palette: &TerrainPalette,
+) -> Result<Vec<u8>, String> {
+    let indices = config
+        .materials
+        .iter()
+        .map(|material| {
+            palette.index_of(&material.palette).ok_or_else(|| {
+                format!(
+                    "material {:?} names unknown palette entry {:?}",
+                    material.id, material.palette
+                )
+            })
         })
-        .load(path)
+        .collect::<Result<Vec<u8>, String>>()?;
+    if let Some(layer) = config
+        .layers
+        .iter()
+        .find(|layer| !config.materials.iter().any(|m| m.id == layer.material))
+    {
+        return Err(format!("layer names unknown material {:?}", layer.material));
+    }
+    Ok(indices)
+}
+
+/// 1 brush layer with its palette index and its resolved `entity_cells` squares.
+#[derive(Clone, Debug)]
+pub struct ResolvedLayer {
+    /// Palette index drawn by the layer.
+    pub palette_index: u8,
+    /// Brush layer definition.
+    pub layer: TerrainLayer,
+    /// Squares matched by an `entity_cells` shape (empty for other shapes).
+    pub cells: Vec<GridPos>,
+}
+
+/// Resolves every layer of `config` against `palette` and live `entities`.
+///
+/// # Errors
+///
+/// Returns the [`resolve_material_palette`] error.
+pub fn resolve_layers(
+    config: &MapConfig,
+    palette: &TerrainPalette,
+    entities: &[TerrainEntityCell],
+) -> Result<Vec<ResolvedLayer>, String> {
+    let indices = resolve_material_palette(config, palette)?;
+    Ok(config
+        .layers
+        .iter()
+        .filter_map(|layer| {
+            let slot = config
+                .materials
+                .iter()
+                .position(|m| m.id == layer.material)?;
+            Some(ResolvedLayer {
+                palette_index: indices[slot],
+                layer: layer.clone(),
+                cells: resolve_layer_cells(&layer.shape, entities),
+            })
+        })
+        .collect())
+}
+
+/// Coverage of `layer` at `tile_pos` (grid squares, map-local): `(weight, rim)`.
+///
+/// `weight` is the layer opacity in `[0.0, blend]`; `rim` is the edge darkening strength just
+/// outside the edge (`0.0` without `edge_darken`). Organic wobble displaces the edge.
+pub fn layer_coverage(layer: &ResolvedLayer, tile_pos: Vec2) -> (f32, f32) {
+    let (signed_dist, feather, wobble) =
+        shape_signed_distance(&layer.layer.shape, tile_pos, &layer.cells);
+    if !signed_dist.is_finite() {
+        return (0.0, 0.0);
+    }
+    let displaced = signed_dist + wobble * organic_wave(tile_pos.x, tile_pos.y);
+    let half_feather = feather.max(0.01) * 0.5;
+    let outside = smoothstep(-half_feather, half_feather, displaced);
+    let weight = (1.0 - outside) * layer.layer.blend.clamp(0.0, 1.0);
+    let rim = layer.layer.edge_darken.map_or(0.0, |edge| {
+        outside
+            * (1.0 - smoothstep(half_feather, half_feather + edge.width, displaced))
+            * edge.strength.clamp(0.0, 1.0)
+    });
+    (weight, rim)
 }
 
 #[expect(
     clippy::cast_precision_loss,
-    reason = "map dimensions and splatmap pixel counts stay far below 2^23"
+    reason = "map dimensions and control map pixel counts stay far below 2^23"
 )]
-fn count_to_f32(value: u32) -> f32 {
+pub(crate) fn count_to_f32(value: u32) -> f32 {
     value as f32
 }
 
-#[expect(
-    clippy::cast_possible_truncation,
-    clippy::cast_sign_loss,
-    reason = "value is clamped to [0.0, 1.0] before scaling to 0..=255"
-)]
-fn weight_to_u8(value: f32) -> u8 {
-    (value.clamp(0.0, 1.0) * 255.0) as u8
-}
-
-/// Uniform parameters for a `MapBounds` terrain quad from `config`.
-pub fn terrain_params(bounds: MapBounds, config: &MapConfig) -> Vec4 {
-    Vec4::new(
-        count_to_f32(bounds.width),
-        count_to_f32(bounds.height),
-        config.tiles_per_repeat,
-        config.grid_alpha,
-    )
-}
-
 /// Returns whether an entity with `name` and `tags` contributes to any `EntityCells` layer of
-/// `config`. Used to detect when replicated entities require a splatmap rebuild.
+/// `config`. Used to detect when replicated entities require a control map rebuild.
 pub fn entity_matches_any_terrain_layer(
     config: &MapConfig,
     name: Option<&EntityName>,
@@ -502,7 +484,8 @@ pub fn entity_matches_any_terrain_layer(
     })
 }
 
-fn smoothstep(edge0: f32, edge1: f32, value: f32) -> f32 {
+/// Hermite smoothstep of `value` between `edge0` and `edge1`.
+pub(crate) fn smoothstep(edge0: f32, edge1: f32, value: f32) -> f32 {
     if (edge1 - edge0).abs() <= f32::EPSILON {
         return if value < edge0 { 0.0 } else { 1.0 };
     }
@@ -638,132 +621,101 @@ fn shape_signed_distance(
     }
 }
 
-/// Rasterizes the configurable `layers` of `config` into an RGBA8 splatmap image for `bounds`,
-/// using `entities` to resolve any `entity_cells` layers directly from live simulation state.
-pub fn build_splatmap_from_config(
-    bounds: MapBounds,
-    config: &MapConfig,
-    entities: &[TerrainEntityCell],
-) -> Image {
-    let width = bounds.width.max(1) * SPLAT_PIXELS_PER_TILE;
-    let height = bounds.height.max(1) * SPLAT_PIXELS_PER_TILE;
-    let scale = count_to_f32(SPLAT_PIXELS_PER_TILE);
-    let mut data = vec![0_u8; (width * height * 4) as usize];
-
-    let resolved_layers: Vec<(usize, &TerrainLayer, Vec<GridPos>)> = config
-        .layers
-        .iter()
-        .filter_map(|layer| {
-            let slot = config
-                .materials
-                .iter()
-                .take(MAX_MATERIALS)
-                .position(|m| m.id == layer.material)?;
-            let cells = resolve_layer_cells(&layer.shape, entities);
-            Some((slot, layer, cells))
-        })
-        .collect();
-
-    for py in 0..height {
-        let tile_y = (count_to_f32(py) + 0.5) / scale;
-        for px in 0..width {
-            let tile_x = (count_to_f32(px) + 0.5) / scale;
-            let tile_pos = Vec2::new(tile_x, tile_y);
-            let wave = organic_wave(tile_x, tile_y);
-
-            let mut channels = [0.0_f32; 4]; // R=slot1, G=slot2, B=slot3, A=darken
-            for (slot, layer, cells) in &resolved_layers {
-                let (signed_dist, feather, wobble) =
-                    shape_signed_distance(&layer.shape, tile_pos, cells);
-                let displaced = signed_dist + wobble * wave;
-                let half_feather = feather.max(0.01) * 0.5;
-                let weight = (1.0 - smoothstep(-half_feather, half_feather, displaced))
-                    * layer.blend.clamp(0.0, 1.0);
-
-                if (1..MAX_MATERIALS).contains(slot) {
-                    channels[slot - 1] = channels[slot - 1].max(weight);
-                }
-                if let Some(edge) = layer.edge_darken {
-                    let rim = smoothstep(-half_feather, half_feather, displaced)
-                        * (1.0 - smoothstep(half_feather, half_feather + edge.width, displaced))
-                        * edge.strength.clamp(0.0, 1.0);
-                    channels[3] = channels[3].max(rim);
-                }
-            }
-
-            let index = ((py * width + px) * 4) as usize;
-            data[index] = weight_to_u8(channels[0]);
-            data[index + 1] = weight_to_u8(channels[1]);
-            data[index + 2] = weight_to_u8(channels[2]);
-            data[index + 3] = weight_to_u8(channels[3]);
-        }
-    }
-
-    // `Image::new`: bevy_image-0.20.1/src/image.rs:1123.
-    let mut image = Image::new(
-        Extent3d {
-            width,
-            height,
-            depth_or_array_layers: 1,
-        },
-        TextureDimension::D2,
-        data,
-        TextureFormat::Rgba8Unorm,
-        RenderAssetUsages::RENDER_WORLD,
-    );
-    image.sampler = ImageSampler::Descriptor(ImageSamplerDescriptor::linear());
-    image
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn sample_tile(image: &Image, bounds: MapBounds, tile_x: u32, tile_y: u32) -> [u8; 4] {
-        let data = image.data.as_ref().expect("splatmap bytes");
-        let width = bounds.width * SPLAT_PIXELS_PER_TILE;
-        let px = tile_x * SPLAT_PIXELS_PER_TILE + SPLAT_PIXELS_PER_TILE / 2;
-        let py = tile_y * SPLAT_PIXELS_PER_TILE + SPLAT_PIXELS_PER_TILE / 2;
-        let i = ((py * width + px) * 4) as usize;
-        [data[i], data[i + 1], data[i + 2], data[i + 3]]
+    /// Resolves the first layer of `config_json`, pointing every material at palette entry 0
+    /// so the coverage tests stay independent of the shipped palette ids.
+    fn single_layer(config_json: &str, entities: &[TerrainEntityCell]) -> ResolvedLayer {
+        let mut config: MapConfig = serde_json::from_str(config_json).expect("valid map config");
+        let palette = TerrainPalette::load().expect("shipped palette");
+        for material in &mut config.materials {
+            material.palette = palette.entries()[0].id.clone();
+        }
+        resolve_layers(&config, &palette, entities)
+            .expect("layers resolve")
+            .remove(0)
     }
 
     #[test]
-    fn splatmap_interprets_grid_coordinate_layers_with_full_width() {
-        let config: MapConfig = serde_json::from_str(
+    fn polyline_coverage_uses_full_width_in_grid_squares() {
+        let layer = single_layer(
             r#"{
-                "materials": [
-                    { "id": "base", "texture": "a.png" },
-                    { "id": "band_a", "texture": "b.png" },
-                    { "id": "zone_b", "texture": "c.png" }
-                ],
-                "layers": [
-                    {
-                        "material": "band_a",
-                        "shape": { "kind": "polyline", "points": [[0.0, 5.5], [10.0, 5.5]], "width": 1.0, "feather": 0.2 }
-                    },
-                    {
-                        "material": "zone_b",
-                        "shape": { "kind": "circle", "center": [2.5, 2.5], "radius": 1.0, "feather": 0.2 }
-                    }
-                ]
+                "materials": [{ "id": "band", "palette": "x" }],
+                "layers": [{
+                    "material": "band",
+                    "shape": { "kind": "polyline", "points": [[0.0, 5.5], [10.0, 5.5]], "width": 1.0, "feather": 0.2 }
+                }]
             }"#,
-        )
-        .expect("valid generic map config");
+            &[],
+        );
+        assert!(layer_coverage(&layer, Vec2::new(5.5, 5.5)).0 > 0.95);
+        assert!(layer_coverage(&layer, Vec2::new(5.5, 4.5)).0 < 0.01);
+    }
 
-        let bounds = MapBounds {
-            width: 10,
-            height: 10,
-        };
-        let image = build_splatmap_from_config(bounds, &config, &[]);
+    #[test]
+    fn edge_darken_rim_sits_just_outside_the_edge() {
+        let layer = single_layer(
+            r#"{
+                "materials": [{ "id": "zone", "palette": "x" }],
+                "layers": [{
+                    "material": "zone",
+                    "shape": { "kind": "circle", "center": [5.0, 5.0], "radius": 2.0, "feather": 0.2 },
+                    "edge_darken": { "width": 1.0, "strength": 0.5 }
+                }]
+            }"#,
+            &[],
+        );
+        assert!(layer_coverage(&layer, Vec2::new(5.0, 5.0)).1 < 0.01);
+        assert!(layer_coverage(&layer, Vec2::new(7.4, 5.0)).1 > 0.2);
+        assert!(layer_coverage(&layer, Vec2::new(9.5, 5.0)).1 < 0.01);
+    }
 
-        // Row 5 (y=5.5) hits `band_a` (channel R), while row 4 (y=4.5, 1 full tile away) stays clear.
-        assert!(sample_tile(&image, bounds, 5, 5)[0] > 200);
-        assert_eq!(sample_tile(&image, bounds, 5, 4)[0], 0);
-        // Circle at (2.5, 2.5) hits `zone_b` (channel G).
-        assert!(sample_tile(&image, bounds, 2, 2)[1] > 200);
-        assert_eq!(sample_tile(&image, bounds, 9, 9)[0], 0);
-        assert_eq!(sample_tile(&image, bounds, 9, 9)[1], 0);
+    #[test]
+    fn entity_cells_layer_stays_aligned_with_matching_grid_squares() {
+        let cells = vec![
+            TerrainEntityCell {
+                position: GridPos::new(3, 3),
+                name: None,
+                tags: vec!["feature_tag".to_owned()],
+            },
+            TerrainEntityCell {
+                position: GridPos::new(3, 4),
+                name: None,
+                tags: vec!["feature_tag".to_owned()],
+            },
+        ];
+        let layer = single_layer(
+            r#"{
+                "materials": [{ "id": "feature", "palette": "x" }],
+                "layers": [{
+                    "material": "feature",
+                    "shape": { "kind": "entity_cells", "match_tags": ["feature_tag"], "feather": 0.2, "wobble": 0.05 }
+                }]
+            }"#,
+            &cells,
+        );
+        assert!(layer_coverage(&layer, Vec2::new(3.5, 3.5)).0 > 0.85);
+        assert!(layer_coverage(&layer, Vec2::new(3.5, 4.5)).0 > 0.85);
+        assert!(layer_coverage(&layer, Vec2::new(2.5, 3.5)).0 < 0.01);
+        assert!(layer_coverage(&layer, Vec2::new(4.5, 3.5)).0 < 0.01);
+    }
+
+    #[test]
+    fn unknown_palette_ids_and_materials_are_rejected() {
+        let palette = TerrainPalette::load().expect("shipped palette");
+        let bad_palette: MapConfig =
+            serde_json::from_str(r#"{ "materials": [{ "id": "a", "palette": "no_such_entry" }] }"#)
+                .expect("parses");
+        assert!(resolve_material_palette(&bad_palette, &palette).is_err());
+        let first = &palette.entries()[0].id;
+        let bad_layer: MapConfig = serde_json::from_str(&format!(
+            r#"{{ "materials": [{{ "id": "a", "palette": "{first}" }}],
+                 "layers": [{{ "material": "b", "shape": {{ "kind": "circle", "center": [0.0, 0.0], "radius": 1.0 }} }}] }}"#
+        ))
+        .expect("parses");
+        assert!(resolve_material_palette(&bad_layer, &palette).is_err());
     }
 
     #[test]
@@ -782,59 +734,10 @@ mod tests {
     }
 
     #[test]
-    fn entity_cells_layer_stays_aligned_with_matching_grid_squares() {
-        let config: MapConfig = serde_json::from_str(
-            r#"{
-                "materials": [
-                    { "id": "base", "texture": "a.png" },
-                    { "id": "feature", "texture": "b.png" }
-                ],
-                "layers": [
-                    {
-                        "material": "feature",
-                        "shape": {
-                            "kind": "entity_cells",
-                            "match_tags": ["feature_tag"],
-                            "padding": 0.0,
-                            "feather": 0.2,
-                            "wobble": 0.05
-                        }
-                    }
-                ]
-            }"#,
-        )
-        .expect("valid generic entity_cells config");
-
-        let bounds = MapBounds {
-            width: 8,
-            height: 8,
-        };
-        let cells = vec![
-            TerrainEntityCell {
-                position: GridPos::new(3, 3),
-                name: None,
-                tags: vec!["feature_tag".to_owned()],
-            },
-            TerrainEntityCell {
-                position: GridPos::new(3, 4),
-                name: None,
-                tags: vec!["feature_tag".to_owned()],
-            },
-        ];
-
-        let image = build_splatmap_from_config(bounds, &config, &cells);
-
-        assert!(sample_tile(&image, bounds, 3, 3)[0] >= 220);
-        assert!(sample_tile(&image, bounds, 3, 4)[0] >= 220);
-        assert_eq!(sample_tile(&image, bounds, 2, 3)[0], 0);
-        assert_eq!(sample_tile(&image, bounds, 4, 3)[0], 0);
-    }
-
-    #[test]
-    fn every_map_config_in_assets_parses_and_references_existing_files() {
+    fn every_map_config_in_assets_resolves_against_the_palette_and_sprites_exist() {
         let root = assets_root();
-        let maps_dir = root.join("maps");
-        let entries: Vec<_> = std::fs::read_dir(&maps_dir)
+        let palette = TerrainPalette::load().expect("shipped palette");
+        let entries: Vec<_> = std::fs::read_dir(root.join("maps"))
             .expect("assets/maps directory exists")
             .filter_map(Result::ok)
             .filter(|entry| entry.path().extension().and_then(|e| e.to_str()) == Some("json"))
@@ -844,13 +747,7 @@ mod tests {
         for entry in entries {
             let rel = format!("maps/{}", entry.file_name().to_string_lossy());
             let config = read_map_config(&rel).unwrap_or_else(|e| panic!("invalid {rel}: {e}"));
-            for material in &config.materials {
-                assert!(
-                    root.join(&material.texture).is_file(),
-                    "{rel}: missing terrain texture {}",
-                    material.texture
-                );
-            }
+            resolve_material_palette(&config, &palette).unwrap_or_else(|e| panic!("{rel}: {e}"));
             for rule in &config.entity_styles {
                 if let Some(sprite) = &rule.sprite {
                     assert!(

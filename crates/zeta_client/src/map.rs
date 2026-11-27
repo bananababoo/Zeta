@@ -6,11 +6,11 @@
 //! replicated components), `docs/architecture/world_geography.md` Sections 1–4, and
 //! `docs/prototypes/realism_prototype.md`.
 
-use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 use bevy::prelude::*;
 use bevy::sprite::Anchor;
-use bevy::sprite_render::{Material2dPlugin, MeshMaterial2d};
+use bevy::sprite_render::MeshMaterial2d;
 // `RequestRedraw`: bevy_window-0.20.1/src/event.rs:61.
 use bevy::window::RequestRedraw;
 use zeta_core::entity::EntityId;
@@ -18,8 +18,11 @@ use zeta_core::grid::{GridPos, MapBounds};
 use zeta_core::protocol::{Collider, Creature, EntityName, MapArea, PlayerCharacter, Tags};
 use zeta_core::world::{CHUNK_SIZE, ChunkCoord, CubeFace, FACE_TILES, FaceRotation};
 
+use crate::chunk_splat::{ChunkRegionPaint, RegionPaint, bake_rect_splat, splat_texture};
 use crate::layout::{FloatingOrigin, map_center, square_center_at, tile_point_at};
-use crate::planet_region::{LoadedAuthoredRegions, load_authored_regions, world_regions_dir};
+use crate::planet_region::{
+    AuthoredRegion, LoadedAuthoredRegions, load_authored_regions, world_regions_dir,
+};
 use crate::planet_stream::{PlanetCameraFocus, PlanetFocusSync, PlanetRegions};
 use crate::player::{LocalPlayer, LocalPlayerUpdate};
 use crate::settings::{
@@ -27,12 +30,16 @@ use crate::settings::{
     OTHER_ENTITY_COLOR, PLAYER_CHARACTER_COLOR,
 };
 use crate::terrain::{
-    DEFAULT_MAP_CONFIG, LoadedMapConfig, TerrainEntityCell, TerrainSplatMaterial,
-    build_splatmap_from_config, entity_matches_any_terrain_layer, full_region_mask_image,
-    load_map_config, terrain_params,
+    DEFAULT_MAP_CONFIG, LoadedMapConfig, MapConfig, SPLAT_PIXELS_PER_TILE, TerrainEntityCell,
+    TerrainSplatMaterial, count_to_f32, entity_matches_any_terrain_layer, load_map_config,
+    resolve_layers, resolve_material_palette,
+};
+use crate::terrain_palette::{
+    TerrainPalette, TerrainPaletteGpu, add_terrain_palette_plugin, layer_params,
 };
 
-/// Draw order of grid squares and authored region splatmaps (above planetary chunks at `-1.0`).
+/// Draw order of fallback grid squares and the standalone map quad (above planetary chunks
+/// at `-1.0`).
 const SQUARE_DEPTH: f32 = 0.0;
 /// Draw order of entities, above the terrain.
 const ENTITY_DEPTH: f32 = 1.0;
@@ -49,8 +56,6 @@ const GAME_STREAM_RADIUS_CHUNKS: i32 = 2;
 /// Maximum map dimension for spawning individual fallback `MapSquare` sprite entities in
 /// headless unit tests; planetary maps (`2^21`) must never spawn per-tile entities.
 const MAX_FALLBACK_GRID_DIMENSION: u32 = 64;
-/// Margin in 5-foot squares around [`FloatingOrigin`] within which authored regions stay mounted.
-const REGION_VIEW_MARGIN_TILES: f64 = 96.0;
 /// Exponential damping rate (per second) for entity visual gliding between discrete 5-ft squares.
 const ENTITY_GLIDE_RATE: f64 = 16.0;
 /// Exponential damping rate (per second) for smooth camera follow behind the local character.
@@ -72,16 +77,9 @@ type VisualQueryData = (
     &'static mut Transform,
 );
 
-/// Marks a GPU terrain splatmap quad.
+/// Marks the GPU terrain quad of a standalone (non-planet) map.
 #[derive(Component, Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct TerrainMesh;
-
-/// Marks a mounted GPU terrain quad belonging to 1 authored planetary region.
-#[derive(Component, Clone, Debug, PartialEq, Eq)]
-pub struct AuthoredRegionMesh {
-    /// Identifier of the authored region rendered by this mesh.
-    pub region_id: String,
-}
 
 /// Marks the camera that shows the map.
 #[derive(Component, Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -127,8 +125,8 @@ impl Plugin for MapPlugin {
     fn build(&self, app: &mut App) {
         // `App::is_plugin_added`: bevy_app-0.20.1/src/app.rs:570.
         if app.is_plugin_added::<AssetPlugin>() {
-            app.add_plugins(Material2dPlugin::<TerrainSplatMaterial>::default())
-                .add_systems(Startup, load_authored_regions_startup);
+            add_terrain_palette_plugin(app);
+            app.add_systems(Startup, load_authored_regions_startup);
         }
         app.init_resource::<ClientSettings>()
             .init_resource::<LocalPlayer>()
@@ -141,6 +139,7 @@ impl Plugin for MapPlugin {
                     attach_entity_visuals,
                     glide_entity_visual_positions,
                     sync_floating_origin,
+                    sync_region_paint,
                 )
                     .chain()
                     .in_set(PlanetFocusSync)
@@ -206,10 +205,9 @@ fn spawn_camera(mut commands: Commands, cameras: Query<(), With<Camera>>) {
 fn load_authored_regions_startup(
     mut commands: Commands,
     asset_server: Res<AssetServer>,
-    mut images: ResMut<Assets<Image>>,
     mut planet_regions: Option<ResMut<PlanetRegions>>,
 ) {
-    match load_authored_regions(&asset_server, &mut images, &world_regions_dir()) {
+    match load_authored_regions(&asset_server, &world_regions_dir()) {
         Ok(loaded) => {
             if let Ok(validated) = PlanetRegions::new(loaded.footprints()) {
                 if let Some(existing) = planet_regions.as_mut() {
@@ -428,132 +426,143 @@ type TerrainEntities<'w, 's> = Query<
     ),
 >;
 
-/// Snapshot of mounted authored regions and legacy fallback map state.
+/// Last drawn standalone (non-planet) map state.
 #[derive(Default)]
 struct RenderedTerrainState {
     bounds: Option<MapBounds>,
     cells: Vec<TerrainEntityCell>,
-    region_meshes: HashMap<String, (Entity, Vec<TerrainEntityCell>)>,
 }
 
-/// Mounts, updates, and repositions GPU splatmap meshes for authored regions near `origin`.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "helper forwards Bevy asset stores and queries from draw_map_area"
-)]
-fn sync_authored_region_meshes(
-    commands: &mut Commands,
-    tile_size: f32,
-    origin: FloatingOrigin,
-    regions: &LoadedAuthoredRegions,
-    meshes: &mut Assets<Mesh>,
-    materials: &mut Assets<TerrainSplatMaterial>,
-    images: &mut Assets<Image>,
+/// Entity cells of every region last baked into [`ChunkRegionPaint`].
+#[derive(Default)]
+struct RegionPaintState {
+    baked: Option<Vec<(String, Vec<TerrainEntityCell>)>>,
+}
+
+/// Sorted region-local cells of the live entities that match any `entity_cells` layer of
+/// `region`.
+fn region_local_cells(
+    region: &AuthoredRegion,
     terrain_entities: &TerrainEntities,
-    region_transforms: &mut Query<&mut Transform, (With<AuthoredRegionMesh>, Without<MapCamera>)>,
-    rendered: &mut RenderedTerrainState,
-) {
-    let nearby: Vec<_> = regions
-        .regions_near(DEFAULT_PLANET_FACE, origin, REGION_VIEW_MARGIN_TILES)
-        .collect();
-    let nearby_ids: HashSet<&str> = nearby.iter().map(|r| r.region.id.as_str()).collect();
-
-    let stale_ids: Vec<String> = rendered
-        .region_meshes
-        .keys()
-        .filter(|id| !nearby_ids.contains(id.as_str()))
-        .cloned()
-        .collect();
-    for stale_id in stale_ids {
-        if let Some((entity, _)) = rendered.region_meshes.remove(&stale_id) {
-            commands.entity(entity).despawn();
-        }
-    }
-
-    for loaded in nearby {
-        let region = &loaded.region;
-        let mut local_cells: Vec<TerrainEntityCell> = terrain_entities
-            .iter()
-            .filter_map(|(pos, name, tags)| {
-                let local_pos = region.bounds.to_local_pos(*pos)?;
-                entity_matches_any_terrain_layer(&region.config, name, tags).then(|| {
-                    TerrainEntityCell {
-                        position: local_pos,
-                        name: name.map(|n| n.0.clone()),
-                        tags: tags.map_or_default(|t| t.0.iter().cloned().collect()),
-                    }
-                })
+) -> Vec<TerrainEntityCell> {
+    let mut cells: Vec<TerrainEntityCell> = terrain_entities
+        .iter()
+        .filter_map(|(pos, name, tags)| {
+            let local_pos = region.bounds.to_local_pos(*pos)?;
+            entity_matches_any_terrain_layer(&region.config, name, tags).then(|| {
+                TerrainEntityCell {
+                    position: local_pos,
+                    name: name.map(|n| n.0.clone()),
+                    tags: tags.map_or_default(|t| t.0.iter().cloned().collect()),
+                }
             })
-            .collect();
-        local_cells.sort_by(|a, b| {
-            (a.position.y, a.position.x, &a.name, &a.tags).cmp(&(
-                b.position.y,
-                b.position.x,
-                &b.name,
-                &b.tags,
-            ))
-        });
-
-        let (center_tile_x, center_tile_y) = region.bounds.center_tile();
-        let world_center = tile_point_at(center_tile_x, center_tile_y, tile_size, origin);
-
-        if let Some((entity, prev_cells)) = rendered.region_meshes.get(&region.id)
-            && *prev_cells == local_cells
-            && let Ok(mut transform) = region_transforms.get_mut(*entity)
-        {
-            if transform.translation.truncate() != world_center {
-                transform.translation.x = world_center.x;
-                transform.translation.y = world_center.y;
-            }
-            continue;
-        }
-
-        if let Some((old_entity, _)) = rendered.region_meshes.remove(&region.id) {
-            commands.entity(old_entity).despawn();
-        }
-
-        let region_bounds = region.bounds.map_bounds();
-        let splat = images.add(build_splatmap_from_config(
-            region_bounds,
-            &region.config,
-            &local_cells,
-        ));
-        #[expect(
-            clippy::cast_precision_loss,
-            reason = "authored region dimensions stay far below 2^23"
-        )]
-        let (width, height) = (
-            region_bounds.width as f32 * tile_size,
-            region_bounds.height as f32 * tile_size,
-        );
-        let entity = commands
-            .spawn((
-                TerrainMesh,
-                AuthoredRegionMesh {
-                    region_id: region.id.clone(),
-                },
-                Mesh2d(meshes.add(Rectangle::new(width, height))),
-                MeshMaterial2d(materials.add(TerrainSplatMaterial {
-                    params: terrain_params(region_bounds, &region.config),
-                    scales: loaded.material_scales,
-                    ambient_tint: loaded.ambient_vec4(),
-                    splat,
-                    layer0: loaded.material_textures[0].clone(),
-                    layer1: loaded.material_textures[1].clone(),
-                    layer2: loaded.material_textures[2].clone(),
-                    layer3: loaded.material_textures[3].clone(),
-                    region_mask: loaded.mask_handle.clone(),
-                })),
-                Transform::from_translation(world_center.extend(SQUARE_DEPTH)),
-            ))
-            .id();
-        rendered
-            .region_meshes
-            .insert(region.id.clone(), (entity, local_cells));
-    }
+        })
+        .collect();
+    sort_cells(&mut cells);
+    cells
 }
 
-/// Draws a small rectangular fallback map (single `LoadedMapConfig` splatmap or headless
+fn sort_cells(cells: &mut [TerrainEntityCell]) {
+    cells.sort_by(|a, b| {
+        (a.position.y, a.position.x, &a.name, &a.tags).cmp(&(
+            b.position.y,
+            b.position.x,
+            &b.name,
+            &b.tags,
+        ))
+    });
+}
+
+/// Resolves every authored region's painted layers into [`ChunkRegionPaint`], which planet
+/// chunks composite into their splat control maps. Rebuilds only when a region or a matched
+/// entity cell changes, so untouched chunks never re-bake.
+#[allow(
+    clippy::needless_pass_by_value,
+    reason = "Bevy system parameters are passed by value"
+)]
+fn sync_region_paint(
+    regions: Option<Res<LoadedAuthoredRegions>>,
+    palette: Option<Res<TerrainPalette>>,
+    paint: Option<ResMut<ChunkRegionPaint>>,
+    terrain_entities: TerrainEntities,
+    mut state: Local<RegionPaintState>,
+) {
+    let (Some(regions), Some(palette), Some(mut paint)) = (regions, palette, paint) else {
+        return;
+    };
+    let current: Vec<(String, Vec<TerrainEntityCell>)> = regions
+        .regions
+        .iter()
+        .map(|loaded| {
+            (
+                loaded.region.id.clone(),
+                region_local_cells(&loaded.region, &terrain_entities),
+            )
+        })
+        .collect();
+    if state.baked.as_ref() == Some(&current) {
+        return;
+    }
+    let mut built = Vec::with_capacity(current.len());
+    for (loaded, (_, cells)) in regions.regions.iter().zip(&current) {
+        let region = &loaded.region;
+        match resolve_layers(&region.config, &palette, cells) {
+            Ok(layers) => built.push(RegionPaint {
+                face: region.face,
+                bounds: region.bounds,
+                ring: region.local_ring(),
+                edge_feather: region.edge_feather,
+                layers,
+            }),
+            Err(error) => error!("authored region {:?} terrain not drawn: {error}", region.id),
+        }
+    }
+    paint.regions = Arc::new(built);
+    paint.generation = paint.generation.wrapping_add(1);
+    state.baked = Some(current);
+}
+
+/// Bakes the splat material of a standalone map: its first material fills the ground and its
+/// layers paint over it.
+fn standalone_splat_material(
+    bounds: MapBounds,
+    config: &MapConfig,
+    cells: &[TerrainEntityCell],
+    gpu: &TerrainPaletteGpu,
+    images: &mut Assets<Image>,
+) -> Result<TerrainSplatMaterial, String> {
+    let base = *resolve_material_palette(config, &gpu.palette)?
+        .first()
+        .ok_or("map config defines no materials")?;
+    let layers = resolve_layers(config, &gpu.palette, cells)?;
+    let splat = bake_rect_splat(bounds.width, bounds.height, base, &layers);
+    // `ImageSampler::nearest`: bevy_image-0.20.1/src/image.rs:714 (the shader blends control
+    // texels itself). `ImageSampler::linear`: bevy_image-0.20.1/src/image.rs:708.
+    let control = images.add(splat_texture(
+        splat.control,
+        splat.control_size,
+        bevy::image::ImageSampler::nearest(),
+    ));
+    let shade = images.add(splat_texture(
+        splat.shade,
+        splat.shade_size,
+        bevy::image::ImageSampler::linear(),
+    ));
+    Ok(TerrainSplatMaterial {
+        params: Vec4::new(
+            count_to_f32(bounds.width),
+            count_to_f32(bounds.height),
+            config.grid_alpha,
+            count_to_f32(SPLAT_PIXELS_PER_TILE),
+        ),
+        layer_params: layer_params(&gpu.palette, 0, 0),
+        control,
+        shade,
+        layers: gpu.layers.clone(),
+    })
+}
+
+/// Draws a small rectangular standalone map (1 `LoadedMapConfig` splat quad or headless
 /// `MapSquare` grid) when planetary authored regions are not loaded.
 #[expect(
     clippy::too_many_arguments,
@@ -565,13 +574,13 @@ fn draw_fallback_map_area(
     tile_size: f32,
     origin: FloatingOrigin,
     map_config: Option<&LoadedMapConfig>,
-    meshes: Option<&mut Assets<Mesh>>,
+    gpu: Option<&TerrainPaletteGpu>,
     materials: Option<&mut Assets<TerrainSplatMaterial>>,
     images: Option<&mut Assets<Image>>,
     terrain_entities: &TerrainEntities,
     squares: &Query<Entity, With<MapSquare>>,
-    terrains: &Query<Entity, (With<TerrainMesh>, Without<AuthoredRegionMesh>)>,
-    cameras: &mut Query<&mut Transform, (With<MapCamera>, Without<AuthoredRegionMesh>)>,
+    terrains: &Query<Entity, With<TerrainMesh>>,
+    cameras: &mut Query<&mut Transform, With<MapCamera>>,
     rendered: &mut RenderedTerrainState,
 ) {
     let mut cells: Vec<TerrainEntityCell> = map_config.map_or_default(|loaded| {
@@ -587,14 +596,7 @@ fn draw_fallback_map_area(
             })
             .collect()
     });
-    cells.sort_by(|a, b| {
-        (a.position.y, a.position.x, &a.name, &a.tags).cmp(&(
-            b.position.y,
-            b.position.x,
-            &b.name,
-            &b.tags,
-        ))
-    });
+    sort_cells(&mut cells);
 
     let bounds_changed = rendered.bounds != Some(bounds);
     let cells_changed = rendered.cells != cells;
@@ -612,34 +614,28 @@ fn draw_fallback_map_area(
     }
     let center = map_center(bounds, tile_size);
 
-    if let (Some(loaded), Some(meshes), Some(materials), Some(images)) =
-        (map_config, meshes, materials, images)
-    {
-        let splat = images.add(build_splatmap_from_config(bounds, &loaded.config, &cells));
-        let region_mask = images.add(full_region_mask_image());
-        #[expect(
-            clippy::cast_precision_loss,
-            reason = "map dimensions are small grid counts well within f32 precision"
-        )]
-        let (width, height) = (
-            bounds.width as f32 * tile_size,
-            bounds.height as f32 * tile_size,
-        );
+    let material = match (map_config, gpu, images) {
+        (Some(loaded), Some(gpu), Some(images)) => {
+            match standalone_splat_material(bounds, &loaded.config, &cells, gpu, images) {
+                Ok(material) => Some(material),
+                Err(error) => {
+                    error!("map terrain not drawn, showing the plain grid: {error}");
+                    None
+                }
+            }
+        }
+        _ => None,
+    };
+
+    if let (Some(material), Some(gpu), Some(materials)) = (material, gpu, materials) {
+        let size = Vec2::new(count_to_f32(bounds.width), count_to_f32(bounds.height)) * tile_size;
+        // `Mesh2d`: bevy_mesh-0.20.1/src/components.rs:46.
+        // `MeshMaterial2d`: bevy_sprite_render-0.20.1/src/mesh2d/material.rs:217.
         commands.spawn((
             TerrainMesh,
-            Mesh2d(meshes.add(Rectangle::new(width, height))),
-            MeshMaterial2d(materials.add(TerrainSplatMaterial {
-                params: terrain_params(bounds, &loaded.config),
-                scales: loaded.material_scales,
-                ambient_tint: loaded.ambient_vec4(),
-                splat,
-                layer0: loaded.material_textures[0].clone(),
-                layer1: loaded.material_textures[1].clone(),
-                layer2: loaded.material_textures[2].clone(),
-                layer3: loaded.material_textures[3].clone(),
-                region_mask,
-            })),
-            Transform::from_translation(center.extend(SQUARE_DEPTH)),
+            Mesh2d(gpu.unit_mesh.clone()),
+            MeshMaterial2d(materials.add(material)),
+            Transform::from_translation(center.extend(SQUARE_DEPTH)).with_scale(size.extend(1.0)),
         ));
     } else {
         for x in 0..bounds.width {
@@ -669,8 +665,9 @@ fn draw_fallback_map_area(
     }
 }
 
-/// Mounts and repositions authored region polygon quads relative to [`FloatingOrigin`], or
-/// falls back to small rectangular grid squares in headless tests.
+/// Draws a small standalone map when no planetary authored regions are loaded. With regions,
+/// terrain comes entirely from the streamed planet chunks (`planet_stream`), which composite
+/// region paint through [`sync_region_paint`].
 #[expect(
     clippy::too_many_arguments,
     reason = "a Bevy system lists every resource and query it reads as a parameter"
@@ -685,15 +682,14 @@ fn draw_map_area(
     origin: Res<FloatingOrigin>,
     authored_regions: Option<Res<LoadedAuthoredRegions>>,
     map_config: Option<Res<LoadedMapConfig>>,
-    mut meshes: Option<ResMut<Assets<Mesh>>>,
+    gpu: Option<Res<TerrainPaletteGpu>>,
     mut materials: Option<ResMut<Assets<TerrainSplatMaterial>>>,
     mut images: Option<ResMut<Assets<Image>>>,
     areas: Query<&MapArea>,
     terrain_entities: TerrainEntities,
     squares: Query<Entity, With<MapSquare>>,
-    terrains: Query<Entity, (With<TerrainMesh>, Without<AuthoredRegionMesh>)>,
-    mut region_transforms: Query<&mut Transform, (With<AuthoredRegionMesh>, Without<MapCamera>)>,
-    mut cameras: Query<&mut Transform, (With<MapCamera>, Without<AuthoredRegionMesh>)>,
+    terrains: Query<Entity, With<TerrainMesh>>,
+    mut cameras: Query<&mut Transform, With<MapCamera>>,
     mut rendered: Local<RenderedTerrainState>,
 ) {
     let Some(area) = areas.iter().last() else {
@@ -702,30 +698,13 @@ fn draw_map_area(
     let bounds = area.0;
     let tile_size = settings.tile_size;
 
-    if let (Some(regions), Some(meshes), Some(materials), Some(images)) = (
-        authored_regions,
-        meshes.as_deref_mut(),
-        materials.as_deref_mut(),
-        images.as_deref_mut(),
-    ) {
+    if authored_regions.is_some() {
         for square in &squares {
             commands.entity(square).despawn();
         }
         for terrain in &terrains {
             commands.entity(terrain).despawn();
         }
-        sync_authored_region_meshes(
-            &mut commands,
-            tile_size,
-            *origin,
-            &regions,
-            meshes,
-            materials,
-            images,
-            &terrain_entities,
-            &mut region_transforms,
-            &mut rendered,
-        );
         rendered.bounds = Some(bounds);
         return;
     }
@@ -742,7 +721,7 @@ fn draw_map_area(
         tile_size,
         *origin,
         map_config.as_deref(),
-        meshes.as_deref_mut(),
+        gpu.as_deref(),
         materials.as_deref_mut(),
         images.as_deref_mut(),
         &terrain_entities,
