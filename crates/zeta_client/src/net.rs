@@ -10,7 +10,7 @@
 mod backend;
 mod transport;
 
-use std::net::SocketAddr;
+use std::net::{AddrParseError, Ipv4Addr, SocketAddr};
 
 use bevy::ecs::component::Mutable;
 use bevy::prelude::{App, Component, Message, Plugin, Resource};
@@ -22,6 +22,19 @@ use bevy_replicon::prelude::{
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use zeta_core::protocol::{Delivery, ProtocolRegistrar, register_protocol};
+use zeta_core::settings::DEFAULT_SERVER_PORT;
+
+/// Parses the server address from an optional environment value, defaulting to local
+/// `127.0.0.1` on [`DEFAULT_SERVER_PORT`].
+///
+/// # Errors
+/// Returns [`AddrParseError`] when `value` is present but not a valid `host:port` socket address.
+pub fn parse_server_address(value: Option<&str>) -> Result<SocketAddr, AddrParseError> {
+    value.map_or_else(
+        || Ok(SocketAddr::from((Ipv4Addr::LOCALHOST, DEFAULT_SERVER_PORT))),
+        str::parse,
+    )
+}
 
 /// Runs the client side of the network: connects to `server_address` once at startup,
 /// replicates the server's entities into this world, and exchanges the protocol messages.
@@ -108,5 +121,30 @@ fn channel(delivery: Delivery) -> Channel {
     match delivery {
         Delivery::Ordered => Channel::Ordered,
         Delivery::Unordered => Channel::Unordered,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_default_server_is_local_on_the_default_port() {
+        let address = parse_server_address(None).expect("the default parses");
+        assert_eq!(
+            address,
+            SocketAddr::from((Ipv4Addr::LOCALHOST, DEFAULT_SERVER_PORT))
+        );
+    }
+
+    #[test]
+    fn the_environment_value_overrides_the_default() {
+        let address = parse_server_address(Some("10.0.0.5:9000")).expect("a valid address");
+        assert_eq!(address, SocketAddr::from(([10, 0, 0, 5], 9000)));
+    }
+
+    #[test]
+    fn an_invalid_environment_value_is_an_error() {
+        assert!(parse_server_address(Some("not an address")).is_err());
     }
 }

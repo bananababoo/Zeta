@@ -8,6 +8,23 @@ publish.workspace = true
 # The crate also builds the `ui_shot` dev tool; plain `cargo run -p zeta_client` runs the game.
 default-run = "zeta_client"
 
+[lib]
+doctest = false
+
+[[bin]]
+name = "zeta_client"
+path = "src/main.rs"
+test = false
+
+[[bin]]
+name = "planet_viewer"
+path = "src/bin/planet_viewer.rs"
+test = false
+
+[[bin]]
+name = "ui_shot"
+path = "src/bin/ui_shot.rs"
+
 [dependencies]
 zeta_core = { workspace = true, features = ["bevy"] }
 bevy.workspace = true

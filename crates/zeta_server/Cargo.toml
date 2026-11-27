@@ -8,6 +8,24 @@ edition.workspace = true
 rust-version.workspace = true
 publish.workspace = true
 
+[lib]
+doctest = false
+
+[[bin]]
+name = "zeta_server"
+path = "src/main.rs"
+test = false
+
+[[bin]]
+name = "ai_check"
+path = "src/bin/ai_check.rs"
+test = false
+
+[[bin]]
+name = "db_check"
+path = "src/bin/db_check.rs"
+test = false
+
 [dependencies]
 zeta_core = { workspace = true, features = ["bevy"] }
 bevy_app.workspace = true
