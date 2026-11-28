@@ -1,23 +1,30 @@
-//! Dev tool: renders the real client UI in 1 scene to a PNG file, then exits.
+//! Dev tool: renders the real client UI or planetary biome scenes to PNG files, then exits.
 //!
-//! Usage: `cargo run -p zeta_client --bin ui_shot --offline -- <scene> <out.png>`. Run it
-//! without arguments to list the scenes; `tools/ui_shots.ps1` renders all of them.
+//! Usage:
+//! - `cargo run -p zeta_client --bin ui_shot --offline -- <scene> <out.png>`
+//! - `cargo run -p zeta_client --bin ui_shot --offline -- --batch <out_dir> [scene...]`
+//! - `cargo run -p zeta_client --bin ui_shot --offline -- --list`
 //!
-//! It builds the game's own `ClientPlugins` and fakes only 2 things: the network (protocol
-//! messages are plain engine messages, and the scene spawns the entities the server would
-//! replicate) and the mouse cursor. No server runs and no window opens: the camera renders to
-//! an off-screen image of the window's size, and Bevy's screenshot API saves that image. The
-//! game binary never uses this file.
+//! It builds the game's own `ClientPlugins` (or `PlanetStreamPlugin` + `GroundClutterPlugin` for
+//! unobstructed planetary/biome scenes) and fakes only 2 things: the network (protocol messages
+//! are plain engine messages, and the scene spawns the entities the server would replicate) and
+//! the mouse cursor. No server runs and no window opens: the camera renders to an off-screen
+//! image of the window's size, and Bevy's screenshot API saves that image. The game binary never
+//! uses this file.
 //!
 //! Adding a scene: add a `Scene` variant, give it a name in `Scene::name` and `Scene::ALL`,
-//! and list its cursor steps in `Scene::steps`.
+//! and list its cursor steps in `Scene::steps` (or focus in `Scene::planet_focus`).
 
-use std::path::PathBuf;
+use std::collections::VecDeque;
+use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::time::Duration;
 
 use bevy::app::ScheduleRunnerPlugin;
 use bevy::camera::RenderTarget;
 use bevy::ecs::component::Mutable;
+// `Added`: bevy_ecs-0.20.1/src/query/filter.rs:757.
+use bevy::ecs::query::Added;
 use bevy::ecs::system::SystemParam;
 use bevy::input::ButtonState;
 use bevy::input::mouse::MouseButtonInput;
@@ -31,10 +38,15 @@ use bevy::winit::WinitPlugin;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use zeta_client::ClientPlugins;
+use zeta_client::chunk_splat::{ChunkGroundCover, SPLAT_MIN_TILE_PIXELS};
+use zeta_client::ground_clutter::{
+    GroundClutter, GroundClutterAssets, GroundClutterLayer, GroundClutterPlugin,
+};
 use zeta_client::inventory::{InventorySlot, InventoryToggleButton};
 use zeta_client::layout::{FloatingOrigin, square_center_at};
 use zeta_client::planet_stream::{
-    PlanetCameraFocus, PlanetStreamPlugin, PlanetStreamSyncMode, focus_tile,
+    PlanetCameraFocus, PlanetStreamPlugin, PlanetStreamStats, PlanetStreamSyncMode, focus_tile,
+    streamed_ring,
 };
 use zeta_client::settings::ClientSettings;
 use zeta_core::catalog::CatalogId;
@@ -46,7 +58,7 @@ use zeta_core::protocol::{
     ProtocolRegistrar, Tags, TurnBubble, Visual, register_protocol,
 };
 use zeta_core::resolution::{D20, Volume};
-use zeta_core::world::FACE_TILES;
+use zeta_core::world::{ChunkCoord, CubeFace, FACE_TILES, FaceRotation};
 
 /// Width of the rendered image in pixels, at a scale factor of 1.
 const IMAGE_WIDTH: u32 = 1280;
@@ -54,6 +66,10 @@ const IMAGE_WIDTH: u32 = 1280;
 const IMAGE_HEIGHT: u32 = 720;
 /// Frames before the first cursor step, so the fake world replicates, assets load, and UI lays out.
 const SETTLE_FRAMES: u32 = 25;
+/// Minimum frames when switching planet/biome scenes in batch mode before checking chunk readiness.
+const PLANET_SWITCH_SETTLE_FRAMES: u32 = 6;
+/// Consecutive frames with zero newly added clutter entities required before taking a screenshot.
+const CLUTTER_QUIET_FRAMES: u32 = 3;
 /// Frames after each cursor step, so the UI reacts and lays out again.
 const STEP_FRAMES: u32 = 6;
 /// Frames after which a scene that never finishes fails.
@@ -62,6 +78,16 @@ const TIMEOUT_FRAMES: u32 = 600;
 const FRAME_WAIT: Duration = Duration::from_millis(5);
 /// Argument that prints the scene names, 1 per line, for `tools/ui_shots.ps1`.
 const LIST_FLAG: &str = "--list";
+/// Argument that renders multiple scenes into an output directory.
+const BATCH_FLAG: &str = "--batch";
+
+/// Tactical zoom scale (pixels per 5-foot square) for the 11 planetary biome showcase scenes.
+/// At `1280x720`, `52.0` px/tile frames ~`24.6 x 13.8` squares, matching tabletop battlemap scale.
+const BIOME_TILE_PIXEL_SIZE: f32 = 52.0;
+/// Chunk streaming ring half-width (`3x3` chunks = `192x192` tiles) for tactical biome scenes.
+/// Gives >50 tiles of off-screen margin on every side of the `~25x14`-tile viewport (plenty for
+/// multi-tile overhanging canopy trees) while baking 9 chunks instead of 25 in debug builds.
+const BIOME_STREAM_RADIUS_CHUNKS: i32 = 1;
 
 /// The local character's id in every scene.
 const LOCAL_CHARACTER: EntityId = EntityId(1);
@@ -75,6 +101,23 @@ const fn river_crossing_pos(local_x: u32, local_y: u32) -> GridPos {
         RIVER_CROSSING_ORIGIN.y + local_y,
     )
 }
+
+const fn biome_focus(
+    face: CubeFace,
+    cx: u32,
+    cy: u32,
+    local_x: f32,
+    local_y: f32,
+) -> PlanetCameraFocus {
+    PlanetCameraFocus {
+        anchor: ChunkCoord { face, cx, cy },
+        local_offset_tiles: Vec2::new(local_x, local_y),
+        view_rotation: FaceRotation::Deg0,
+        stream_radius_chunks: BIOME_STREAM_RADIUS_CHUNKS,
+        tile_pixel_size: BIOME_TILE_PIXEL_SIZE,
+    }
+}
+
 /// Carried by the local character: catalog id and quantity. The first stack is equipped.
 const CARRIED: [(&str, u32); 9] = [
     ("longsword", 1),
@@ -88,10 +131,10 @@ const CARRIED: [(&str, u32); 9] = [
     ("rope", 1),
 ];
 
-/// 1 state of the UI the tool can render.
+/// 1 state of the UI or planetary terrain the tool can render.
 #[allow(
     clippy::enum_variant_names,
-    reason = "each name starts with the panel it shows; scenes of other panels come later"
+    reason = "each name starts with the panel or biome group it shows"
 )]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Scene {
@@ -114,6 +157,28 @@ enum Scene {
     /// The River Crossing scene with the local character at the region's north-west corner,
     /// so the authored polygon edge and the planet ground around it share the screen.
     RiverEdge,
+    /// Temperate woodland (`~15 C`, `forest_floor` opening onto a natural grassy clearing) at tactical zoom.
+    BiomeTemperateForest,
+    /// Tropical wet jungle (`~26 C`, saturated moisture & foliage, marsh pocket) at tactical zoom.
+    BiomeJungle,
+    /// Boreal cold conifer taiga (`~3 C`, dense foliage, gentle slope) at tactical zoom.
+    BiomeTaiga,
+    /// Sunlit temperate lush meadow (`lush_grass` + `grass`, gentle rolling relief) at tactical zoom.
+    BiomeLushMeadow,
+    /// Warm dry savanna (`dry_grass` + natural `dirt` patches) at tactical zoom.
+    BiomeSavanna,
+    /// Arid desert sand abutting an exposed rocky escarpment (`desert_sand` + `rock`) at tactical zoom.
+    BiomeDesert,
+    /// Flat saturated lowland marsh (`swamp` pools + surrounding `forest_floor`) at tactical zoom.
+    BiomeSwamp,
+    /// Sub-zero tundra meeting exposed highland rock (`tundra` + `rock`) at tactical zoom.
+    BiomeTundra,
+    /// High mountain snowline (`~13,600 ft`, `rock` steps + `snow` peak) at tactical zoom.
+    BiomeAlpine,
+    /// Deep-freeze polar/highland snowfield expanse with gentle relief at tactical zoom.
+    BiomeSnowfield,
+    /// Tactical shoreline (`shallow_water` + `beach` + vegetated `lush_grass` coast).
+    BiomeCoast,
 }
 
 /// What the fake cursor points at.
@@ -140,7 +205,7 @@ enum Step {
 
 impl Scene {
     /// Every scene, in the order `tools/ui_shots.ps1` lists them.
-    const ALL: [Self; 9] = [
+    const ALL: [Self; 20] = [
         Self::InventoryOpen,
         Self::InventoryHover,
         Self::InventoryMenu,
@@ -150,6 +215,17 @@ impl Scene {
         Self::PlanetCoast,
         Self::PlanetSeam,
         Self::RiverEdge,
+        Self::BiomeTemperateForest,
+        Self::BiomeJungle,
+        Self::BiomeTaiga,
+        Self::BiomeLushMeadow,
+        Self::BiomeSavanna,
+        Self::BiomeDesert,
+        Self::BiomeSwamp,
+        Self::BiomeTundra,
+        Self::BiomeAlpine,
+        Self::BiomeSnowfield,
+        Self::BiomeCoast,
     ];
 
     /// The name given on the command line, which is also the PNG file name.
@@ -164,11 +240,49 @@ impl Scene {
             Self::PlanetCoast => "planet_coast",
             Self::PlanetSeam => "planet_seam",
             Self::RiverEdge => "river_edge",
+            Self::BiomeTemperateForest => "biome_temperate_forest",
+            Self::BiomeJungle => "biome_jungle",
+            Self::BiomeTaiga => "biome_taiga",
+            Self::BiomeLushMeadow => "biome_lush_meadow",
+            Self::BiomeSavanna => "biome_savanna",
+            Self::BiomeDesert => "biome_desert",
+            Self::BiomeSwamp => "biome_swamp",
+            Self::BiomeTundra => "biome_tundra",
+            Self::BiomeAlpine => "biome_alpine",
+            Self::BiomeSnowfield => "biome_snowfield",
+            Self::BiomeCoast => "biome_coast",
+        }
+    }
+
+    fn planet_focus(self) -> Option<PlanetCameraFocus> {
+        match self {
+            Self::PlanetCoast => Some(PlanetCameraFocus::sera_coast()),
+            Self::PlanetSeam => Some(PlanetCameraFocus::sera_seam()),
+            Self::BiomeTemperateForest => {
+                Some(biome_focus(CubeFace::NegX, 28_569, 9_776, 13.5, 0.5))
+            }
+            Self::BiomeJungle => Some(biome_focus(CubeFace::NegX, 4_400, 16_208, 0.5, 0.5)),
+            Self::BiomeTaiga => Some(biome_focus(CubeFace::NegY, 5_813, 6_124, 0.5, 16.5)),
+            Self::BiomeLushMeadow => Some(biome_focus(CubeFace::NegY, 2_293, 1_964, 0.5, 16.5)),
+            Self::BiomeSavanna => Some(biome_focus(CubeFace::PosX, 1_135, 5_967, 50.5, 54.5)),
+            Self::BiomeDesert => Some(biome_focus(CubeFace::NegX, 5_016, 27_440, 49.5, 0.5)),
+            Self::BiomeSwamp => Some(biome_focus(CubeFace::PosX, 5_648, 13_392, 0.5, 24.5)),
+            Self::BiomeTundra => Some(biome_focus(CubeFace::NegY, 785, 2_064, 15.5, 0.5)),
+            Self::BiomeAlpine => Some(biome_focus(CubeFace::PosX, 27_683, 6_000, 39.5, 0.5)),
+            Self::BiomeSnowfield => Some(biome_focus(CubeFace::PosY, 21_781, 22_444, 0.5, 16.5)),
+            Self::BiomeCoast => Some(biome_focus(CubeFace::NegY, 31_555, 29_168, 41.5, 0.5)),
+            Self::InventoryOpen
+            | Self::InventoryHover
+            | Self::InventoryMenu
+            | Self::RiverScene
+            | Self::CombatHud
+            | Self::InspectBridge
+            | Self::RiverEdge => None,
         }
     }
 
     fn is_planet_scene(self) -> bool {
-        matches!(self, Self::PlanetCoast | Self::PlanetSeam)
+        self.planet_focus().is_some()
     }
 
     fn from_name(name: &str) -> Option<Self> {
@@ -182,14 +296,12 @@ impl Scene {
             Self::InventoryOpen => vec![open],
             Self::InventoryHover => vec![open, Step::Hover(Target::Slot("painters_supplies"))],
             Self::InventoryMenu => vec![open, Step::Click(Target::Slot("longsword"))],
-            Self::RiverScene
-            | Self::CombatHud
-            | Self::PlanetCoast
-            | Self::PlanetSeam
-            | Self::RiverEdge => Vec::new(),
             Self::InspectBridge => {
                 vec![Step::RightClick(Target::Square(river_crossing_pos(10, 10)))]
             }
+            Self::RiverScene | Self::CombatHud | Self::RiverEdge => Vec::new(),
+            _ if self.is_planet_scene() => Vec::new(),
+            _ => Vec::new(),
         }
     }
 }
@@ -220,21 +332,130 @@ impl ProtocolRegistrar for OfflineProtocol<'_> {
     }
 }
 
-/// Progress through the scene's cursor steps.
+/// Progress through the active scene (and any queued planet/biome scenes in `--batch` mode).
 #[derive(Resource, Debug)]
 struct Driver {
     steps: Vec<Step>,
     next_step: usize,
     frames_to_wait: u32,
     frame: u32,
+    cover_ready_frames: u32,
+    quiet_clutter_frames: u32,
     release_pending: Option<MouseButton>,
     screenshot_taken: bool,
+    saved_current: bool,
     output: PathBuf,
+    remaining_planet_scenes: VecDeque<(Scene, PathBuf)>,
+}
+
+impl Driver {
+    fn new(
+        scene: Scene,
+        output: PathBuf,
+        remaining_planet_scenes: VecDeque<(Scene, PathBuf)>,
+    ) -> Self {
+        Self {
+            steps: scene.steps(),
+            next_step: 0,
+            frames_to_wait: SETTLE_FRAMES,
+            frame: 0,
+            cover_ready_frames: 0,
+            quiet_clutter_frames: 0,
+            release_pending: None,
+            screenshot_taken: false,
+            saved_current: false,
+            output,
+            remaining_planet_scenes,
+        }
+    }
+
+    fn reset_for_planet_scene(&mut self, scene: Scene, output: PathBuf) {
+        self.steps = scene.steps();
+        self.next_step = 0;
+        self.frames_to_wait = PLANET_SWITCH_SETTLE_FRAMES;
+        self.frame = 0;
+        self.cover_ready_frames = 0;
+        self.quiet_clutter_frames = 0;
+        self.release_pending = None;
+        self.screenshot_taken = false;
+        self.saved_current = false;
+        self.output = output;
+    }
 }
 
 /// The off-screen image the camera renders to.
 #[derive(Resource, Debug)]
 struct ShotImage(Handle<Image>);
+
+/// Marks the top-left caption pill spawned on macro overview planet scenes.
+#[derive(Component, Debug)]
+struct PlanetCaptionNode;
+
+/// Queries streamed chunk & ground-clutter state so screenshots never capture half-populated
+/// chunks when `GroundClutterPlugin` throttles chunk builds per frame.
+// `SystemParam` derive: bevy_ecs-0.20.1/src/system/system_param.rs:26.
+#[derive(SystemParam)]
+struct TerrainReadiness<'w, 's> {
+    stats: Option<Res<'w, PlanetStreamStats>>,
+    clutter_assets: Option<Res<'w, GroundClutterAssets>>,
+    covered_chunks: Query<'w, 's, &'static ChunkGroundCover>,
+    clutter_layers: Query<'w, 's, (), With<GroundClutterLayer>>,
+    added_layers: Query<'w, 's, (), Added<GroundClutterLayer>>,
+    added_sprites: Query<'w, 's, (), Added<GroundClutter>>,
+}
+
+impl TerrainReadiness<'_, '_> {
+    /// Updates readiness counters in `driver` and returns `true` only once every chunk in the
+    /// active streaming ring has finished generating AND all ground clutter has settled.
+    fn poll_ready(&self, driver: &mut Driver, focus: Option<&PlanetCameraFocus>) -> bool {
+        let clutter_spawning = !self.added_layers.is_empty() || !self.added_sprites.is_empty();
+        if clutter_spawning {
+            driver.quiet_clutter_frames = 0;
+        } else {
+            driver.quiet_clutter_frames = driver.quiet_clutter_frames.saturating_add(1);
+        }
+
+        let (Some(focus), Some(stats)) = (focus, &self.stats) else {
+            return true;
+        };
+        let ring = streamed_ring(focus);
+        if stats.pending_chunks > 0 || stats.in_flight_tasks > 0 || stats.active_chunks < ring.len()
+        {
+            driver.cover_ready_frames = 0;
+            return false;
+        }
+
+        if focus.tile_pixel_size < SPLAT_MIN_TILE_PIXELS {
+            return true;
+        }
+
+        if self.clutter_assets.is_none() {
+            driver.cover_ready_frames = 0;
+            return false;
+        }
+
+        let ring_covered = ring
+            .iter()
+            .all(|slot| self.covered_chunks.iter().any(|c| c.coord == slot.coord));
+        if !ring_covered {
+            driver.cover_ready_frames = 0;
+            return false;
+        }
+
+        driver.cover_ready_frames = driver.cover_ready_frames.saturating_add(1);
+        let total_covered = self.covered_chunks.iter().count();
+        let layers_built = self.clutter_layers.iter().count();
+        // `MAX_CLUTTER_CHUNKS_PER_FRAME` is at least 2, so `div_ceil(2) + 4` frames guarantees
+        // every queued chunk has been processed even on chunks with 0 clutter sprites.
+        let budget_frames = u32::try_from(total_covered.div_ceil(2))
+            .unwrap_or(40)
+            .saturating_add(4);
+        let all_chunks_built =
+            layers_built >= total_covered || driver.cover_ready_frames >= budget_frames;
+
+        all_chunks_built && driver.quiet_clutter_frames >= CLUTTER_QUIET_FRAMES
+    }
+}
 
 /// The laid-out UI nodes a cursor step can point at. A new target adds its query here.
 // `SystemParam` derive: bevy_ecs-0.20.1/src/system/system_param.rs:26.
@@ -498,28 +719,34 @@ fn target_center(target: Target, layout: &SceneLayout) -> Option<Vec2> {
     }
 }
 
-/// Saves the screenshot with Bevy's `save_to_disk`, then exits: successfully only when the
-/// file exists.
-fn save_then_exit(output: PathBuf) -> impl FnMut(On<ScreenshotCaptured>, MessageWriter<AppExit>) {
+/// Saves the screenshot with Bevy's `save_to_disk`, then either advances the batch driver or
+/// exits (successfully only when the file exists).
+fn save_then_advance_or_exit(
+    output: PathBuf,
+) -> impl FnMut(On<ScreenshotCaptured>, ResMut<Driver>, MessageWriter<AppExit>) {
     // `save_to_disk`: bevy_render-0.20.1/src/view/window/screenshot.rs:145.
     let mut save = save_to_disk(output.clone());
-    move |captured, mut exits| {
+    move |captured, mut driver, mut exits| {
         save(captured);
-        let exit = if output.is_file() {
-            println!("saved {}", output.display());
-            AppExit::Success
-        } else {
+        if !output.is_file() {
             eprintln!("could not save {}", output.display());
-            AppExit::error()
-        };
-        exits.write(exit);
+            exits.write(AppExit::error());
+            return;
+        }
+        println!("saved {}", output.display());
+        if driver.remaining_planet_scenes.is_empty() {
+            exits.write(AppExit::Success);
+        } else {
+            driver.saved_current = true;
+        }
     }
 }
 
 /// Runs in `First`, before input is read: performs the next cursor step once its target is
-/// laid out, waits for the UI to react, then takes the screenshot.
+/// laid out, waits for the UI and streamed clutter to settle, then takes the screenshot.
 #[allow(
     clippy::needless_pass_by_value,
+    clippy::too_many_arguments,
     reason = "Bevy system parameters are passed by value"
 )]
 fn drive_scene(
@@ -528,14 +755,17 @@ fn drive_scene(
     image: Res<ShotImage>,
     mut window: Single<(Entity, &mut Window), With<PrimaryWindow>>,
     layout: SceneLayout,
+    focus: Option<Res<PlanetCameraFocus>>,
+    readiness: TerrainReadiness,
     mut buttons: MessageWriter<MouseButtonInput>,
     mut exits: MessageWriter<AppExit>,
 ) {
     let (window_entity, window) = &mut *window;
     driver.frame += 1;
+    let terrain_ready = readiness.poll_ready(&mut driver, focus.as_deref());
     if driver.frame > TIMEOUT_FRAMES {
         eprintln!(
-            "timed out at step {} of {}",
+            "timed out at step {} of {} (terrain_ready={terrain_ready})",
             driver.next_step,
             driver.steps.len()
         );
@@ -555,11 +785,14 @@ fn drive_scene(
         return;
     }
     let Some(step) = driver.steps.get(driver.next_step).copied() else {
+        if !terrain_ready {
+            return;
+        }
         if !driver.screenshot_taken {
             // `Screenshot::image`: bevy_render-0.20.1/src/view/window/screenshot.rs:107.
             commands
                 .spawn(Screenshot::image(image.0.clone()))
-                .observe(save_then_exit(driver.output.clone()));
+                .observe(save_then_advance_or_exit(driver.output.clone()));
             driver.screenshot_taken = true;
         }
         return;
@@ -587,31 +820,39 @@ fn drive_scene(
     driver.frames_to_wait = STEP_FRAMES;
 }
 
-/// Spawns a compact top-left caption pill for headless planet screenshots without overlapping
-/// the coastline or face seam in the center of the viewport.
-#[expect(
-    clippy::needless_pass_by_value,
-    reason = "Bevy system parameters are passed by value"
-)]
-fn spawn_planet_caption(
-    mut commands: Commands,
-    scene: Res<ActiveScene>,
-    focus: Res<PlanetCameraFocus>,
-) {
-    let tile = focus_tile(&focus);
-    let label = match scene.0 {
-        Scene::PlanetCoast => format!(
+fn planet_caption_label(scene: Scene, focus: &PlanetCameraFocus) -> Option<String> {
+    let tile = focus_tile(focus);
+    match scene {
+        Scene::PlanetCoast => Some(format!(
             "Sera Coastline  |  face: {}  chunk: ({}, {})  tile: ({}, {})",
             tile.face, focus.anchor.cx, focus.anchor.cy, tile.x, tile.y
-        ),
-        Scene::PlanetSeam => format!(
+        )),
+        Scene::PlanetSeam => Some(format!(
             "Sera Cube Seam: neg_x <-> pos_y (90 deg)  |  chunk: ({}, {})  tile: ({}, {})",
             focus.anchor.cx, focus.anchor.cy, tile.x, tile.y
-        ),
-        _ => return,
+        )),
+        // Tactical `biome_*` scenes render 100% unobstructed battlemap terrain so neither
+        // human inspection nor `verify_biomes.py` metrics are polluted by HUD overlays.
+        _ => None,
+    }
+}
+
+fn sync_planet_caption(
+    commands: &mut Commands,
+    existing: &Query<Entity, With<PlanetCaptionNode>>,
+    scene: Scene,
+    focus: &PlanetCameraFocus,
+) {
+    for entity in existing {
+        // `EntityCommands::despawn`: bevy_ecs-0.20.1/src/system/commands/mod.rs:1882.
+        commands.entity(entity).despawn();
+    }
+    let Some(label) = planet_caption_label(scene, focus) else {
+        return;
     };
     commands
         .spawn((
+            PlanetCaptionNode,
             Node {
                 position_type: PositionType::Absolute,
                 top: Val::Px(12.0),
@@ -632,20 +873,60 @@ fn spawn_planet_caption(
         ));
 }
 
-/// Waits for streamed planet chunks to render, then saves the off-screen screenshot and exits.
+/// Spawns a compact top-left caption pill for macro overview planet screenshots without
+/// overlapping the coastline or face seam in the center of the viewport.
 #[expect(
     clippy::needless_pass_by_value,
+    reason = "Bevy system parameters are passed by value"
+)]
+fn spawn_planet_caption(
+    mut commands: Commands,
+    scene: Res<ActiveScene>,
+    focus: Res<PlanetCameraFocus>,
+    existing: Query<Entity, With<PlanetCaptionNode>>,
+) {
+    sync_planet_caption(&mut commands, &existing, scene.0, &focus);
+}
+
+/// Waits for streamed planet chunks and ground clutter to settle, captures the off-screen
+/// screenshot, and advances through any remaining `--batch` planet/biome scenes.
+#[expect(
+    clippy::needless_pass_by_value,
+    clippy::too_many_arguments,
     reason = "Bevy system parameters are passed by value"
 )]
 fn drive_planet_scene(
     mut commands: Commands,
     mut driver: ResMut<Driver>,
+    mut active_scene: ResMut<ActiveScene>,
+    mut focus: ResMut<PlanetCameraFocus>,
+    captions: Query<Entity, With<PlanetCaptionNode>>,
+    readiness: TerrainReadiness,
     image: Res<ShotImage>,
     mut exits: MessageWriter<AppExit>,
 ) {
+    if driver.saved_current {
+        let Some((next_scene, next_output)) = driver.remaining_planet_scenes.pop_front() else {
+            exits.write(AppExit::Success);
+            return;
+        };
+        let next_focus = next_scene
+            .planet_focus()
+            .expect("remaining_planet_scenes holds only planet/biome scenes");
+        *active_scene = ActiveScene(next_scene);
+        *focus = next_focus;
+        sync_planet_caption(&mut commands, &captions, next_scene, &next_focus);
+        driver.reset_for_planet_scene(next_scene, next_output);
+        return;
+    }
+
     driver.frame += 1;
+    let terrain_ready = readiness.poll_ready(&mut driver, Some(&focus));
     if driver.frame > TIMEOUT_FRAMES {
-        eprintln!("planet scene timed out");
+        eprintln!(
+            "planet scene {} timed out (terrain_ready={terrain_ready})",
+            active_scene.0.name()
+        );
         exits.write(AppExit::error());
         return;
     }
@@ -653,11 +934,14 @@ fn drive_planet_scene(
         driver.frames_to_wait -= 1;
         return;
     }
+    if !terrain_ready {
+        return;
+    }
     if !driver.screenshot_taken {
         // `Screenshot::image`: bevy_render-0.20.1/src/view/window/screenshot.rs:107.
         commands
             .spawn(Screenshot::image(image.0.clone()))
-            .observe(save_then_exit(driver.output.clone()));
+            .observe(save_then_advance_or_exit(driver.output.clone()));
         driver.screenshot_taken = true;
     }
 }
@@ -665,34 +949,27 @@ fn drive_planet_scene(
 fn usage() -> String {
     let names: Vec<&str> = Scene::ALL.iter().map(|scene| scene.name()).collect();
     format!(
-        "usage: ui_shot <scene> <out.png>, or ui_shot {LIST_FLAG}\nscenes: {}",
+        "usage: ui_shot <scene> <out.png>, ui_shot {BATCH_FLAG} <out_dir> [scene...], or ui_shot {LIST_FLAG}\nscenes: {}",
         names.join(", ")
     )
 }
 
-fn main() -> AppExit {
-    let arguments: Vec<String> = std::env::args().skip(1).collect();
-    if arguments == [LIST_FLAG] {
-        for scene in Scene::ALL {
-            println!("{}", scene.name());
-        }
-        return AppExit::Success;
+fn prepare_output_file(output: &Path) -> Result<(), String> {
+    if let Some(parent) = output.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        std::fs::create_dir_all(parent)
+            .map_err(|error| format!("cannot create {}: {error}", parent.display()))?;
     }
-    let [scene_name, output] = arguments.as_slice() else {
-        eprintln!("{}", usage());
-        return AppExit::error();
-    };
-    let Some(scene) = Scene::from_name(scene_name) else {
-        eprintln!("unknown scene {scene_name}\n{}", usage());
-        return AppExit::error();
-    };
-    let output = PathBuf::from(output);
-    if let Err(error) = std::fs::remove_file(&output)
+    if let Err(error) = std::fs::remove_file(output)
         && error.kind() != std::io::ErrorKind::NotFound
     {
-        eprintln!("cannot replace {}: {error}", output.display());
-        return AppExit::error();
+        return Err(format!("cannot replace {}: {error}", output.display()));
     }
+    Ok(())
+}
+
+fn build_base_app() -> App {
     let mut app = App::new();
     // `PluginGroupBuilder::disable`: bevy_app-0.20.1/src/plugin_group.rs:551. The window
     // entity stays, for the cursor and the UI systems that read it, but no real window opens.
@@ -719,41 +996,143 @@ fn main() -> AppExit {
     )
     // `ScheduleRunnerPlugin::run_loop`: bevy_app-0.20.1/src/schedule_runner.rs:64.
     .add_plugins(ScheduleRunnerPlugin::run_loop(FRAME_WAIT));
-    let driver = Driver {
-        steps: scene.steps(),
-        next_step: 0,
-        frames_to_wait: SETTLE_FRAMES,
-        frame: 0,
-        release_pending: None,
-        screenshot_taken: false,
-        output,
-    };
-    if scene.is_planet_scene() {
-        let focus = match scene {
-            Scene::PlanetCoast => PlanetCameraFocus::sera_coast(),
-            Scene::PlanetSeam => PlanetCameraFocus::sera_seam(),
-            _ => PlanetCameraFocus::default(),
-        };
-        app.insert_resource(ClearColor(Color::srgb(0.05, 0.09, 0.14)))
-            .insert_resource(ActiveScene(scene))
-            .insert_resource(focus)
-            .insert_resource(PlanetStreamSyncMode::Blocking)
-            .insert_resource(driver)
-            .add_plugins(PlanetStreamPlugin)
-            .add_systems(Startup, spawn_planet_caption)
-            .add_systems(PostStartup, render_off_screen)
-            .add_systems(First, drive_planet_scene);
-    } else {
-        register_protocol(&mut OfflineProtocol(&mut app));
-        app.add_plugins(ClientPlugins)
-            .insert_resource(PlanetStreamSyncMode::Blocking)
-            .insert_resource(ActiveScene(scene))
-            .insert_resource(driver)
-            .add_systems(Startup, spawn_fake_world)
-            .add_systems(PostStartup, render_off_screen)
-            .add_systems(First, drive_scene);
-    }
+    app
+}
+
+fn run_single_ui_scene(scene: Scene, output: PathBuf) -> AppExit {
+    let mut app = build_base_app();
+    let driver = Driver::new(scene, output, VecDeque::new());
+    register_protocol(&mut OfflineProtocol(&mut app));
+    app.add_plugins(ClientPlugins)
+        .insert_resource(PlanetStreamSyncMode::Blocking)
+        .insert_resource(ActiveScene(scene))
+        .insert_resource(driver)
+        .add_systems(Startup, spawn_fake_world)
+        .add_systems(PostStartup, render_off_screen)
+        .add_systems(First, drive_scene);
     app.run()
+}
+
+fn run_planet_scenes(mut queue: VecDeque<(Scene, PathBuf)>) -> AppExit {
+    let Some((first_scene, first_output)) = queue.pop_front() else {
+        return AppExit::Success;
+    };
+    let focus = first_scene
+        .planet_focus()
+        .expect("run_planet_scenes only receives planet/biome scenes");
+    let mut app = build_base_app();
+    let driver = Driver::new(first_scene, first_output, queue);
+    app.insert_resource(ClearColor(Color::srgb(0.05, 0.09, 0.14)))
+        .insert_resource(ActiveScene(first_scene))
+        .insert_resource(focus)
+        .insert_resource(PlanetStreamSyncMode::Blocking)
+        .insert_resource(driver)
+        .add_plugins((PlanetStreamPlugin, GroundClutterPlugin))
+        .add_systems(Startup, spawn_planet_caption)
+        .add_systems(PostStartup, render_off_screen)
+        .add_systems(First, drive_planet_scene);
+    app.run()
+}
+
+fn run_batch(out_dir: &Path, scene_names: &[String]) -> AppExit {
+    let scenes: Vec<Scene> = if scene_names.is_empty() {
+        Scene::ALL.to_vec()
+    } else {
+        let mut parsed = Vec::with_capacity(scene_names.len());
+        for name in scene_names {
+            let Some(scene) = Scene::from_name(name) else {
+                eprintln!("unknown scene {name}\n{}", usage());
+                return AppExit::error();
+            };
+            parsed.push(scene);
+        }
+        parsed
+    };
+
+    if let Err(error) = std::fs::create_dir_all(out_dir) {
+        eprintln!("cannot create {}: {error}", out_dir.display());
+        return AppExit::error();
+    }
+
+    let mut ui_jobs = Vec::new();
+    let mut planet_jobs = VecDeque::new();
+    for scene in scenes {
+        let output = out_dir.join(format!("{}.png", scene.name()));
+        if let Err(error) = prepare_output_file(&output) {
+            eprintln!("{error}");
+            return AppExit::error();
+        }
+        if scene.is_planet_scene() {
+            planet_jobs.push_back((scene, output));
+        } else {
+            ui_jobs.push((scene, output));
+        }
+    }
+
+    if !ui_jobs.is_empty() {
+        let exe = match std::env::current_exe() {
+            Ok(path) => path,
+            Err(error) => {
+                eprintln!("cannot locate ui_shot binary: {error}");
+                return AppExit::error();
+            }
+        };
+        for (scene, output) in ui_jobs {
+            let status = Command::new(&exe).arg(scene.name()).arg(&output).status();
+            match status {
+                Ok(code) if code.success() && output.is_file() => {}
+                Ok(code) => {
+                    eprintln!("scene {} failed ({code})", scene.name());
+                    return AppExit::error();
+                }
+                Err(error) => {
+                    eprintln!(
+                        "could not launch {} for {}: {error}",
+                        exe.display(),
+                        scene.name()
+                    );
+                    return AppExit::error();
+                }
+            }
+        }
+    }
+
+    run_planet_scenes(planet_jobs)
+}
+
+fn main() -> AppExit {
+    let arguments: Vec<String> = std::env::args().skip(1).collect();
+    if arguments == [LIST_FLAG] {
+        for scene in Scene::ALL {
+            println!("{}", scene.name());
+        }
+        return AppExit::Success;
+    }
+    if arguments.first().map(String::as_str) == Some(BATCH_FLAG) {
+        let Some(out_dir) = arguments.get(1) else {
+            eprintln!("{}", usage());
+            return AppExit::error();
+        };
+        return run_batch(Path::new(out_dir), &arguments[2..]);
+    }
+    let [scene_name, output] = arguments.as_slice() else {
+        eprintln!("{}", usage());
+        return AppExit::error();
+    };
+    let Some(scene) = Scene::from_name(scene_name) else {
+        eprintln!("unknown scene {scene_name}\n{}", usage());
+        return AppExit::error();
+    };
+    let output = PathBuf::from(output);
+    if let Err(error) = prepare_output_file(&output) {
+        eprintln!("{error}");
+        return AppExit::error();
+    }
+    if scene.is_planet_scene() {
+        run_planet_scenes(VecDeque::from([(scene, output)]))
+    } else {
+        run_single_ui_scene(scene, output)
+    }
 }
 
 #[cfg(test)]
@@ -761,11 +1140,41 @@ mod tests {
     use super::*;
 
     #[test]
-    fn every_scene_is_found_by_its_name() {
+    fn every_scene_is_found_by_its_name_and_names_are_unique() {
+        let mut seen = std::collections::HashSet::new();
         for scene in Scene::ALL {
+            assert!(
+                seen.insert(scene.name()),
+                "duplicate scene {}",
+                scene.name()
+            );
             assert_eq!(Scene::from_name(scene.name()), Some(scene));
         }
         assert_eq!(Scene::from_name("no_such_scene"), None);
+    }
+
+    #[test]
+    fn biome_scenes_use_tactical_zoom_and_valid_cube_coordinates() {
+        let biome_count = Scene::ALL
+            .into_iter()
+            .filter(|scene| scene.name().starts_with("biome_"))
+            .map(|scene| {
+                let focus = scene.planet_focus().expect("biome scene has planet focus");
+                assert!(
+                    (48.0..=64.0).contains(&focus.tile_pixel_size),
+                    "{} tile_pixel_size {} outside tactical range",
+                    scene.name(),
+                    focus.tile_pixel_size
+                );
+                assert!(
+                    ChunkCoord::new(focus.anchor.face, focus.anchor.cx, focus.anchor.cy).is_some(),
+                    "{} chunk out of face bounds",
+                    scene.name()
+                );
+                assert_eq!(planet_caption_label(scene, &focus), None);
+            })
+            .count();
+        assert_eq!(biome_count, 11);
     }
 
     #[test]
