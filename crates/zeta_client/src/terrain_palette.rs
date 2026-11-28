@@ -6,6 +6,7 @@
 //! `ground_cover` field, and authored maps and regions reference entries by `id`.
 
 use std::collections::HashSet;
+use std::f64::consts::FRAC_PI_2;
 use std::sync::Arc;
 
 use bevy::asset::RenderAssetUsages;
@@ -18,7 +19,9 @@ use bevy::render::render_resource::{
 };
 use bevy::sprite_render::Material2dPlugin;
 use serde::Deserialize;
-use zeta_core::world::{CubeFace, GroundCover, PlanetTile, hash_unit};
+use zeta_core::world::{
+    CubeFace, FACE_TILES, GroundCover, PlanetTile, face_uv_to_unit_vec, hash_unit,
+};
 
 use crate::terrain::{TerrainSplatMaterial, assets_root, smoothstep};
 
@@ -26,12 +29,15 @@ use crate::terrain::{TerrainSplatMaterial, assets_root, smoothstep};
 pub const PALETTE_PATH: &str = "terrain/palette.json";
 /// Most entries a palette may hold; sized to the splat shader's per-layer uniform array.
 pub const MAX_PALETTE_ENTRIES: usize = 32;
-/// Variant noise octaves: lattice spacing in tiles and amplitude (amplitudes sum to 1).
-const VARIANT_OCTAVES: [(i64, f32); 2] = [(10, 0.7), (3, 0.3)];
-/// [`hash_unit`] salt of the variant lattice values.
-const VARIANT_LATTICE_SALT: u64 = 0x7661_7269_616e_7401;
-/// Half width, in variant bands, of the cross-fade between 2 neighboring variants.
-const VARIANT_BLEND_HALF_WIDTH: f32 = 0.2;
+/// 3D sphere-space variant noise octaves: feature diameter in tiles, weight, and seed.
+const VARIANT_SPHERE_OCTAVES: [(f64, f32, u64); 2] = [
+    (18.0, 0.68, 0x7661_7269_616e_7401),
+    (5.5, 0.32, 0x7661_7269_616e_7402),
+];
+/// Tiles per radian of arc at a cube-face center (`FACE_TILES` spans `pi / 2`).
+const TILES_PER_RADIAN: f64 = FACE_TILES as f64 / FRAC_PI_2;
+/// Half width, in variant bands, of the painterly cross-fade between 2 neighboring variants.
+const VARIANT_BLEND_HALF_WIDTH: f32 = 0.36;
 
 /// 1 ground texture of the palette.
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
@@ -208,25 +214,89 @@ impl TerrainPalette {
 
 /// Variant noise in `[0.0, 1.0)` at face position `(fine_x, fine_y) / fine_per_tile` tiles.
 ///
-/// Callers pass sample centers in fine units (tile centers use `2 * tile + 1` with
-/// `fine_per_tile = 2`), so a tile and the splat texels covering it read 1 continuous field.
-/// Octaves are [`VARIANT_OCTAVES`], salted per face.
+/// Evaluated in 3D unit-sphere space via [`face_uv_to_unit_vec`] so variant patches stay
+/// continuous across both `64x64` chunk borders and rotated cube-face seams.
 #[must_use]
 pub fn variant_value(face: CubeFace, fine_x: i64, fine_y: i64, fine_per_tile: i64) -> f32 {
-    let face_salt = u64::try_from(face.index()).unwrap_or(0) << 56;
-    let total: f32 = VARIANT_OCTAVES
+    let denom = f64::from(FACE_TILES) * fine_i64_to_f64(fine_per_tile.max(1));
+    let face_u = (fine_i64_to_f64(fine_x) / denom) * 2.0 - 1.0;
+    let face_v = (fine_i64_to_f64(fine_y) / denom) * 2.0 - 1.0;
+    let unit_vec = face_uv_to_unit_vec(face, face_u, face_v);
+    let raw: f32 = VARIANT_SPHERE_OCTAVES
         .iter()
-        .zip(0_u64..)
-        .map(|(&(spacing_tiles, amplitude), octave)| {
-            value_noise_unit(
-                (VARIANT_LATTICE_SALT ^ face_salt).wrapping_add(octave),
-                fine_x,
-                fine_y,
-                spacing_tiles * fine_per_tile,
-            ) * amplitude
+        .map(|&(feature_tiles, weight, seed)| {
+            sphere_noise_signed(unit_vec, TILES_PER_RADIAN / feature_tiles, seed) * weight
         })
         .sum();
-    total.clamp(0.0, 0.999_999)
+    smoothstep(-0.52, 0.52, raw).clamp(0.0, 0.999_999)
+}
+
+/// Deterministic 3D trilinear value noise in `[-1.0, 1.0]` on the unit sphere.
+#[must_use]
+pub(crate) fn sphere_noise_signed(unit_vec: [f64; 3], frequency: f64, seed: u64) -> f32 {
+    let [px, py, pz] = unit_vec.map(|v| v * frequency);
+    let (fx, fy, fz) = (px.floor(), py.floor(), pz.floor());
+    let quintic = |t: f64| t * t * t * (t * (t * 6.0 - 15.0) + 10.0);
+    let (tx, ty, tz) = (quintic(px - fx), quintic(py - fy), quintic(pz - fz));
+    let (ix, iy, iz) = (
+        floor_f64_to_i64(fx),
+        floor_f64_to_i64(fy),
+        floor_f64_to_i64(fz),
+    );
+    let corner = |dx: i64, dy: i64, dz: i64| {
+        let mut state = splitmix64_palette(seed ^ ix.wrapping_add(dx).cast_unsigned());
+        state = splitmix64_palette(state ^ iy.wrapping_add(dy).cast_unsigned());
+        state = splitmix64_palette(state ^ iz.wrapping_add(dz).cast_unsigned());
+        lattice_mantissa_to_signed(state)
+    };
+    let lerp = |a: f64, b: f64, t: f64| a + (b - a) * t;
+    let x00 = lerp(corner(0, 0, 0), corner(1, 0, 0), tx);
+    let x10 = lerp(corner(0, 1, 0), corner(1, 1, 0), tx);
+    let x01 = lerp(corner(0, 0, 1), corner(1, 0, 1), tx);
+    let x11 = lerp(corner(0, 1, 1), corner(1, 1, 1), tx);
+    let y0 = lerp(x00, x10, ty);
+    let y1 = lerp(x01, x11, ty);
+    narrow_f64_to_f32(lerp(y0, y1, tz))
+}
+
+const fn splitmix64_palette(mut value: u64) -> u64 {
+    value = value.wrapping_add(0x9E37_79B9_7F4A_7C15);
+    value = (value ^ (value >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    value = (value ^ (value >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    value ^ (value >> 31)
+}
+
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "fine face coordinates stay below 2^26, exact in 53-bit f64"
+)]
+fn fine_i64_to_f64(value: i64) -> f64 {
+    value as f64
+}
+
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "53-bit mantissa fits losslessly in IEEE-754 f64"
+)]
+fn lattice_mantissa_to_signed(state: u64) -> f64 {
+    let unit = ((state >> 11) as f64) * (1.0 / ((1_u64 << 53) as f64));
+    unit * 2.0 - 1.0
+}
+
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "unit-sphere coordinates scaled by variant frequencies fit comfortably in i64"
+)]
+fn floor_f64_to_i64(value: f64) -> i64 {
+    value as i64
+}
+
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "trilinear noise lies in [-1.0, 1.0], well inside f32 range"
+)]
+fn narrow_f64_to_f32(value: f64) -> f32 {
+    value as f32
 }
 
 /// Smooth value noise in `[0.0, 1.0)` at integer position `(x, y)` over a lattice every
@@ -281,11 +351,39 @@ fn floor_to_index(value: f32, len: usize) -> usize {
     (value.max(0.0) as usize).min(len.saturating_sub(1))
 }
 
+/// Integer rotation basis `(a, b)` for secondary UV anti-tiling (`atan2(2, 3) ≈ 33.7°`).
+const SECONDARY_ROTATION_A: i64 = 3;
+const SECONDARY_ROTATION_B: i64 = 2;
+/// Multiplier from primary `tiles_per_repeat` to the secondary macro torus period (`32 = 2^5`).
+const MACRO_PERIOD_MULTIPLIER: i64 = 32;
+/// Upper bound on `tiles_per_repeat` for 12-bit secondary modulo packing (`32 * 127 < 4096`).
+const MAX_SECONDARY_REPEAT_TILES: u32 = 127;
+/// Packing radix (`2^12`) keeping `u * 4096 + v < 2^24` exact in IEEE-754 `f32`.
+const SECONDARY_PACK_RADIX: i64 = 4096;
+
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "packed 2 x 12-bit modulo origin stays strictly below 2^24, exact in f32"
+)]
+fn packed_secondary_origin(origin_x: u32, origin_y: u32, repeat: u32) -> f32 {
+    let origin_col = i64::from(origin_x);
+    let origin_row = i64::from(origin_y);
+    let secondary_repeat = i64::from(repeat.clamp(1, MAX_SECONDARY_REPEAT_TILES));
+    let macro_period = MACRO_PERIOD_MULTIPLIER * secondary_repeat;
+    let secondary_u = (SECONDARY_ROTATION_A * origin_col - SECONDARY_ROTATION_B * origin_row)
+        .rem_euclid(macro_period);
+    let secondary_v = (SECONDARY_ROTATION_B * origin_col + SECONDARY_ROTATION_A * origin_row)
+        .rem_euclid(macro_period);
+    (secondary_u * SECONDARY_PACK_RADIX + secondary_v) as f32
+}
+
 /// Per palette layer uniform of `TerrainSplatMaterial` for a quad whose top-left tile is
-/// `(origin_x, origin_y)`: `xy` = origin modulo the layer repeat, `z` = 1 / repeat.
+/// `(origin_x, origin_y)`: `xy` = origin modulo the layer repeat, `z` = 1 / repeat, `w` = packed
+/// rotated macro origin `(u * 4096 + v)` modulo `32 * min(repeat, 127)`.
 ///
-/// The modulo is integer math, so UVs stay continuous across quads without ever putting a raw
-/// face tile coordinate into an `f32` (`terrain_contract.md` Section 1).
+/// Both primary and secondary modulos are computed in integer math on the processor, so UVs stay
+/// continuous across quads without ever putting a raw face tile coordinate into an `f32`
+/// (`docs/architecture/world_geography.md` Section 4).
 #[must_use]
 pub fn layer_params(
     palette: &TerrainPalette,
@@ -299,7 +397,7 @@ pub fn layer_params(
             len_to_f32((origin_x % repeat) as usize),
             len_to_f32((origin_y % repeat) as usize),
             1.0 / len_to_f32(repeat as usize),
-            0.0,
+            packed_secondary_origin(origin_x, origin_y, repeat),
         );
     }
     params
@@ -571,6 +669,56 @@ mod tests {
             assert_eq!(param.x, len_to_f32((4_000_000 % repeat) as usize));
             assert_eq!(param.y, len_to_f32((3_999_999 % repeat) as usize));
             assert!(param.x < len_to_f32(repeat as usize));
+            assert!(param.w >= 0.0 && param.w < 16_777_216.0);
+            assert_eq!(param.w.fract(), 0.0);
+        }
+    }
+
+    #[test]
+    fn secondary_layer_params_wrap_continuously_across_chunk_edges() {
+        let palette = TerrainPalette::load().expect("valid palette");
+        let origin_x = 1_821_024_u32;
+        let origin_y = 316_448_u32;
+        let base = layer_params(&palette, origin_x, origin_y);
+        let east = layer_params(&palette, origin_x + 64, origin_y);
+        let south = layer_params(&palette, origin_x, origin_y + 64);
+
+        let eval_base_uv = |param: Vec4, tile: Vec2| -> Vec2 {
+            #[expect(
+                clippy::cast_possible_truncation,
+                clippy::cast_sign_loss,
+                reason = "param.w holds a non-negative integer strictly below 2^24"
+            )]
+            let packed = param.w as u32;
+            let high = u16::try_from(packed >> 12).expect("12-bit u fits in u16");
+            let low = u16::try_from(packed & 4095).expect("12-bit v fits in u16");
+            let sec_origin = Vec2::new(f32::from(high), f32::from(low));
+            let rot_tile = Vec2::new(3.0 * tile.x - 2.0 * tile.y, 2.0 * tile.x + 3.0 * tile.y);
+            let base_scale = param.z.max(1.0 / 127.0) * 0.03125;
+            let raw = (rot_tile + sec_origin) * base_scale;
+            Vec2::new(raw.x.rem_euclid(1.0), raw.y.rem_euclid(1.0))
+        };
+
+        for index in 0..palette.entries().len() {
+            for sample_t in [0.0_f32, 13.25, 47.75, 64.0] {
+                let lhs_east = eval_base_uv(base[index], Vec2::new(64.0, sample_t));
+                let rhs_east = eval_base_uv(east[index], Vec2::new(0.0, sample_t));
+                let diff_east = (lhs_east - rhs_east).abs();
+                let wrap_east = diff_east.min(Vec2::ONE - diff_east);
+                assert!(
+                    wrap_east.x < 1e-5 && wrap_east.y < 1e-5,
+                    "east seam mismatch on layer {index}: {lhs_east:?} vs {rhs_east:?}"
+                );
+
+                let lhs_south = eval_base_uv(base[index], Vec2::new(sample_t, 64.0));
+                let rhs_south = eval_base_uv(south[index], Vec2::new(sample_t, 0.0));
+                let diff_south = (lhs_south - rhs_south).abs();
+                let wrap_south = diff_south.min(Vec2::ONE - diff_south);
+                assert!(
+                    wrap_south.x < 1e-5 && wrap_south.y < 1e-5,
+                    "south seam mismatch on layer {index}: {lhs_south:?} vs {rhs_south:?}"
+                );
+            }
         }
     }
 
