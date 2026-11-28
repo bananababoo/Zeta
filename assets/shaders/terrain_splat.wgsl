@@ -10,8 +10,8 @@
 // bilinearly here, because filtering palette indices would mix unrelated layers.
 //
 // Shade map: `N` texels per tile (`2` on planet chunks, `1` on standalone maps) plus a 1-texel
-// halo on every side; rgb holds composite shade (hillshade, canopy dapple, shoreline wetness,
-// climate tint) / 2.
+// halo on every side; rgb holds composite 3D sphere-continuous shade (hillshade, canopy dapple,
+// shoreline wetness, climate tint) / 2.
 
 const TAU: f32 = 6.2831853;
 const MACRO_INV_MULT: f32 = 0.03125;
@@ -48,12 +48,12 @@ fn layer_color(encoded: f32, tile: vec2<f32>, ddx: vec2<f32>, ddy: vec2<f32>) ->
     let phase = f32(index) * 1.73205;
     let p = base_uv * TAU;
 
-    // Gentle periodic phase modulation (~0.28 UV swirl over 30-90 tiles) breaks 2D FFT lattice
+    // Gentle periodic phase modulation (~0.26 UV swirl over 30-90 tiles) breaks 2D FFT lattice
     // spikes completely while keeping local grass blades, pebbles, and sand ripples undistorted.
     let swirl1 = vec2<f32>(
         sin(p.x + 0.70 * cos(p.y + phase)) + 0.45 * cos(2.0 * p.y + phase),
         cos(p.y - 0.70 * sin(p.x - phase)) + 0.45 * sin(2.0 * p.x - phase),
-    ) * 0.28;
+    ) * 0.26;
     let uv1 = (tile + layer.xy) * layer.z + swirl1;
     let c1 = textureSampleGrad(
         layer_textures,
@@ -75,31 +75,21 @@ fn layer_color(encoded: f32, tile: vec2<f32>, ddx: vec2<f32>, ddy: vec2<f32>) ->
     let ddy2 = vec2<f32>(3.0 * ddy.x - 2.0 * ddy.y, 2.0 * ddy.x + 3.0 * ddy.y) * uv2_scale;
     let c2 = textureSampleGrad(layer_textures, layer_sampler, uv2, index, ddx2, ddy2).rgb;
 
-    // Organic curved macro cross-blend across [0.06, 0.94] on the `base_uv` torus.
+    // Balanced energy-neutral cross-blend in [0.28, 0.72] so rotated cube-face seams never jump
+    // in mean brightness, while all macro tonal wash comes from the 3D sphere-continuous `shade`.
     let n_blend = 0.50 * sin(p.x + 0.65 * cos(p.y + phase) + phase)
         + 0.32 * cos(2.0 * p.y - p.x + 1.15)
         + 0.18 * sin(3.0 * p.x + 2.0 * p.y - phase);
-    let blend_w = smoothstep(-0.52, 0.52, n_blend) * 0.88 + 0.06;
+    let blend_w = smoothstep(-0.65, 0.65, n_blend) * 0.44 + 0.28;
     let blended = mix(c1, c2, blend_w);
 
-    // Restore crisp micro-detail contrast from c1 and subtly accentuate fine painterly grain on
-    // smooth surfaces (beach sand, desert dunes, snow, meadow grass).
+    // Restore crisp micro-detail lost to two-sample averaging without shifting mean luminance.
     let lum1 = dot(c1, LUMA_WEIGHTS);
     let lum_mix = dot(blended, LUMA_WEIGHTS);
     let overlap = 4.0 * blend_w * (1.0 - blend_w);
-    let rel_detail = (lum1 - lum_mix) / max(lum_mix, 0.035);
-    let detail_gain = clamp(1.0 + rel_detail * (0.55 * overlap + 0.18), 0.72, 1.34);
-    let crisp = blended * detail_gain;
-
-    // Subtle energy-conserving painterly tonal wash (cool moss vs warm sunlight over macro patches).
-    let n_wash = 0.60 * cos(p.x - p.y + 0.5 * sin(p.y))
-        + 0.40 * sin(p.x + 2.0 * p.y + 0.9);
-    let wash_tint = mix(
-        vec3<f32>(0.92, 0.96, 1.03),
-        vec3<f32>(1.08, 1.04, 0.97),
-        n_wash * 0.5 + 0.5,
-    );
-    return crisp * wash_tint;
+    let rel_detail = (lum1 - lum_mix) / max(lum_mix, 0.04);
+    let detail_gain = clamp(1.0 + rel_detail * (0.46 * overlap + 0.12), 0.78, 1.28);
+    return blended * detail_gain;
 }
 
 fn control_color(texel: vec2<i32>, tile: vec2<f32>, ddx: vec2<f32>, ddy: vec2<f32>) -> vec3<f32> {
@@ -110,15 +100,12 @@ fn control_color(texel: vec2<i32>, tile: vec2<f32>, ddx: vec2<f32>, ddy: vec2<f3
         let color_b = layer_color(control.g, tile, ddx, ddy);
         let lum_a = dot(color, LUMA_WEIGHTS);
         let lum_b = dot(color_b, LUMA_WEIGHTS);
-        // Micro-luminance height bias lets grass blades, moss clumps, and pebbles interlock
-        // organically across material borders instead of fading into blurry double-exposure.
-        let height_diff = (lum_b - lum_a) * 0.58 + (control.b * 2.0 - 1.0);
-        let height_weight = smoothstep(-0.46, 0.46, height_diff);
-        let weight = mix(control.b, height_weight, 0.62);
+        // Gentle micro-luminance interlock at tactical zoom that stays soft like a watercolor
+        // wash across broad variant cross-fades.
+        let height_diff = (lum_b - lum_a) * 0.24 + (control.b * 2.0 - 1.0);
+        let height_weight = smoothstep(-0.88, 0.88, height_diff);
+        let weight = mix(control.b, height_weight, 0.25);
         color = mix(color, color_b, weight);
-        // Subtle earthy/mossy contact richness right along cover seams.
-        let border = 4.0 * weight * (1.0 - weight);
-        color *= mix(vec3<f32>(1.0), vec3<f32>(0.90, 0.92, 0.88), border * 0.48);
     }
     let rim_tint = pow(vec3<f32>(max(control.a, 0.001)), vec3<f32>(1.06, 1.00, 0.95));
     return color * rim_tint;
@@ -162,6 +149,6 @@ fn fragment(@location(2) uv: vec2<f32>) -> @location(0) vec4<f32> {
     }
 
     let final_luma = dot(color, LUMA_WEIGHTS);
-    color = max(mix(vec3<f32>(final_luma), color, 1.11), vec3<f32>(0.0));
+    color = max(mix(vec3<f32>(final_luma), color, 1.10), vec3<f32>(0.0));
     return vec4<f32>(color, 1.0);
 }

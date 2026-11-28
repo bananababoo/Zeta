@@ -31,13 +31,14 @@ pub const PALETTE_PATH: &str = "terrain/palette.json";
 pub const MAX_PALETTE_ENTRIES: usize = 32;
 /// 3D sphere-space variant noise octaves: feature diameter in tiles, weight, and seed.
 const VARIANT_SPHERE_OCTAVES: [(f64, f32, u64); 2] = [
-    (18.0, 0.68, 0x7661_7269_616e_7401),
-    (5.5, 0.32, 0x7661_7269_616e_7402),
+    (42.0, 0.65, 0x7661_7269_616e_7401),
+    (14.0, 0.35, 0x7661_7269_616e_7402),
 ];
 /// Tiles per radian of arc at a cube-face center (`FACE_TILES` spans `pi / 2`).
 const TILES_PER_RADIAN: f64 = FACE_TILES as f64 / FRAC_PI_2;
-/// Half width, in variant bands, of the painterly cross-fade between 2 neighboring variants.
-const VARIANT_BLEND_HALF_WIDTH: f32 = 0.36;
+/// Half width, in variant bands, of the painterly cross-fade between 2 neighboring variants
+/// (`0.5` spans the full band between variant centers so patches blend like soft washes).
+const VARIANT_BLEND_HALF_WIDTH: f32 = 0.50;
 
 /// 1 ground texture of the palette.
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
@@ -221,14 +222,19 @@ pub fn variant_value(face: CubeFace, fine_x: i64, fine_y: i64, fine_per_tile: i6
     let denom = f64::from(FACE_TILES) * fine_i64_to_f64(fine_per_tile.max(1));
     let face_u = (fine_i64_to_f64(fine_x) / denom) * 2.0 - 1.0;
     let face_v = (fine_i64_to_f64(fine_y) / denom) * 2.0 - 1.0;
-    let unit_vec = face_uv_to_unit_vec(face, face_u, face_v);
+    variant_value_at_unit_vec(face_uv_to_unit_vec(face, face_u, face_v))
+}
+
+/// Variant noise in `[0.0, 1.0)` directly from a canonical 3D unit-sphere direction.
+#[must_use]
+pub(crate) fn variant_value_at_unit_vec(unit_vec: [f64; 3]) -> f32 {
     let raw: f32 = VARIANT_SPHERE_OCTAVES
         .iter()
         .map(|&(feature_tiles, weight, seed)| {
             sphere_noise_signed(unit_vec, TILES_PER_RADIAN / feature_tiles, seed) * weight
         })
         .sum();
-    smoothstep(-0.52, 0.52, raw).clamp(0.0, 0.999_999)
+    (raw * 1.15 + 0.5).clamp(0.0, 0.999_999)
 }
 
 /// Deterministic 3D trilinear value noise in `[-1.0, 1.0]` on the unit sphere.

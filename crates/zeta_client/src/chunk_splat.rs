@@ -27,8 +27,8 @@ use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use zeta_core::world::{
     CHUNK_SIZE, ChunkCoord, CubeFace, FACE_TILES, GroundCover, GroundCoverInput, PlanetClimateMaps,
-    PlanetHeightmaps, PlanetTile, SHORE_DISTANCE_MAX_TILES, TileSample, face_uv_to_unit_vec,
-    ground_cover, sample_climate, sample_fractal_detail_ft, sample_macro_elevation_ft, sample_tile,
+    PlanetHeightmaps, PlanetTile, SHORE_DISTANCE_MAX_TILES, TileSample, ground_cover,
+    sample_climate, sample_fractal_detail_ft, sample_macro_elevation_ft, sample_tile,
     shore_distances, step_tile, tile_to_unit_vec,
 };
 
@@ -38,7 +38,7 @@ use crate::terrain::{
     ResolvedLayer, SPLAT_PIXELS_PER_TILE, count_to_f32, layer_coverage, smoothstep,
 };
 use crate::terrain_palette::{
-    MAX_PALETTE_ENTRIES, TerrainPalette, sphere_noise_signed, variant_value,
+    MAX_PALETTE_ENTRIES, TerrainPalette, sphere_noise_signed, variant_value_at_unit_vec,
 };
 
 /// Tiles per chunk side as a `usize` index bound.
@@ -103,7 +103,7 @@ const EDGE_SPHERE_OCTAVES: [(f64, f32); 2] = [(3.2, 0.22), (1.1, 0.10)];
 /// Seed base of per-cover 3D edge noise.
 const EDGE_NOISE_SALT: u64 = 0x7370_6c61_7465_6401;
 /// Score gap below the leading cover over which a cover's weight falls from 1 to 0.
-const LAND_EDGE_SOFTNESS: f32 = 0.38;
+const LAND_EDGE_SOFTNESS: f32 = 0.58;
 /// Crisper score gap right along the land-water shoreline so water stays aligned with passability.
 const SHORE_EDGE_SOFTNESS: f32 = 0.20;
 /// Seed for subtle shoreline wetness edge scalloping on the unit sphere.
@@ -320,8 +320,8 @@ pub fn bake_chunk_splat(
         })
         .collect();
 
-    let (cover, shade) = bake_cover_and_shade(maps, climate, palette, coord, &touching);
-    let coarse = bake_coarse_control_grid(coord.face, origin);
+    let (cover, shade, unit_vecs) = bake_cover_and_shade(maps, climate, palette, coord, &touching);
+    let coarse = bake_coarse_control_grid(coord.face, origin, &unit_vecs);
 
     let first_texel_col = i64::from(origin.x) * TEXELS_PER_TILE_I64 - 1;
     let first_texel_row = i64::from(origin.y) * TEXELS_PER_TILE_I64 - 1;
@@ -390,31 +390,42 @@ pub fn bake_chunk_splat(
 }
 
 /// Evaluates 3D sphere-space variant noise and tangent-projected border warp on the half-tile
-/// global lattice covering the chunk and its 1-texel halo.
-fn bake_coarse_control_grid(face: CubeFace, origin: PlanetTile) -> Vec<CoarseControlSample> {
+/// global lattice covering the chunk and its 1-texel halo, interpolating canonical `step_tile`
+/// unit vectors from `unit_vecs` so halo taps across cube-face seams never extrapolate on 1 face.
+fn bake_coarse_control_grid(
+    face: CubeFace,
+    origin: PlanetTile,
+    unit_vecs: &[[f64; 3]],
+) -> Vec<CoarseControlSample> {
     let basis = face.basis();
     let face_right = basis.right_u.map(f64::from);
     let face_down = basis.down_v.map(f64::from);
-    let base_cell_col =
-        (i64::from(origin.x) * TEXELS_PER_TILE_I64 - 1).div_euclid(COARSE_STEP_TEXELS);
-    let base_cell_row =
-        (i64::from(origin.y) * TEXELS_PER_TILE_I64 - 1).div_euclid(COARSE_STEP_TEXELS);
-    let fine_per_tile = TEXELS_PER_TILE_I64 * 2;
-    let denom = f64::from(FACE_TILES) * i64_to_f64(fine_per_tile);
+    let origin_col_tex = i64::from(origin.x) * TEXELS_PER_TILE_I64;
+    let origin_row_tex = i64::from(origin.y) * TEXELS_PER_TILE_I64;
+    let base_cell_col = (origin_col_tex - 1).div_euclid(COARSE_STEP_TEXELS);
+    let base_cell_row = (origin_row_tex - 1).div_euclid(COARSE_STEP_TEXELS);
+    let elev_offset = index_to_i64(COVER_HALO + 1);
+    let max_elev = index_to_i64(ELEVATION_WINDOW_SIDE - 2);
 
     let mut grid = Vec::with_capacity(COARSE_SIDE * COARSE_SIDE);
-    for gy in 0..COARSE_SIDE {
-        let global_texel_y = (base_cell_row + index_to_i64(gy)) * COARSE_STEP_TEXELS;
-        let fine_y = global_texel_y * 2 + 1;
-        let face_v = (i64_to_f64(fine_y) / denom) * 2.0 - 1.0;
+    for row in 0..COARSE_SIDE {
+        let texel_row = (base_cell_row + index_to_i64(row)) * COARSE_STEP_TEXELS - origin_row_tex;
+        let fine_row = 2 * texel_row - 7;
+        let tile_row = fine_row.div_euclid(16);
+        let frac_y = i64_to_f64(fine_row.rem_euclid(16)) * 0.0625;
+        let win_row = usize::try_from((tile_row + elev_offset).clamp(0, max_elev)).unwrap_or(0);
 
-        for gx in 0..COARSE_SIDE {
-            let global_texel_x = (base_cell_col + index_to_i64(gx)) * COARSE_STEP_TEXELS;
-            let fine_x = global_texel_x * 2 + 1;
-            let face_u = (i64_to_f64(fine_x) / denom) * 2.0 - 1.0;
-            let unit_vec = face_uv_to_unit_vec(face, face_u, face_v);
+        for col in 0..COARSE_SIDE {
+            let texel_col =
+                (base_cell_col + index_to_i64(col)) * COARSE_STEP_TEXELS - origin_col_tex;
+            let fine_col = 2 * texel_col - 7;
+            let tile_col = fine_col.div_euclid(16);
+            let frac_x = i64_to_f64(fine_col.rem_euclid(16)) * 0.0625;
+            let win_col = usize::try_from((tile_col + elev_offset).clamp(0, max_elev)).unwrap_or(0);
+
+            let unit_vec = bilerp_unit_vec(unit_vecs, win_col, win_row, frac_x, frac_y);
             let warp = sphere_tangent_warp(unit_vec, face_right, face_down);
-            let variant = variant_value(face, fine_x, fine_y, fine_per_tile);
+            let variant = variant_value_at_unit_vec(unit_vec);
             grid.push(CoarseControlSample {
                 unit_vec,
                 warp,
@@ -423,6 +434,27 @@ fn bake_coarse_control_grid(face: CubeFace, origin: PlanetTile) -> Vec<CoarseCon
         }
     }
     grid
+}
+
+fn bilerp_unit_vec(
+    unit_vecs: &[[f64; 3]],
+    win_col: usize,
+    win_row: usize,
+    frac_x: f64,
+    frac_y: f64,
+) -> [f64; 3] {
+    let w00 = (1.0 - frac_x) * (1.0 - frac_y);
+    let w10 = frac_x * (1.0 - frac_y);
+    let w01 = (1.0 - frac_x) * frac_y;
+    let w11 = frac_x * frac_y;
+    let u00 = unit_vecs[win_row * ELEVATION_WINDOW_SIDE + win_col];
+    let u10 = unit_vecs[win_row * ELEVATION_WINDOW_SIDE + win_col + 1];
+    let u01 = unit_vecs[(win_row + 1) * ELEVATION_WINDOW_SIDE + win_col];
+    let u11 = unit_vecs[(win_row + 1) * ELEVATION_WINDOW_SIDE + win_col + 1];
+    normalize3_local(
+        [0_usize, 1, 2]
+            .map(|axis| u00[axis] * w00 + u10[axis] * w10 + u01[axis] * w01 + u11[axis] * w11),
+    )
 }
 
 /// Computes a 3D sphere-tangent displacement vector projected onto the chunk face's `(u, v)`
@@ -549,15 +581,16 @@ struct TileShadeSample {
     rock_crevice_ao: f32,
 }
 
-/// Cover cells over the [`COVER_SIDE`]² grid and sub-tile shade texels over the [`SHADE_SIDE`]²
-/// grid (`2` texels per tile plus a 1-texel halo on each side).
+/// Cover cells over the [`COVER_SIDE`]² grid, sub-tile shade texels over the [`SHADE_SIDE`]²
+/// grid (`2` texels per tile plus a 1-texel halo on each side), and canonical 3D unit vectors
+/// over [`ELEVATION_WINDOW_SIDE`]².
 fn bake_cover_and_shade(
     maps: &PlanetHeightmaps,
     climate: &PlanetClimateMaps,
     palette: &TerrainPalette,
     coord: ChunkCoord,
     touching: &[RegionInChunk<'_>],
-) -> (Vec<CoverCell>, Vec<u8>) {
+) -> (Vec<CoverCell>, Vec<u8>, Vec<[f64; 3]>) {
     let origin = coord.origin_tile();
     let (tiles, samples, shore) = sample_tile_window(maps, origin);
     let (continuous_elev, unit_vecs) = sample_continuous_elevation_window(maps, &tiles);
@@ -627,7 +660,7 @@ fn bake_cover_and_shade(
     }
 
     let shade = bake_subtile_shade(&tile_shade, origin, touching);
-    (cover, shade)
+    (cover, shade, unit_vecs)
 }
 
 /// Samples discrete tiles and exact chamfer shore distances across the padded window.
@@ -1335,7 +1368,9 @@ fn unit_to_u8(value: f32) -> u8 {
 mod tests {
     use super::*;
     use crate::terrain::{MapConfig, resolve_layers};
-    use zeta_core::world::{FACE_CHUNKS, FaceClimateMap, FaceHeightmap, SEA_LEVEL_U16};
+    use zeta_core::world::{
+        FACE_CHUNKS, FaceClimateMap, FaceHeightmap, SEA_LEVEL_U16, face_uv_to_unit_vec,
+    };
 
     const MAP_RES: u32 = 16;
 
